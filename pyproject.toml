@@ -9,12 +9,6 @@ authors = [
     { name = "Microsoft MADE:Explorations Team" },
 ]
 keywords = ["amplifier", "copilot", "llm", "ai", "claude"]
-
-[project.urls]
-Homepage = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
-Repository = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
-Issues = "https://github.com/microsoft/amplifier-module-provider-github-copilot/issues"
-
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -23,6 +17,11 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
+
+[project.urls]
+Homepage = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
+Repository = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
+Issues = "https://github.com/microsoft/amplifier-module-provider-github-copilot/issues"
 dependencies = [
     # GitHub Copilot CLI SDK - version constraints explained:
     # - Minimum: 0.1.0 (initial version with preToolUse hook and streaming events)
