@@ -1,0 +1,103 @@
+[project]
+name = "amplifier-module-provider-github-copilot"
+version = "1.0.0"
+description = "Amplifier provider module for GitHub Copilot CLI SDK"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    { name = "Microsoft MADE:Explorations Team" },
+]
+keywords = ["amplifier", "copilot", "llm", "ai", "claude"]
+
+[project.urls]
+Homepage = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
+Repository = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
+Issues = "https://github.com/microsoft/amplifier-module-provider-github-copilot/issues"
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    # GitHub Copilot CLI SDK - version constraints explained:
+    # - Minimum: 0.1.0 (initial version with preToolUse hook and streaming events)
+    # - Maximum: <0.2.0 (upper bound enforces review of SDK assumption tests on upgrade)
+    #
+    # IMPORTANT: Before upgrading past 0.2.0, run SDK assumption tests:
+    #   python -m pytest tests/sdk_assumptions/ -v
+    # See tests/sdk_assumptions/README.md for the upgrade workflow.
+    "github-copilot-sdk>=0.1.0,<0.2.0",
+    # Note: amplifier-core is provided by Amplifier runtime when module is loaded
+    # For standalone testing, install from: git+https://github.com/microsoft/amplifier-core
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+    "amplifier-core @ git+https://github.com/microsoft/amplifier-core",  # For testing
+]
+
+[project.entry-points."amplifier.modules"]
+provider-github-copilot = "amplifier_module_provider_github_copilot:mount"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_provider_github_copilot"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E501"]  # Allow longer lines in tests for readability
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# =============================================================================
+# Coverage Configuration
+# =============================================================================
+# Run with: python -m pytest --cov=amplifier_module_provider_github_copilot tests/
+# HTML report: python -m pytest --cov=amplifier_module_provider_github_copilot --cov-report=html tests/
+
+[tool.coverage.run]
+source = ["amplifier_module_provider_github_copilot"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@abstractmethod",
+]
+fail_under = 80
+show_missing = true
+skip_covered = false
+
+[tool.coverage.html]
+directory = "htmlcov"
