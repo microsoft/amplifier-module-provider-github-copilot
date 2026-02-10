@@ -18,10 +18,6 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-[project.urls]
-Homepage = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
-Repository = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
-Issues = "https://github.com/microsoft/amplifier-module-provider-github-copilot/issues"
 dependencies = [
     # GitHub Copilot CLI SDK - version constraints explained:
     # - Minimum: 0.1.0 (initial version with preToolUse hook and streaming events)
@@ -43,6 +39,11 @@ dev = [
     "ruff>=0.1",
     "amplifier-core @ git+https://github.com/microsoft/amplifier-core",  # For testing
 ]
+
+[project.urls]
+Homepage = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
+Repository = "https://github.com/microsoft/amplifier-module-provider-github-copilot"
+Issues = "https://github.com/microsoft/amplifier-module-provider-github-copilot/issues"
 
 [project.entry-points."amplifier.modules"]
 provider-github-copilot = "amplifier_module_provider_github_copilot:mount"
