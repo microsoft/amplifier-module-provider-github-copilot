@@ -32,14 +32,21 @@ copilot auth login
 
 ## Installation
 
-Register the module and set it as your active provider:
+Register the module, install its dependencies, and set it as your active provider:
 
 ```bash
 amplifier module add provider-github-copilot \
   --source git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
 
+amplifier provider install github-copilot
+
 amplifier provider use github-copilot
 ```
+
+> **Note:** The `provider install` step is required to install the module's Python
+> dependencies (including the GitHub Copilot SDK) into the Amplifier environment.
+> The built-in providers skip this step because they are pre-installed during
+> `amplifier init`.
 
 Or reference it directly in a bundle (no separate install needed):
 
