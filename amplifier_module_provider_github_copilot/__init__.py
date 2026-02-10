@@ -201,6 +201,22 @@ async def mount(
         return None
 
 
+def _ensure_executable(path: str) -> None:
+    """Ensure a binary has execute permission.
+
+    Some package managers (notably uv) don't preserve the execute bit on
+    bundled binaries.  Detect and fix this so subprocess.Popen won't fail
+    with PermissionError.
+    """
+    import os
+    import stat
+
+    if not os.access(path, os.X_OK):
+        current = os.stat(path).st_mode
+        os.chmod(path, current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        logger.info(f"[MOUNT] Fixed missing execute permission on {path}")
+
+
 def _find_copilot_cli(config: dict[str, Any]) -> str | None:
     """
     Find the Copilot CLI executable path.
@@ -240,6 +256,7 @@ def _find_copilot_cli(config: dict[str, Any]) -> str | None:
             if not os.path.isfile(cli_path):
                 logger.debug(f"[MOUNT] Copilot CLI not found at: {cli_path}")
                 return None
+            _ensure_executable(cli_path)
             logger.debug(f"[MOUNT] Found Copilot CLI at absolute path: {cli_path}")
             return cli_path
 
@@ -247,6 +264,7 @@ def _find_copilot_cli(config: dict[str, Any]) -> str | None:
         if found_path is None:
             logger.debug(f"[MOUNT] '{cli_path}' CLI not found in PATH")
             return None
+        _ensure_executable(found_path)
         logger.debug(f"[MOUNT] Found Copilot CLI at: {found_path}")
         return found_path
 
