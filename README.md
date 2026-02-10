@@ -30,19 +30,55 @@ You must be authenticated to GitHub Copilot:
 copilot auth login
 ```
 
-## Purpose
+## Installation
 
-Provides access to LLM models (Claude, GPT, Gemini) through your GitHub Copilot subscription as an LLM provider for Amplifier.
+Register the module and set it as your active provider:
 
-## Contract
+```bash
+amplifier module add provider-github-copilot \
+  --source git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
 
-**Module Type:** Provider
-**Mount Point:** `providers`
-**Entry Point:** `amplifier_module_provider_github_copilot:mount`
+amplifier provider use github-copilot
+```
+
+Or reference it directly in a bundle (no separate install needed):
+
+```yaml
+providers:
+  - module: provider-github-copilot
+    source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
+    config:
+      default_model: claude-sonnet-4
+```
+
+## Usage
+
+```bash
+# Interactive chat
+amplifier --provider github-copilot
+
+# Specify a model
+amplifier run --provider github-copilot --model claude-sonnet-4 "Explain this codebase"
+
+# Set as default for this project
+amplifier provider use github-copilot --local
+```
+
+### Provider Preferences in Bundles
+
+Use provider preferences for ordered model fallback:
+
+```yaml
+provider_preferences:
+  - provider: github-copilot
+    model: claude-sonnet-4
+  - provider: github-copilot
+    model: gpt-*
+```
 
 ## Supported Models
 
-The provider exposes all models available through your Copilot subscription. Model availability and context windows are fetched from the SDK at runtime. Examples:
+All models available through your Copilot subscription are exposed at runtime. Examples:
 
 - `claude-opus-4.5`, `claude-sonnet-4`, `claude-haiku-4.5`
 - `gpt-5`, `gpt-5.1`, `gpt-5.1-codex`
@@ -50,21 +86,11 @@ The provider exposes all models available through your Copilot subscription. Mod
 
 ## Configuration
 
-The provider works with sensible defaults and requires no configuration for basic use. The default model is `claude-opus-4.5` with streaming enabled and a 1-hour request timeout.
+Works with sensible defaults out of the box. Default model is `claude-opus-4.5` with streaming enabled and a 1-hour request timeout.
 
-All options can be set via the provider config in your bundle or amplifier configuration. See the source code for the full list of configurable parameters.
+All options can be set via provider config in your bundle or amplifier configuration. See the source code for the full list of configurable parameters.
 
 Set `debug: true` for request/response event logging, or `debug: true, raw_debug: true` for full API I/O capture.
-
-## Usage
-
-```bash
-# Start chat with Copilot SDK provider
-amplifier chat --provider github-copilot
-
-# Use with specific model
-amplifier chat --provider github-copilot --model claude-sonnet-4
-```
 
 ## Features
 
@@ -73,7 +99,17 @@ amplifier chat --provider github-copilot --model claude-sonnet-4
 - Extended thinking (on supported models)
 - Vision capabilities (on supported models)
 - Token counting and management
-- **Message validation** before API calls (defense in depth)
+- Message validation before API calls (defense in depth)
+
+## Contract
+
+| | |
+|---|---|
+| **Module Type** | Provider |
+| **Module ID** | `provider-github-copilot` |
+| **Provider Name** | `github-copilot` |
+| **Entry Point** | `amplifier_module_provider_github_copilot:mount` |
+| **Source URI** | `git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main` |
 
 ## Graceful Error Recovery
 
