@@ -182,6 +182,23 @@ class CopilotClientWrapper:
                 client_options = self._build_client_options()
                 logger.debug(f"[CLIENT] Client options: {client_options}")
 
+                # Ensure the bundled CLI binary is executable.
+                # uv strips execute bits when installing packages.
+                import stat
+                from pathlib import Path
+
+                import copilot as _copilot_mod
+
+                _cli_bin = Path(_copilot_mod.__file__).parent / "bin" / "copilot"
+                if _cli_bin.exists() and not os.access(_cli_bin, os.X_OK):
+                    _cli_bin.chmod(
+                        _cli_bin.stat().st_mode
+                        | stat.S_IXUSR
+                        | stat.S_IXGRP
+                        | stat.S_IXOTH
+                    )
+                    logger.info(f"[CLIENT] Fixed missing execute permission on {_cli_bin}")
+
                 logger.info("[CLIENT] Initializing Copilot client...")
                 client = CopilotClient(client_options)
                 await client.start()
