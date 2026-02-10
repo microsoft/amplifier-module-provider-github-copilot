@@ -54,14 +54,17 @@ providers:
 ## Usage
 
 ```bash
-# Interactive chat
-amplifier --provider github-copilot
+# Interactive session
+amplifier run -p github-copilot
 
-# Specify a model
-amplifier run --provider github-copilot --model claude-sonnet-4 "Explain this codebase"
+# One-shot prompt
+amplifier run -p github-copilot -m claude-sonnet-4 "Explain this codebase"
 
-# Set as default for this project
+# Set as default provider locally (just you)
 amplifier provider use github-copilot --local
+
+# Set as default provider for the project (team)
+amplifier provider use github-copilot --model claude-sonnet-4 --project
 ```
 
 ### Provider Preferences in Bundles
