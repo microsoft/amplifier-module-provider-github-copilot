@@ -152,7 +152,7 @@ make check         # Full check (lint + test)
 
 ## Dependencies
 
-- `amplifier-core>=1.0.0`
+- `amplifier-core` (provided by Amplifier runtime, not installed separately)
 - `github-copilot-sdk>=0.1.0,<0.2.0`
 
 

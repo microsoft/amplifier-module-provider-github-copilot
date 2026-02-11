@@ -21,7 +21,7 @@ Usage:
     ```yaml
     # In amplifier.yaml
     providers:
-      copilot-sdk:
+      github-copilot:
         model: claude-opus-4.5
         # timeout: 3600        # 1 hour default (override if needed)
         # thinking_timeout: 3600  # Same as regular (override if needed)
@@ -30,7 +30,7 @@ Usage:
 
     Or via CLI:
     ```bash
-    amplifier chat --provider copilot-sdk
+    amplifier chat --provider github-copilot
     ```
 
 Prerequisites:

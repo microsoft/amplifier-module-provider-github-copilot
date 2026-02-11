@@ -182,10 +182,6 @@ CAPTURE_FIRST_TURN_ONLY = True
 # Evidence: Same (delegate, report_intent) pair repeated 303 times
 DEDUPLICATE_TOOL_CALLS = True
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Built-in → Amplifier Capability Mapping
-# ═══════════════════════════════════════════════════════════════════════════════
-
 BUILTIN_TO_AMPLIFIER_CAPABILITY: dict[str, frozenset[str]] = {
     # File operation overlaps
     "view": frozenset({"read_file"}),

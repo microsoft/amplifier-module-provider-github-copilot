@@ -93,7 +93,6 @@ def copilot_model_to_internal(raw_model: Any) -> CopilotModelInfo:
                 # Derive max output from context window minus prompt allocation
                 # NOTE: Do NOT cap this value. The SDK provides authoritative limits.
                 # Capping causes incorrect budget calculation in context manager.
-                # See: myDocs-Amp-CLI-SDK-provider/SDK-TOKEN-LIMITS-RESEARCH-20260208.md
                 max_output_tokens = context_window - limits.max_prompt_tokens
 
         if hasattr(caps, "supports") and caps.supports:
