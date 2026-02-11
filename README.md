@@ -1,5 +1,7 @@
 # Amplifier GitHub Copilot Provider Module
 
+> This module is created by HDMowri
+
 GitHub Copilot SDK integration for Amplifier via Copilot CLI.
 
 ## Prerequisites
@@ -114,7 +116,7 @@ Set `debug: true` for request/response event logging, or `debug: true, raw_debug
 ## Contract
 
 | | |
-|---|---|
+| --- | --- |
 | **Module Type** | Provider |
 | **Module ID** | `provider-github-copilot` |
 | **Provider Name** | `github-copilot` |
@@ -154,5 +156,3 @@ make check         # Full check (lint + test)
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
 - `github-copilot-sdk>=0.1.0,<0.2.0`
-
-
