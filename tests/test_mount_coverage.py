@@ -22,14 +22,15 @@ class TestMountExceptionPath:
         with patch("shutil.which", return_value="/usr/bin/copilot"):
             with patch("os.path.isfile", return_value=True):
                 with patch("os.path.isabs", return_value=True):
-                    with patch(
-                        "amplifier_module_provider_github_copilot.CopilotSdkProvider",
-                        side_effect=Exception("Init explosion"),
-                    ):
-                        cleanup = await mount(mock_coordinator, {"model": "claude-opus-4.5"})
+                    with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                        with patch(
+                            "amplifier_module_provider_github_copilot.CopilotSdkProvider",
+                            side_effect=Exception("Init explosion"),
+                        ):
+                            cleanup = await mount(mock_coordinator, {"model": "claude-opus-4.5"})
 
-                        assert cleanup is None
-                        assert "github-copilot" not in mock_coordinator.mounted_providers
+                            assert cleanup is None
+                            assert "github-copilot" not in mock_coordinator.mounted_providers
 
     @pytest.mark.asyncio
     async def test_mount_returns_none_when_coordinator_mount_raises(self, mock_coordinator):
@@ -39,9 +40,10 @@ class TestMountExceptionPath:
         with patch("shutil.which", return_value="/usr/bin/copilot"):
             with patch("os.path.isfile", return_value=True):
                 with patch("os.path.isabs", return_value=True):
-                    cleanup = await mount(mock_coordinator, {})
+                    with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                        cleanup = await mount(mock_coordinator, {})
 
-                    assert cleanup is None
+                        assert cleanup is None
 
 
 class TestFindCopilotCliEnvVar:
@@ -54,11 +56,12 @@ class TestFindCopilotCliEnvVar:
             with patch("shutil.which", return_value=None):
                 with patch("os.path.isfile", return_value=True):
                     with patch("os.path.isabs", return_value=True):
-                        cleanup = await mount(mock_coordinator, {})
+                        with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                            cleanup = await mount(mock_coordinator, {})
 
-                        assert cleanup is not None
-                        provider = mock_coordinator.mounted_providers.get("github-copilot")
-                        assert provider is not None
+                            assert cleanup is not None
+                            provider = mock_coordinator.mounted_providers.get("github-copilot")
+                            assert provider is not None
 
     @pytest.mark.asyncio
     async def test_config_cli_path_takes_priority_over_env(self, mock_coordinator):
@@ -66,12 +69,13 @@ class TestFindCopilotCliEnvVar:
         with patch.dict(os.environ, {"COPILOT_CLI_PATH": "/env/copilot"}):
             with patch("os.path.isfile", return_value=True):
                 with patch("os.path.isabs", return_value=True):
-                    cleanup = await mount(
-                        mock_coordinator,
-                        {"cli_path": "/config/copilot"},
-                    )
+                    with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                        cleanup = await mount(
+                            mock_coordinator,
+                            {"cli_path": "/config/copilot"},
+                        )
 
-                    assert cleanup is not None
+                        assert cleanup is not None
 
 
 class TestFindCopilotCliAbsolutePath:
@@ -94,12 +98,13 @@ class TestFindCopilotCliAbsolutePath:
         """Should succeed when absolute path to CLI exists."""
         with patch("os.path.isabs", return_value=True):
             with patch("os.path.isfile", return_value=True):
-                cleanup = await mount(
-                    mock_coordinator,
-                    {"cli_path": "/usr/local/bin/copilot"},
-                )
+                with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                    cleanup = await mount(
+                        mock_coordinator,
+                        {"cli_path": "/usr/local/bin/copilot"},
+                    )
 
-                assert cleanup is not None
+                    assert cleanup is not None
 
 
 class TestFindCopilotCliNonAbsolutePath:
@@ -122,12 +127,13 @@ class TestFindCopilotCliNonAbsolutePath:
         """Should resolve non-absolute CLI name through PATH."""
         with patch("os.path.isabs", return_value=False):
             with patch("shutil.which", return_value="/usr/bin/copilot"):
-                cleanup = await mount(
-                    mock_coordinator,
-                    {"cli_path": "copilot"},
-                )
+                with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                    cleanup = await mount(
+                        mock_coordinator,
+                        {"cli_path": "copilot"},
+                    )
 
-                assert cleanup is not None
+                    assert cleanup is not None
 
 
 class TestFindCopilotCliExceptionPath:
@@ -175,5 +181,6 @@ class TestFindCopilotCliDirectImport:
             with patch("shutil.which", side_effect=which_side_effect):
                 with patch("os.path.isabs", return_value=True):
                     with patch("os.path.isfile", return_value=True):
-                        result = _find_copilot_cli({})
-                        assert result == "C:\\Program Files\\copilot\\copilot.exe"
+                        with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                            result = _find_copilot_cli({})
+                            assert result == "C:\\Program Files\\copilot\\copilot.exe"
