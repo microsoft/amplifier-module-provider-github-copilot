@@ -18,7 +18,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ._constants import DEFAULT_TIMEOUT, SDK_TIMEOUT_BUFFER_SECONDS, VALID_REASONING_EFFORTS
+from ._constants import (
+    CLIENT_HEALTH_CHECK_TIMEOUT,
+    CLIENT_INIT_LOCK_TIMEOUT,
+    DEFAULT_TIMEOUT,
+    SDK_TIMEOUT_BUFFER_SECONDS,
+    VALID_REASONING_EFFORTS,
+)
 from .exceptions import (
     CopilotAuthenticationError,
     CopilotConnectionError,
@@ -149,12 +155,55 @@ class CopilotClientWrapper:
 
         logger.debug(f"[CLIENT] CopilotClientWrapper initialized, timeout={timeout}s")
 
+    async def _check_client_health(self) -> bool:
+        """
+        Verify the cached client subprocess is still responsive.
+
+        Sends a ping with a short timeout. If the subprocess has died,
+        become unresponsive, or the auth token has expired, this will
+        fail and trigger re-initialization.
+
+        Returns:
+            True if client is healthy, False if it needs re-initialization
+        """
+        if self._client is None:
+            return False
+        try:
+            await asyncio.wait_for(
+                self._client.ping(),
+                timeout=CLIENT_HEALTH_CHECK_TIMEOUT,
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"[CLIENT] Health check failed: {type(e).__name__}: {e}")
+            return False
+
+    async def _reset_client(self) -> None:
+        """
+        Tear down a dead/unhealthy client so it can be re-initialized.
+
+        Attempts a graceful stop, but always resets state even if stop fails.
+        Does NOT acquire the lock -- caller must hold it.
+        """
+        if self._client is not None:
+            try:
+                await asyncio.shield(self._client.stop())
+            except Exception as e:
+                logger.debug(f"[CLIENT] Error stopping unhealthy client: {e}")
+            finally:
+                self._client = None
+                self._started = False
+
     async def ensure_client(self) -> CopilotClient:
         """
         Lazily initialize and return the Copilot client.
 
         Uses double-checked locking to ensure thread-safe
         initialization while minimizing lock contention.
+
+        Includes a health check on cached clients to detect and recover
+        from dead subprocesses (e.g., after long-running sessions where
+        the CLI process dies silently).
 
         Returns:
             Initialized CopilotClient instance
@@ -163,14 +212,30 @@ class CopilotClientWrapper:
             CopilotConnectionError: If client initialization fails
             CopilotAuthenticationError: If authentication fails
         """
+        # Fast path: client exists and passes health check
         if self._client is not None and self._started:
-            logger.debug("[CLIENT] Returning existing client")
-            return self._client
-
-        async with self._lock:
-            # Double-check after acquiring lock
-            if self._client is not None and self._started:
+            if await self._check_client_health():
+                logger.debug("[CLIENT] Returning existing client (health check passed)")
                 return self._client
+            # Health check failed -- need to re-initialize under lock
+            logger.warning("[CLIENT] Cached client failed health check, will re-initialize")
+
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=CLIENT_INIT_LOCK_TIMEOUT)
+        except TimeoutError:
+            raise CopilotConnectionError(
+                f"Timed out waiting for client initialization lock "
+                f"({CLIENT_INIT_LOCK_TIMEOUT}s). Another caller may be stuck. "
+                f"Try restarting your session."
+            ) from None
+
+        try:
+            # Double-check after acquiring lock (another caller may have re-initialized)
+            if self._client is not None and self._started:
+                if await self._check_client_health():
+                    return self._client
+                # Still unhealthy -- tear it down
+                await self._reset_client()
 
             # Use local variable to ensure atomic assignment after full initialization
             client: CopilotClient | None = None
@@ -192,10 +257,7 @@ class CopilotClientWrapper:
                 _cli_bin = Path(_copilot_mod.__file__).parent / "bin" / "copilot"
                 if _cli_bin.exists() and not os.access(_cli_bin, os.X_OK):
                     _cli_bin.chmod(
-                        _cli_bin.stat().st_mode
-                        | stat.S_IXUSR
-                        | stat.S_IXGRP
-                        | stat.S_IXOTH
+                        _cli_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
                     )
                     logger.info(f"[CLIENT] Fixed missing execute permission on {_cli_bin}")
 
@@ -245,6 +307,8 @@ class CopilotClientWrapper:
                 raise CopilotConnectionError(
                     f"Failed to initialize Copilot client: {type(e).__name__}: {e}"
                 ) from e
+        finally:
+            self._lock.release()
 
     def _build_client_options(self) -> dict[str, Any]:
         """Build CopilotClientOptions from configuration.

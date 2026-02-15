@@ -56,6 +56,21 @@ MAX_REPAIRED_TOOL_IDS = 1000
 # and provides consistent error handling. The SDK timeout acts as a fallback.
 SDK_TIMEOUT_BUFFER_SECONDS = 5.0
 
+# Client health check timeout (seconds).
+# Used by ensure_client() to verify a cached client subprocess is still alive
+# before returning it. Short timeout since ping should be near-instant for a
+# healthy process. If this fails, the client is torn down and re-initialized.
+# Evidence: TimeoutError in long-running sessions (~90min) where subprocess dies
+# but _started flag remains True, causing all subsequent callers to get a dead client.
+CLIENT_HEALTH_CHECK_TIMEOUT = 5.0
+
+# Lock acquisition timeout for ensure_client() (seconds).
+# Prevents callers from waiting indefinitely when another caller is stuck inside
+# ensure_client() (e.g., blocked on a dead subprocess's start() call).
+# Evidence: asyncio.Lock with no timeout caused sub-agent callers to queue forever
+# behind a stuck initialization, producing 5516.9s elapsed times.
+CLIENT_INIT_LOCK_TIMEOUT = 30.0
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Copilot SDK Built-in Tool Names
 # ═══════════════════════════════════════════════════════════════════════════════
