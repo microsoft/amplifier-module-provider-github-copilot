@@ -17,6 +17,27 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def mock_cache_home(tmp_path, monkeypatch):
+    """
+    Auto-use fixture that isolates ALL tests from the real disk cache.
+
+    This prevents tests from reading/writing to ~/.amplifier/cache/ which
+    would cause non-deterministic behavior when the provider loads cached
+    model data in __init__.
+
+    Each test gets a fresh temp directory as its "home", so:
+    - Cache file path becomes: tmp_path/.amplifier/cache/github-copilot-models.json
+    - No interference between tests
+    - No interference with real user cache
+    """
+    monkeypatch.setattr(
+        "amplifier_module_provider_github_copilot.model_cache.Path.home",
+        lambda: tmp_path,
+    )
+    return tmp_path
+
 # Fix for Windows asyncio cleanup issues causing KeyboardInterrupt
 # See: https://github.com/pytest-dev/pytest-asyncio/issues/671
 if sys.platform == "win32":

@@ -29,10 +29,10 @@ Prerequisites:
     - PYTHONPATH includes amplifier-core and this module
     - Amplifier installed (for E2E tests)
 
-Evidence base:
+Architecture:
+    - SDK Driver with first-turn capture and session abort
     - Original incident: 305 turns, 607 tool calls, 303 bug-hunter spawns
-    - Session a1a0af17: _dev_scripts/_forensic_amp_events.jsonl
-    - Session bfa3b57b: _dev_scripts/_forensic_sdk_events.jsonl
+    - Reference session IDs preserved as constants for regression validation
 """
 
 from __future__ import annotations
@@ -465,55 +465,76 @@ def _print_forensic_comparison(result: dict[str, Any]) -> None:
         logger.error(f"{'=' * 70}\n")
 
 
-def run_comparison() -> dict[str, Any]:
+def run_comparison(
+    forensic_data_dir: Path | None = None,
+    amplifier_project_name: str | None = None,
+) -> dict[str, Any]:
     """
     Compare original incident data with latest session data.
 
-    Reads the archived forensic data and the most recent session.
+    Args:
+        forensic_data_dir: Optional path to directory containing archived
+            forensic data files (_forensic_sdk_events.jsonl, _forensic_amp_events.jsonl).
+            If not provided, comparison is skipped with a warning.
+        amplifier_project_name: Optional Amplifier project name to find sessions.
+            Defaults to checking standard Amplifier session locations.
+
+    Returns:
+        Dictionary with comparison results and status.
     """
     logger.info("=" * 60)
     logger.info("FORENSIC COMPARISON: Original incident vs latest session")
     logger.info("=" * 60)
 
-    # Load original incident data
-    dev_scripts = Path(__file__).resolve().parents[2] / "_dev_scripts"
-    sdk_events_file = dev_scripts / "_forensic_sdk_events.jsonl"
-    amp_events_file = dev_scripts / "_forensic_amp_events.jsonl"
-
     results: dict[str, Any] = {"test": "comparison"}
 
-    if sdk_events_file.exists():
-        incident_sdk = parse_sdk_session(sdk_events_file)
-        results["incident_sdk"] = incident_sdk
-        logger.info(
-            f"Original SDK incident: "
-            f"{incident_sdk['turns']} turns, "
-            f"{incident_sdk['denials']} denials"
-        )
+    # Load original incident data if provided
+    if forensic_data_dir and forensic_data_dir.exists():
+        sdk_events_file = forensic_data_dir / "_forensic_sdk_events.jsonl"
+        amp_events_file = forensic_data_dir / "_forensic_amp_events.jsonl"
+
+        if sdk_events_file.exists():
+            incident_sdk = parse_sdk_session(sdk_events_file)
+            results["incident_sdk"] = incident_sdk
+            logger.info(
+                f"Original SDK incident: "
+                f"{incident_sdk['turns']} turns, "
+                f"{incident_sdk['denials']} denials"
+            )
+        else:
+            logger.warning(f"Incident SDK data not found: {sdk_events_file}")
+
+        if amp_events_file.exists():
+            incident_amp = parse_amplifier_session(amp_events_file)
+            results["incident_amp"] = incident_amp
+            logger.info(
+                f"Original Amplifier incident: "
+                f"{incident_amp['delegate_spawns']} delegates, "
+                f"{incident_amp['total_tool_calls']} tool calls"
+            )
+        else:
+            logger.warning(f"Incident Amplifier data not found: {amp_events_file}")
     else:
-        logger.warning(f"Incident SDK data not found: {sdk_events_file}")
-
-    if amp_events_file.exists():
-        incident_amp = parse_amplifier_session(amp_events_file)
-        results["incident_amp"] = incident_amp
         logger.info(
-            f"Original Amplifier incident: "
-            f"{incident_amp['delegate_spawns']} delegates, "
-            f"{incident_amp['total_tool_calls']} tool calls"
+            "Forensic data directory not provided — skipping incident comparison. "
+            "Use --forensic-data-dir to provide archived incident data."
         )
-    else:
-        logger.warning(f"Incident Amplifier data not found: {amp_events_file}")
 
-    # Find latest session
-    sessions_dir = (
-        Path.home()
-        / ".amplifier"
-        / "projects"
-        / "-mnt-e-amplifier+GHC-CLI-SDK-Experiment"
-        / "sessions"
-    )
+    # Find latest session from Amplifier projects
+    amplifier_projects = Path.home() / ".amplifier" / "projects"
+    sessions_dir: Path | None = None
 
-    if sessions_dir.exists():
+    if amplifier_project_name:
+        sessions_dir = amplifier_projects / amplifier_project_name / "sessions"
+    elif amplifier_projects.exists():
+        # Find any project with sessions
+        for project in amplifier_projects.iterdir():
+            if project.is_dir() and (project / "sessions").exists():
+                sessions_dir = project / "sessions"
+                logger.info(f"Using project: {project.name}")
+                break
+
+    if sessions_dir and sessions_dir.exists():
         session_dirs = sorted(
             [
                 d
@@ -535,6 +556,8 @@ def run_comparison() -> dict[str, Any]:
                     f"{latest_amp['delegate_spawns']} delegates, "
                     f"{latest_amp['total_tool_calls']} tool calls"
                 )
+    else:
+        logger.info("No Amplifier sessions found — skipping latest session analysis.")
 
     results["status"] = "COMPLETE"
     return results

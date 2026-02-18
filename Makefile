@@ -35,8 +35,9 @@ install:
 
 # Run all tests (uses the 3-command pattern to avoid Windows asyncio issues)
 test:
-	@echo "Running tests (step 1/3: model naming)..."
-	$(PYTHON) -m pytest tests/test_model_naming.py -q --tb=short
+	@echo "Running tests (step 1/3: model naming + cache)..."
+	$(PYTHON) -m pytest tests/test_model_naming.py tests/test_model_cache.py \
+		tests/test_model_cache_integration.py -q --tb=short
 	@echo "Running tests (step 2/3: sync-heavy + SDK assumptions)..."
 	$(PYTHON) -m pytest tests/test_models.py tests/test_converters.py tests/test_client.py \
 		tests/test_exceptions.py tests/test_mount.py tests/test_mount_coverage.py \

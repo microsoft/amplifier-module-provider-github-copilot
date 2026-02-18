@@ -23,16 +23,13 @@ Tests are skipped by default. Run with:
     RUN_LIVE_TESTS=1 python -m pytest tests/integration/test_forensic_regression.py -v -s
 
 Prerequisites:
-    - Copilot CLI installed and in PATH (WSL)
+    - Copilot CLI installed and in PATH
     - Valid GitHub Copilot authentication
     - Network access
-    - PYTHONPATH includes amplifier-core
 
-Evidence base:
-    - Session 497bbab7: Agent loop problem analysis
-    - Session a1a0af17: 305-turn forensic analysis
-    - _dev_scripts/_forensic_sdk_events.jsonl (305-turn incident data)
-    - _dev_scripts/_forensic_amp_events.jsonl (Amplifier-side incident data)
+Architecture:
+    - SDK Driver with first-turn capture and session abort
+    - Circuit breaker prevents runaway tool call loops
 """
 
 from __future__ import annotations
@@ -558,17 +555,27 @@ class TestSdkSessionForensics:
         request.tools = make_amplifier_tools()[:3]  # delegate, report_intent, read_file
         request.stream = None
 
-        # Record time window
-        before = datetime.now(UTC)
+        # Record time window with margin for filesystem timestamp granularity
+        # Some filesystems have 1-second resolution, and there may be timezone drift
+        from datetime import timedelta
+
+        margin = timedelta(seconds=60)
+        before = datetime.now(UTC) - margin
         await forensic_provider.complete(request)
-        after = datetime.now(UTC)
+        after = datetime.now(UTC) + margin
 
         # Find the SDK session created during this test
-        session_state_dir = Path.home() / ".copilot" / "session-state"
-        if not session_state_dir.exists():
-            pytest.skip("~/.copilot/session-state/ not found")
+        # Note: Use os.path.expanduser("~") to get REAL home, not Path.home()
+        # which can be patched by pytest fixtures (e.g., tmp_path)
+        import os
 
-        # Find sessions modified in our time window
+        real_home = Path(os.path.expanduser("~"))
+        session_state_dir = real_home / ".copilot" / "session-state"
+        logger.info(f"Looking for session state dir: {session_state_dir} (exists={session_state_dir.exists()})")
+        if not session_state_dir.exists():
+            pytest.skip(f"~/.copilot/session-state/ not found at {session_state_dir}")
+
+        # Find sessions modified in our time window (with generous margin)
         candidate_sessions: list[Path] = []
         for session_dir in session_state_dir.iterdir():
             if not session_dir.is_dir():
@@ -656,16 +663,18 @@ def _find_amplifier_cli() -> str | None:
 
 def _get_workspace_cwd() -> str:
     """Return the workspace root as a platform-appropriate path."""
-    if sys.platform == "win32":
-        return r"E:\amplifier+GHC-CLI-SDK-Experiment"
-    return "/mnt/e/amplifier+GHC-CLI-SDK-Experiment"
+    # Dynamically determine workspace from this file's location
+    # tests/integration/test_forensic_regression.py -> module root -> workspace
+    module_root = Path(__file__).resolve().parents[2]
+    workspace = module_root.parent
+    return str(workspace)
 
 
 def _get_provider_cwd() -> str:
     """Return the provider module root as a platform-appropriate path."""
-    workspace = _get_workspace_cwd()
-    sep = "\\" if sys.platform == "win32" else "/"
-    return f"{workspace}{sep}amplifier-module-provider-github-copilot"
+    # Dynamically determine from this file's location
+    module_root = Path(__file__).resolve().parents[2]
+    return str(module_root)
 
 
 class TestAmplifierEndToEnd:
@@ -688,8 +697,42 @@ class TestAmplifierEndToEnd:
 
         This is a smoke test that validates Amplifier can use the Copilot
         provider without errors.
+
+        Platform Notes:
+            - Windows x64: ✓ Works fine (cryptography has pre-built wheels)
+            - Windows ARM64: ✗ Skipped (see skip condition below)
+            - Linux/WSL: ✓ Works fine
+            - macOS: ✓ Works fine
         """
+        import platform
         import subprocess
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # WINDOWS ARM64 SKIP EXPLANATION
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Amplifier's bundle preparation tries to install `tool-mcp` module which
+        # depends on `cryptography` via the dependency chain:
+        #   tool-mcp → mcp → pyjwt[crypto] → cryptography
+        #
+        # On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
+        # to compile from source. The build fails with:
+        #   "Unsupported platform: win_arm64"
+        #
+        # This causes Amplifier's bundle prep to hang for ~30 seconds attempting
+        # the build, which exhausts the Copilot SDK's internal ping() timeout
+        # (also 30s), resulting in TimeoutError during client initialization.
+        #
+        # This is NOT a provider bug - it's a platform limitation. The raw SDK
+        # works perfectly on Windows ARM64 when tested in isolation.
+        #
+        # Windows x64 DOES work because cryptography has pre-built wheels for x64.
+        # ═══════════════════════════════════════════════════════════════════════════
+        if platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"):
+            pytest.skip(
+                "Skipping on Windows ARM64: Amplifier's tool-mcp module requires "
+                "cryptography which has no ARM64 wheel (needs Rust to build). "
+                "This test passes on Windows x64, Linux, and macOS."
+            )
 
         amplifier_bin = _find_amplifier_cli()
         if not amplifier_bin:
@@ -734,8 +777,42 @@ class TestAmplifierEndToEnd:
 
         This is the definitive proof that the SDK Driver architecture
         fixes the 305-turn loop.
+
+        Platform Notes:
+            - Windows x64: ✓ Works fine (cryptography has pre-built wheels)
+            - Windows ARM64: ✗ Skipped (see skip condition below)
+            - Linux/WSL: ✓ Works fine
+            - macOS: ✓ Works fine
         """
+        import platform
         import subprocess
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # WINDOWS ARM64 SKIP EXPLANATION
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Amplifier's bundle preparation tries to install `tool-mcp` module which
+        # depends on `cryptography` via the dependency chain:
+        #   tool-mcp → mcp → pyjwt[crypto] → cryptography
+        #
+        # On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
+        # to compile from source. The build fails with:
+        #   "Unsupported platform: win_arm64"
+        #
+        # This causes Amplifier's bundle prep to hang for ~30 seconds attempting
+        # the build, which exhausts the Copilot SDK's internal ping() timeout
+        # (also 30s), resulting in TimeoutError during client initialization.
+        #
+        # This is NOT a provider bug - it's a platform limitation. The raw SDK
+        # works perfectly on Windows ARM64 when tested in isolation.
+        #
+        # Windows x64 DOES work because cryptography has pre-built wheels for x64.
+        # ═══════════════════════════════════════════════════════════════════════════
+        if platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"):
+            pytest.skip(
+                "Skipping on Windows ARM64: Amplifier's tool-mcp module requires "
+                "cryptography which has no ARM64 wheel (needs Rust to build). "
+                "This test passes on Windows x64, Linux, and macOS."
+            )
 
         amplifier_bin = _find_amplifier_cli()
         if not amplifier_bin:
