@@ -136,9 +136,9 @@ class CopilotClientWrapper:
 
         Args:
             config: Configuration dict with optional keys:
-                - cli_path: Path to Copilot CLI executable
                 - log_level: Logging level for CLI
                 - auto_restart: Whether to auto-restart CLI on crash
+                - cwd: Working directory for CLI process
             timeout: Default request timeout in seconds (must be > 0)
 
         Raises:
@@ -313,22 +313,10 @@ class CopilotClientWrapper:
     def _build_client_options(self) -> dict[str, Any]:
         """Build CopilotClientOptions from configuration.
 
-        Note: We intentionally do NOT auto-discover copilot CLI from PATH.
         The SDK bundles its own CLI binary which is version-matched to the SDK.
-        Using a system-installed CLI can cause version mismatches and auth issues.
-        Only override cli_path if explicitly configured.
+        We always use the bundled CLI to avoid version mismatches and auth issues.
         """
         options: dict[str, Any] = {}
-
-        # Only use cli_path if explicitly configured (config or env var)
-        # Otherwise let SDK use its bundled CLI binary
-        cli_path = self._config.get("cli_path") or os.environ.get("COPILOT_CLI_PATH")
-
-        if cli_path:
-            options["cli_path"] = cli_path
-            logger.debug(f"[CLIENT] Using explicit CLI path: {cli_path}")
-        else:
-            logger.debug("[CLIENT] Using SDK's bundled CLI")
 
         if self._config.get("log_level"):
             options["log_level"] = self._config["log_level"]
@@ -447,7 +435,7 @@ class CopilotClientWrapper:
         # Disable infinite sessions for ephemeral pattern
         session_config["infinite_sessions"] = {"enabled": False}
 
-        # Add tools for structured tool calling (Option A: capture-and-abort)
+        # Add tools for structured tool calling (capture-and-abort pattern)
         if tools:
             session_config["tools"] = tools
             logger.debug(f"[CLIENT] Registering {len(tools)} tool(s) with session")

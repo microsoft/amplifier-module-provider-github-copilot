@@ -6,7 +6,6 @@ error handling, session creation, input validation, and cancellation handling.
 """
 
 import asyncio
-import os
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -605,24 +604,9 @@ class TestBuildClientOptions:
         options = wrapper._build_client_options()
         assert options["cwd"] == "/tmp/project"
 
-    def test_cli_path_from_env_var(self):
-        """Should pick up COPILOT_CLI_PATH from environment."""
-        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
-        with patch.dict(os.environ, {"COPILOT_CLI_PATH": "/usr/local/bin/copilot"}):
-            options = wrapper._build_client_options()
-        assert options["cli_path"] == "/usr/local/bin/copilot"
-
-    def test_cli_path_config_overrides_env(self):
-        """Config cli_path should take priority over env var."""
-        wrapper = CopilotClientWrapper(config={"cli_path": "/config/copilot"}, timeout=60.0)
-        with patch.dict(os.environ, {"COPILOT_CLI_PATH": "/env/copilot"}):
-            options = wrapper._build_client_options()
-        assert options["cli_path"] == "/config/copilot"
-
     def test_all_options_combined(self):
         """Should include all configured options together."""
         config = {
-            "cli_path": "/custom/copilot",
             "log_level": "info",
             "auto_restart": True,
             "cwd": "/workspace",
@@ -630,19 +614,15 @@ class TestBuildClientOptions:
         wrapper = CopilotClientWrapper(config=config, timeout=60.0)
         options = wrapper._build_client_options()
         assert options == {
-            "cli_path": "/custom/copilot",
             "log_level": "info",
             "auto_restart": True,
             "cwd": "/workspace",
         }
 
-    def test_empty_config_no_env_yields_empty_options(self):
-        """Empty config with no env var should yield empty options."""
+    def test_empty_config_yields_empty_options(self):
+        """Empty config should yield empty options."""
         wrapper = CopilotClientWrapper(config={}, timeout=60.0)
-        env = os.environ.copy()
-        env.pop("COPILOT_CLI_PATH", None)
-        with patch.dict(os.environ, env, clear=True):
-            options = wrapper._build_client_options()
+        options = wrapper._build_client_options()
         assert options == {}
 
 

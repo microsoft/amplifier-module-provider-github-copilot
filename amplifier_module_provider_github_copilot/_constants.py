@@ -49,6 +49,27 @@ DEFAULT_THINKING_TIMEOUT = 3600.0  # 1 hour - same as regular (can differentiate
 # Valid reasoning effort levels per Copilot SDK
 VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# MODEL CACHE CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# The model cache persists model metadata (context_window, max_output_tokens)
+# to disk so that provider initialization can return accurate values without
+# calling the SDK API every time.
+#
+# Cache is written by list_models() (called during `amplifier init`) and read
+# during provider initialization (mount/constructor).
+#
+# Cross-platform: Uses pathlib.Path.home() which works on:
+# - Linux: /home/<user>/.amplifier/cache/
+# - WSL: /home/<user>/.amplifier/cache/
+# - macOS: /Users/<user>/.amplifier/cache/
+# - Windows: C:\Users\<user>\.amplifier\cache\
+
+CACHE_FORMAT_VERSION = 1  # Increment on breaking schema changes
+CACHE_FILE_NAME = "github-copilot-models.json"  # Provider-specific file
+CACHE_STALE_DAYS = 30  # Log warning if cache older than this
+
 # Maximum repaired tool IDs to track (LRU eviction)
 MAX_REPAIRED_TOOL_IDS = 1000
 
@@ -128,6 +149,20 @@ COPILOT_BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
         # They are NOT documented but conflict with custom tools.
         "report_intent",  # Hidden: Causes hang if custom tool uses same name
         "task",  # Hidden: Causes hang if custom tool uses same name
+        # ─────────────────────────────────────────────────────────────────────────
+        # Additional built-ins discovered via archaeology (2026-02-09) and live
+        # testing (2026-02-16). Bug: GHCP-BUILTIN-TOOLS-001
+        # Evidence: ST04 session, binary analysis, Gemini live test
+        # ─────────────────────────────────────────────────────────────────────────
+        "create",  # File ops: ST04 session - "Tool 'create' not found"
+        "shell",  # Shell: 2026-02-09 archaeology
+        "report_progress",  # Think: 2026-02-09 archaeology (CLI session UI)
+        "update_todo",  # Think: 2026-02-09 archaeology
+        "skill",  # Other: 2026-02-09 archaeology
+        "fetch_copilot_cli_documentation",  # Fetch: 2026-02-16 live Gemini test
+        "search_code_subagent",  # Search: 2026-02-16 binary analysis
+        "github-mcp-server-web_search",  # Search: 2026-02-16 binary analysis (MCP)
+        "task_complete",  # Task: 2026-02-17 forensic session 1541c502
     }
 )
 
@@ -219,4 +254,17 @@ BUILTIN_TO_AMPLIFIER_CAPABILITY: dict[str, frozenset[str]] = {
     # These are not documented but cause session hangs if user tool has same name.
     "report_intent": frozenset({"report_intent"}),  # Hidden: Always exclude
     "task": frozenset({"task"}),  # Hidden: Always exclude
+    # ─────────────────────────────────────────────────────────────────────────
+    # Additional built-ins (Bug GHCP-BUILTIN-TOOLS-001, 2026-02-17)
+    # ─────────────────────────────────────────────────────────────────────────
+    "create": frozenset({"write_file"}),  # Maps to write_file (same as edit)
+    "shell": frozenset({"bash"}),  # Maps to bash
+    "update_todo": frozenset({"todo"}),  # Maps to todo
+    "skill": frozenset({"load_skill"}),  # Maps to load_skill
+    "search_code_subagent": frozenset({"grep", "glob", "delegate"}),  # Composite tool
+    "github-mcp-server-web_search": frozenset({"web_search"}),  # MCP web search
+    # Pure exclusions — no direct Amplifier equivalent
+    "report_progress": frozenset({"todo"}),  # Partial: maps to todo for task tracking
+    "fetch_copilot_cli_documentation": frozenset(),  # CLI-specific, no equivalent
+    "task_complete": frozenset({"todo"}),  # Task completion: maps to todo
 }

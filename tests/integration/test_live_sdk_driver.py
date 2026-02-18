@@ -206,31 +206,29 @@ class TestLiveSdkDriver:
         response = await live_provider.complete(request)
         elapsed = time.time() - start
 
-        # Verify text content present
+        # Verify response is valid
         assert response is not None
         assert response.content is not None
         assert len(response.content) > 0
 
-        text_blocks = [
-            block for block in response.content if getattr(block, "type", None) == "text"
-        ]
-        assert len(text_blocks) > 0, "Expected at least one text block"
-
-        text = text_blocks[0].text
-        logger.info(f"Response text: {text}")
-        assert "4" in text, f"Expected '4' in response, got: {text}"
-
-        # No tool calls for simple math
-        # Note: The model MAY choose to use the calculate tool, which is valid.
-        # If it does, that's also an acceptable outcome for this test.
-        if not response.tool_calls:
-            assert response.finish_reason == "end_turn"
-        else:
+        # Model may choose EITHER text-only OR tool_use - both are valid behaviors
+        # Check tool_calls FIRST to handle both cases correctly
+        if response.tool_calls:
+            # Model chose to use the calculate tool - this is valid behavior
             assert response.finish_reason == "tool_use"
-            logger.info(
-                "Model chose to use calculate tool (valid behavior): "
-                f"{[tc.name for tc in response.tool_calls]}"
-            )
+            tool_names = [tc.name for tc in response.tool_calls]
+            logger.info(f"Model chose to use tools (valid behavior): {tool_names}")
+            # When using tools, there may or may not be accompanying text
+        else:
+            # Model chose text-only response - validate text content
+            assert response.finish_reason == "end_turn"
+            text_blocks = [
+                block for block in response.content if getattr(block, "type", None) == "text"
+            ]
+            assert len(text_blocks) > 0, "Expected at least one text block for text-only response"
+            text = text_blocks[0].text
+            logger.info(f"Response text: {text}")
+            assert "4" in text, f"Expected '4' in response, got: {text}"
 
         logger.info(f"Completed in {elapsed:.2f}s")
 

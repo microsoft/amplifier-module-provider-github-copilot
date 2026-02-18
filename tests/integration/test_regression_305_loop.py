@@ -22,18 +22,16 @@ architecture and validates:
   5. Session is aborted after first-turn capture
 
 Prerequisites:
-  - WSL with Copilot CLI in PATH
+  - Copilot CLI in PATH
   - Valid GitHub Copilot authentication
   - Network access
 
-Run from WSL:
-  cd /mnt/e/amplifier+GHC-CLI-SDK-Experiment/amplifier-module-provider-github-copilot
-  export PYTHONPATH="/mnt/e/amplifier+GHC-CLI-SDK-Experiment/amplifier-core:$PYTHONPATH"
-  RUN_LIVE_TESTS=1 python3 -m pytest tests/integration/test_regression_305_loop.py -v -s
+Run:
+  RUN_LIVE_TESTS=1 python -m pytest tests/integration/test_regression_305_loop.py -v -s
 
-Evidence base:
-  - Session a1a0af17: 305-turn forensic analysis
-  - Deny+Destroy architecture decision
+Architecture:
+  - SDK Driver with first-turn capture
+  - Deny+Destroy pattern prevents runaway loops
 """
 
 from __future__ import annotations

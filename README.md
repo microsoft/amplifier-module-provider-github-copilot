@@ -76,25 +76,15 @@ amplifier provider use github-copilot --local
 amplifier provider use github-copilot --model claude-sonnet-4 --project
 ```
 
-### Provider Preferences in Bundles
+## Supported Models (18)
 
-Use provider preferences for ordered model fallback:
+All 18 models available through your Copilot subscription are exposed at runtime:
 
-```yaml
-provider_preferences:
-  - provider: github-copilot
-    model: claude-sonnet-4
-  - provider: github-copilot
-    model: gpt-*
-```
+**Anthropic:** `claude-haiku-4.5`, `claude-opus-4.5`, `claude-opus-4.6`, `claude-opus-4.6-1m`, `claude-opus-4.6-fast`, `claude-sonnet-4`, `claude-sonnet-4.5`
 
-## Supported Models
+**OpenAI:** `gpt-4.1`, `gpt-5`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`
 
-All models available through your Copilot subscription are exposed at runtime. Examples:
-
-- `claude-opus-4.5`, `claude-sonnet-4`, `claude-haiku-4.5`
-- `gpt-5`, `gpt-5.1`, `gpt-5.1-codex`
-- `gemini-3-pro-preview`
+**Google:** `gemini-3-pro-preview`
 
 ## Configuration
 
@@ -115,7 +105,7 @@ Set `debug: true` for request/response event logging, or `debug: true, raw_debug
 
 ## Contract
 
-| | |
+| Field | Value |
 | --- | --- |
 | **Module Type** | Provider |
 | **Module ID** | `provider-github-copilot` |
@@ -150,6 +140,20 @@ make test          # Run tests
 make coverage      # Run with coverage report
 make sdk-assumptions  # Before upgrading SDK
 make check         # Full check (lint + test)
+```
+
+### Live Integration Tests
+
+Live tests require `RUN_LIVE_TESTS=1` and valid GitHub Copilot authentication:
+
+```bash
+RUN_LIVE_TESTS=1 python -m pytest tests/integration/ -v
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:RUN_LIVE_TESTS="1"; python -m pytest tests/integration/ -v
 ```
 
 ## Dependencies

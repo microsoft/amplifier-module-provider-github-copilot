@@ -221,52 +221,26 @@ def _find_copilot_cli(config: dict[str, Any]) -> str | None:
     """
     Find the Copilot CLI executable path.
 
-    Searches in order:
-    1. config["cli_path"] (explicit configuration)
-    2. COPILOT_CLI_PATH environment variable
-    3. System PATH via shutil.which()
+    Uses the SDK's bundled CLI binary by default. Falls back to system PATH
+    if the bundled binary is not found. The SDK bundles its own CLI binary
+    which is version-matched, avoiding potential version mismatches.
 
     Args:
-        config: Provider configuration (read-only)
+        config: Provider configuration (unused, kept for API compatibility)
 
     Returns:
         Resolved CLI path, or None if not found
     """
-    import os
-
     try:
-        # Get CLI path from config or environment
-        cli_path = config.get("cli_path")
+        # Let SDK use its bundled CLI - only fall back to system PATH
+        found = shutil.which("copilot") or shutil.which("copilot.exe")
+        if found:
+            _ensure_executable(found)
+            logger.debug(f"[MOUNT] Found Copilot CLI at: {found}")
+            return found
 
-        if not cli_path:
-            cli_path = os.environ.get("COPILOT_CLI_PATH")
-
-        # If still not found, try to locate it
-        if not cli_path:
-            found = shutil.which("copilot") or shutil.which("copilot.exe")
-            if found:
-                cli_path = found
-
-        if not cli_path:
-            logger.debug("[MOUNT] Copilot CLI not found in PATH or known locations")
-            return None
-
-        # Verify the path exists
-        if os.path.isabs(cli_path):
-            if not os.path.isfile(cli_path):
-                logger.debug(f"[MOUNT] Copilot CLI not found at: {cli_path}")
-                return None
-            _ensure_executable(cli_path)
-            logger.debug(f"[MOUNT] Found Copilot CLI at absolute path: {cli_path}")
-            return cli_path
-
-        found_path = shutil.which(cli_path)
-        if found_path is None:
-            logger.debug(f"[MOUNT] '{cli_path}' CLI not found in PATH")
-            return None
-        _ensure_executable(found_path)
-        logger.debug(f"[MOUNT] Found Copilot CLI at: {found_path}")
-        return found_path
+        logger.debug("[MOUNT] Copilot CLI not found in PATH")
+        return None
 
     except Exception as e:
         logger.debug(f"[MOUNT] CLI path discovery failed: {e}")

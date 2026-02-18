@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "1.0.0"
+version = "1.0.1"
 description = "Amplifier provider module for GitHub Copilot CLI SDK"
 readme = "README.md"
 license = {text = "MIT"}

@@ -136,7 +136,7 @@ class TestProviderProtocol:
 
     def test_get_model_info_returns_none_for_unknown_model(self, mock_coordinator, provider_config):
         """get_model_info returns None for unknown models when cache is cold."""
-        config = {**provider_config, "default_model": "unknown-model-xyz"}
+        config = {**provider_config, "model": "unknown-model-xyz", "default_model": "unknown-model-xyz"}
         provider = CopilotSdkProvider(
             api_key=None,
             config=config,
@@ -368,15 +368,15 @@ class TestProviderConfiguration:
         )
         assert provider._model == "claude-opus-4.6"
 
-    def test_default_model_takes_precedence_over_model(self, mock_coordinator):
-        """default_model should take precedence over model key."""
+    def test_model_takes_precedence_over_default_model(self, mock_coordinator):
+        """model (runtime override) should take precedence over default_model."""
         config = {"default_model": "claude-opus-4.6", "model": "claude-sonnet-4"}
         provider = CopilotSdkProvider(
             api_key=None,
             config=config,
             coordinator=mock_coordinator,
         )
-        assert provider._model == "claude-opus-4.6"
+        assert provider._model == "claude-sonnet-4"
 
     def test_model_key_still_works_for_backward_compat(self, mock_coordinator):
         """model key should work when default_model is absent."""
@@ -431,6 +431,116 @@ class TestBuiltinToolConstants:
         """CLI's edit tool must map to Amplifier's write_file and edit_file."""
         assert "write_file" in BUILTIN_TO_AMPLIFIER_CAPABILITY["edit"]
         assert "edit_file" in BUILTIN_TO_AMPLIFIER_CAPABILITY["edit"]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TDD Tests for 8 Missing CLI Built-in Tools (Bug GHCP-BUILTIN-TOOLS-001)
+    # Added: 2026-02-17
+    # Evidence: ST04 session, binary archaeology, live Gemini test
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def test_discovered_builtins_in_exclusion_list(self):
+        """All discovered CLI built-ins must be in COPILOT_BUILTIN_TOOL_NAMES.
+
+        Evidence:
+        - create: ST04 session (f3da2b5b) - "Tool 'create' not found"
+        - shell: 2026-02-09 archaeology
+        - report_progress: 2026-02-09 archaeology (think category)
+        - update_todo: 2026-02-09 archaeology (think category)
+        - skill: 2026-02-09 archaeology (other category)
+        - fetch_copilot_cli_documentation: 2026-02-16 live Gemini test
+        - search_code_subagent: 2026-02-16 binary analysis (search category)
+        - github-mcp-server-web_search: 2026-02-16 binary analysis (search category)
+        - task_complete: 2026-02-17 forensic session 1541c502
+        """
+        discovered_2026_02_09 = {"shell", "report_progress", "update_todo", "skill"}
+        discovered_2026_02_16 = {
+            "create",
+            "fetch_copilot_cli_documentation",
+            "search_code_subagent",
+            "github-mcp-server-web_search",
+        }
+        discovered_2026_02_17 = {"task_complete"}
+
+        all_discovered = discovered_2026_02_09 | discovered_2026_02_16 | discovered_2026_02_17
+
+        for tool in all_discovered:
+            assert tool in COPILOT_BUILTIN_TOOL_NAMES, (
+                f"Discovered built-in '{tool}' missing from COPILOT_BUILTIN_TOOL_NAMES"
+            )
+
+    def test_create_maps_to_write_file(self):
+        """CLI's create tool must map to write_file capability.
+
+        Evidence: ST04 session - LLM called 'create' when asked to create a file.
+        """
+        assert "create" in BUILTIN_TO_AMPLIFIER_CAPABILITY, (
+            "'create' must be in BUILTIN_TO_AMPLIFIER_CAPABILITY"
+        )
+        assert "write_file" in BUILTIN_TO_AMPLIFIER_CAPABILITY["create"], (
+            "'create' should map to 'write_file'"
+        )
+
+    def test_shell_maps_to_bash(self):
+        """CLI's shell tool must map to bash capability."""
+        assert "shell" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "bash" in BUILTIN_TO_AMPLIFIER_CAPABILITY["shell"]
+
+    def test_update_todo_maps_to_todo(self):
+        """CLI's update_todo tool must map to todo capability."""
+        assert "update_todo" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "todo" in BUILTIN_TO_AMPLIFIER_CAPABILITY["update_todo"]
+
+    def test_task_complete_maps_to_todo(self):
+        """CLI's task_complete tool must map to todo capability.
+
+        Evidence: 2026-02-17 forensic session 1541c502 - model called
+        task_complete when completing simple math, causing 'Tool not found'.
+        """
+        assert "task_complete" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "todo" in BUILTIN_TO_AMPLIFIER_CAPABILITY["task_complete"]
+
+    def test_skill_maps_to_load_skill(self):
+        """CLI's skill tool must map to load_skill capability."""
+        assert "skill" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "load_skill" in BUILTIN_TO_AMPLIFIER_CAPABILITY["skill"]
+
+    def test_search_code_subagent_maps_to_grep_glob_delegate(self):
+        """CLI's search_code_subagent is composite - maps to grep, glob, and delegate.
+
+        The mapping uses frozenset so ANY capability triggers exclusion:
+        - grep/glob: User has search primitives
+        - delegate: User has subagent capability (superior to CLI's hidden subagent)
+        """
+        assert "search_code_subagent" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        mapping = BUILTIN_TO_AMPLIFIER_CAPABILITY["search_code_subagent"]
+        assert "grep" in mapping, "search_code_subagent should map to grep"
+        assert "glob" in mapping, "search_code_subagent should map to glob"
+        assert "delegate" in mapping, "search_code_subagent should map to delegate"
+
+    def test_github_mcp_web_search_maps_to_web_search(self):
+        """CLI's github-mcp-server-web_search maps to web_search.
+
+        Evidence: Amplifier confirmed web_search exists at line 236 of _constants.py.
+        """
+        assert "github-mcp-server-web_search" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "web_search" in BUILTIN_TO_AMPLIFIER_CAPABILITY["github-mcp-server-web_search"]
+
+    def test_pure_exclusion_tools_have_mapping_entries(self):
+        """Tools without Amplifier equivalents still need mapping entries.
+
+        report_progress and fetch_copilot_cli_documentation have no direct
+        Amplifier equivalent but must be in the mapping dict (with empty set
+        or partial mapping) to satisfy test_capability_mapping_covers_all_builtins.
+        """
+        # These tools must be in the exclusion list
+        assert "report_progress" in COPILOT_BUILTIN_TOOL_NAMES
+        assert "fetch_copilot_cli_documentation" in COPILOT_BUILTIN_TOOL_NAMES
+        assert "task_complete" in COPILOT_BUILTIN_TOOL_NAMES
+
+        # They must also be in the mapping dict
+        assert "report_progress" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "fetch_copilot_cli_documentation" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "task_complete" in BUILTIN_TO_AMPLIFIER_CAPABILITY
 
 
 class TestDenyDestroyPattern:
@@ -1486,9 +1596,9 @@ class TestTimeoutSelectionDuringComplete:
     ):
         """CRITICAL: Timeout based on REQUEST INTENT, not capability detection.
 
-        Option C principle: If user explicitly requests extended_thinking, use the
-        thinking timeout even if _model_supports_reasoning() fails. This prevents
-        premature timeouts when:
+        If user explicitly requests extended_thinking, use the thinking timeout
+        even if _model_supports_reasoning() fails. This prevents premature
+        timeouts when:
         1. Network error during capability check
         2. Model not in cached list
         3. list_models() returns empty
@@ -1536,7 +1646,7 @@ class TestTimeoutSelectionDuringComplete:
                 call_kwargs = mock_send.call_args[1]
                 assert call_kwargs["timeout"] == 1800.0, (
                     "Timeout should be 1800s when user requests extended_thinking, "
-                    "even if capability detection fails (Option C principle)"
+                    "even if capability detection fails"
                 )
 
     @pytest.mark.asyncio
@@ -3130,7 +3240,7 @@ class TestInvalidateModelCacheComplete:
         assert len(provider._model_capabilities_cache) == 0
 
     def test_invalidate_then_get_model_info_uses_fallback(self, provider):
-        """After invalidation, get_model_info() should use KNOWN_CONTEXT_LIMITS fallback."""
+        """After invalidation, get_model_info() should use BUNDLED_MODEL_LIMITS fallback."""
         # Populate cache with stale data
         provider._model_info_cache["claude-opus-4.5"] = Mock(
             id="claude-opus-4.5",
@@ -3145,7 +3255,7 @@ class TestInvalidateModelCacheComplete:
         # Invalidate
         provider.invalidate_model_cache()
 
-        # After invalidation: falls back to KNOWN_CONTEXT_LIMITS
+        # After invalidation: falls back to BUNDLED_MODEL_LIMITS
         info_after = provider.get_model_info()
         assert info_after.context_window == 200000  # Real value, not stale
         assert info_after.max_output_tokens == 32000  # Real value, not stale
@@ -3178,7 +3288,7 @@ class TestInvalidateModelCacheComplete:
 
 
 class TestGetInfoUnknownModelWarning:
-    """Tests that get_info() warns when model is not in KNOWN_CONTEXT_LIMITS.
+    """Tests that get_info() warns when model is not in BUNDLED_MODEL_LIMITS.
 
     This prevents silent misconfiguration where a GPT or Gemini model
     gets Claude's default limits (200000, 32000) without any indication.
@@ -3207,7 +3317,7 @@ class TestGetInfoUnknownModelWarning:
         assert mock_warn.call_count >= 1
         warning_text = str(mock_warn.call_args_list[0])
         assert "some-future-model-v99" in warning_text
-        assert "KNOWN_CONTEXT_LIMITS" in warning_text
+        assert "BUNDLED_MODEL_LIMITS" in warning_text
 
     def test_known_model_no_warning(self, mock_coordinator):
         """get_info() should NOT warn for known models like claude-opus-4.5."""
@@ -3237,9 +3347,9 @@ class TestGeminiFallbackLimits:
 
     def test_gemini_fallback_produces_positive_budget(self, mock_coordinator):
         """Gemini fallback must have max_output_tokens < context_window."""
-        from amplifier_module_provider_github_copilot.provider import KNOWN_CONTEXT_LIMITS
+        from amplifier_module_provider_github_copilot.model_cache import BUNDLED_MODEL_LIMITS
 
-        context_window, max_output = KNOWN_CONTEXT_LIMITS["gemini-3-pro-preview"]
+        context_window, max_output = BUNDLED_MODEL_LIMITS["gemini-3-pro-preview"]
 
         # max_output_tokens must be strictly less than context_window
         assert max_output < context_window, (
@@ -3272,11 +3382,11 @@ class TestGeminiFallbackLimits:
         assert budget > 0
 
     def test_all_known_limits_produce_positive_budget(self, mock_coordinator):
-        """Every model in KNOWN_CONTEXT_LIMITS must produce a positive budget."""
-        from amplifier_module_provider_github_copilot.provider import KNOWN_CONTEXT_LIMITS
+        """Every model in BUNDLED_MODEL_LIMITS must produce a positive budget."""
+        from amplifier_module_provider_github_copilot.model_cache import BUNDLED_MODEL_LIMITS
 
         safety_margin = 1500  # Conservative estimate
-        for model_id, (context_window, max_output) in KNOWN_CONTEXT_LIMITS.items():
+        for model_id, (context_window, max_output) in BUNDLED_MODEL_LIMITS.items():
             budget = context_window - max_output - safety_margin
             assert budget > 0, (
                 f"Model '{model_id}' would produce negative budget: "
@@ -3293,11 +3403,11 @@ class TestGetInfoWithCachedModelInfo:
     """Tests for get_info() when model info is cached but has None context_window.
 
     Covers the branch where get_model_info() returns a model with
-    context_window=None, forcing fallback to KNOWN_CONTEXT_LIMITS (line 287).
+    context_window=None, forcing fallback to BUNDLED_MODEL_LIMITS (line 287).
     """
 
     def test_cached_model_with_none_context_window_uses_fallback(self, mock_coordinator):
-        """get_info() should fall back to KNOWN_CONTEXT_LIMITS when cache has None values."""
+        """get_info() should fall back to BUNDLED_MODEL_LIMITS when cache has None values."""
         provider = CopilotSdkProvider(
             api_key=None,
             config={"default_model": "claude-opus-4.5"},
@@ -3312,7 +3422,7 @@ class TestGetInfoWithCachedModelInfo:
 
         info = provider.get_info()
 
-        # Should fall back to KNOWN_CONTEXT_LIMITS for claude-opus-4.5
+        # Should fall back to BUNDLED_MODEL_LIMITS for claude-opus-4.5
         assert info.defaults["context_window"] == 200000
         assert info.defaults["max_output_tokens"] == 32000
 
@@ -3333,7 +3443,7 @@ class TestGetInfoWithCachedModelInfo:
         info = provider.get_info()
 
         assert info.defaults["context_window"] == 200000
-        assert info.defaults["max_output_tokens"] == 32000  # From KNOWN_CONTEXT_LIMITS
+        assert info.defaults["max_output_tokens"] == 32000  # From BUNDLED_MODEL_LIMITS
 
 
 class TestModelSupportsReasoningNotInList:
@@ -3613,3 +3723,117 @@ class TestHandleTaskExceptionDebugPath:
 
         # Should not raise
         provider._handle_task_exception(task)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ST04 Bug Fix Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestBug3DoubleFallbackCall:
+    """
+    BUG 3: get_info() calls get_fallback_limits() twice.
+
+    The current code in provider.py get_info() has two separate if blocks
+    that each call get_fallback_limits(self._model). This is inefficient
+    and could cause inconsistent behavior if the function had side effects.
+
+    Fix: Cache the fallback lookup at start of method, use cached value.
+    """
+
+    def test_get_info_single_fallback_lookup(
+        self, mock_coordinator, provider_config, monkeypatch
+    ):
+        """get_info should call get_fallback_limits at most once."""
+        from amplifier_module_provider_github_copilot import model_cache
+
+        # Track calls to get_fallback_limits
+        original_fn = model_cache.get_fallback_limits
+        call_count = {"count": 0}
+
+        def tracking_fallback(model_id):
+            call_count["count"] += 1
+            return original_fn(model_id)
+
+        monkeypatch.setattr(
+            "amplifier_module_provider_github_copilot.provider.get_fallback_limits",
+            tracking_fallback
+        )
+
+        # Use a model that's in BUNDLED_MODEL_LIMITS so fallback is used
+        config = {**provider_config, "model": "claude-opus-4.5", "default_model": "claude-opus-4.5"}
+        provider = CopilotSdkProvider(
+            api_key=None,
+            config=config,
+            coordinator=mock_coordinator,
+        )
+
+        # Reset counter after init (init may call it)
+        call_count["count"] = 0
+
+        # Call get_info which internally may call get_fallback_limits
+        provider.get_info()
+
+        # Should call get_fallback_limits at most once per get_info() call
+        assert call_count["count"] <= 1, (
+            f"get_fallback_limits called {call_count['count']} times, expected <= 1. "
+            f"Fix: cache the fallback lookup at start of get_info()"
+        )
+
+    def test_get_info_fallback_returns_consistent_values(
+        self, mock_coordinator, provider_config
+    ):
+        """get_info should return same context_window and max_output_tokens from single lookup."""
+        config = {**provider_config, "model": "gpt-4.1", "default_model": "gpt-4.1"}
+        provider = CopilotSdkProvider(
+            api_key=None,
+            config=config,
+            coordinator=mock_coordinator,
+        )
+
+        info = provider.get_info()
+
+        # Both values should come from the same fallback lookup
+        # gpt-4.1 has (128000, 64000) in BUNDLED_MODEL_LIMITS
+        assert info.defaults["context_window"] == 128000
+        assert info.defaults["max_output_tokens"] == 64000
+
+    def test_get_info_fallback_called_once_when_cache_miss(
+        self, mock_coordinator, provider_config, monkeypatch
+    ):
+        """get_info should call get_fallback_limits exactly once when model not in cache."""
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot import model_cache
+
+        # Use an unknown model that's not in cache or BUNDLED_MODEL_LIMITS
+        config = {**provider_config, "model": "unknown-test-model-xyz", "default_model": "unknown-test-model-xyz"}
+        provider = CopilotSdkProvider(
+            api_key=None,
+            config=config,
+            coordinator=mock_coordinator,
+        )
+
+        # Clear any cached model info
+        provider._model_info_cache.clear()
+
+        # Track calls to get_fallback_limits
+        call_count = {"count": 0}
+        original_fn = model_cache.get_fallback_limits
+
+        def tracking_fallback(model_id):
+            call_count["count"] += 1
+            return original_fn(model_id)
+
+        # Patch at the provider module level (where it's imported)
+        with patch(
+            "amplifier_module_provider_github_copilot.provider.get_fallback_limits",
+            tracking_fallback
+        ):
+            provider.get_info()
+
+        # Should be called exactly once (not twice as before the fix)
+        assert call_count["count"] == 1, (
+            f"get_fallback_limits called {call_count['count']} times, expected exactly 1. "
+            f"The fix should cache the fallback lookup."
+        )

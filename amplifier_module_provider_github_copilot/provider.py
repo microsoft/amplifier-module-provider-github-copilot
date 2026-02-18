@@ -61,34 +61,16 @@ from .converters import (
     extract_system_message,
 )
 from .exceptions import CopilotTimeoutError
+from .model_cache import (
+    CacheEntry,
+    get_fallback_limits,
+    is_cache_stale,
+    load_cache,
+    write_cache,
+)
 from .model_naming import is_thinking_model
 from .models import CopilotModelInfo, fetch_and_map_models, get_default_model
 from .tool_capture import convert_tools_for_sdk, make_deny_all_hook
-
-# Known context window limits from SDK (as of 2026-02-08)
-# These are fallback values used when cache is cold
-# Real values are fetched from SDK and cached in list_models()
-# Values derived: max_output = max_context_window - max_prompt_tokens
-KNOWN_CONTEXT_LIMITS: dict[str, tuple[int, int]] = {
-    # (context_window, max_output_tokens)
-    "claude-opus-4.5": (200000, 32000),
-    "claude-sonnet-4.5": (200000, 32000),
-    "claude-haiku-4.5": (144000, 16000),
-    "claude-sonnet-4": (216000, 88000),
-    "gpt-5": (400000, 272000),
-    "gpt-5.1": (264000, 136000),
-    "gpt-5.2": (264000, 136000),
-    "gpt-5.1-codex": (400000, 272000),
-    "gpt-5.1-codex-max": (400000, 272000),
-    "gpt-5.1-codex-mini": (400000, 272000),
-    "gpt-5.2-codex": (400000, 128000),
-    "gpt-5-mini": (264000, 136000),
-    "gpt-4.1": (128000, 64000),
-    # gemini SDK returns max_prompt=max_context (0 output) - likely SDK bug
-    # Using 65536 as max_output_tokens to keep budget positive:
-    # budget = 128000 - 65536 - safety > 0
-    "gemini-3-pro-preview": (128000, 65536),
-}
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +153,8 @@ class CopilotSdkProvider:
         # Client wrapper handles the cli_path logic.
 
         # Core configuration
-        self._model = config.get("default_model", config.get("model", get_default_model()))
+        # Runtime model (from provider_preferences) > bundle default > code default
+        self._model = config.get("model", config.get("default_model", get_default_model()))
         # Dual timeout configuration (like OpenAI provider pattern)
         # - timeout: for regular models (default 5 min)
         # - thinking_timeout: for extended thinking models (default 30 min)
@@ -227,6 +210,10 @@ class CopilotSdkProvider:
         self._total_response_time_ms: float = 0.0  # Accumulated in milliseconds
         self._error_count: int = 0
 
+        # Load model cache from disk (written by list_models() during amplifier init)
+        # This enables get_info() to return accurate context limits without API calls
+        self._load_model_cache_from_disk()
+
         logger.info(
             f"[PROVIDER] CopilotSdkProvider initialized - "
             f"model: {self._model}, timeout: {self._timeout}s, "
@@ -263,39 +250,32 @@ class CopilotSdkProvider:
 
         The defaults dict includes context_window and max_output_tokens
         which are read by the context manager to calculate token budgets.
-        These values come from cached model info or KNOWN_CONTEXT_LIMITS.
+        These values come from cached model info or BUNDLED_MODEL_LIMITS.
 
         Returns:
             ProviderInfo with provider details
         """
         # Get context limits from model info (cache or fallback)
+        # NOTE: get_model_info() already checks cache AND BUNDLED_MODEL_LIMITS fallback
+        # If it returns None, the model is truly unknown — don't call get_fallback_limits again
         model_info = self.get_model_info()
         context_window = getattr(model_info, "context_window", None) if model_info else None
         max_output_tokens = getattr(model_info, "max_output_tokens", None) if model_info else None
 
-        # Use fallback values if model info unavailable
+        # Use hardcoded defaults only if model_info was None (truly unknown model)
+        # BUG 3 FIX: Don't call get_fallback_limits() here — get_model_info() already did
         if context_window is None:
-            fallback = KNOWN_CONTEXT_LIMITS.get(self._model)
-            if fallback is None:
-                logger.warning(
-                    f"[PROVIDER] Model '{self._model}' not in KNOWN_CONTEXT_LIMITS - "
-                    f"using default context_window=200000. This may be incorrect for "
-                    f"non-Claude models. Add the model to KNOWN_CONTEXT_LIMITS."
-                )
-                context_window = 200000
-            else:
-                context_window = fallback[0]
+            logger.warning(
+                f"[PROVIDER] Model '{self._model}' not in cache or BUNDLED_MODEL_LIMITS - "
+                f"using default context_window=200000. This may be incorrect."
+            )
+            context_window = 200000
         if max_output_tokens is None:
-            fallback = KNOWN_CONTEXT_LIMITS.get(self._model)
-            if fallback is None:
-                logger.warning(
-                    f"[PROVIDER] Model '{self._model}' not in KNOWN_CONTEXT_LIMITS - "
-                    f"using default max_output_tokens=32000. This may be incorrect for "
-                    f"non-Claude models. Add the model to KNOWN_CONTEXT_LIMITS."
-                )
-                max_output_tokens = 32000
-            else:
-                max_output_tokens = fallback[1]
+            logger.warning(
+                f"[PROVIDER] Model '{self._model}' not in cache or BUNDLED_MODEL_LIMITS - "
+                f"using default max_output_tokens=32000. This may be incorrect."
+            )
+            max_output_tokens = 32000
 
         # Trace log for context manager handshake verification
         logger.debug(
@@ -332,7 +312,7 @@ class CopilotSdkProvider:
         context_window and max_output_tokens from SDK metadata.
 
         Uses cached model info if available. If cache is empty,
-        returns fallback from KNOWN_CONTEXT_LIMITS (based on SDK data).
+        returns fallback from BUNDLED_MODEL_LIMITS (based on SDK data).
 
         Returns:
             Object with context_window and max_output_tokens attributes,
@@ -347,9 +327,10 @@ class CopilotSdkProvider:
             )
             return model_info
 
-        # Cache miss - use fallback from known limits
-        if self._model in KNOWN_CONTEXT_LIMITS:
-            context_window, max_output = KNOWN_CONTEXT_LIMITS[self._model]
+        # Cache miss - use fallback from bundled limits
+        fallback = get_fallback_limits(self._model)
+        if fallback is not None:
+            context_window, max_output = fallback
             fallback = CopilotModelInfo(
                 id=self._model,
                 name=self._model,
@@ -422,6 +403,11 @@ class CopilotSdkProvider:
         try:
             result = await fetch_and_map_models(self._client)
 
+            # CLEAR existing cache before populating with fresh SDK data.
+            # FIX: Previously merged old cache with new, causing stale models
+            # (like test fixtures 'other-model') to persist indefinitely.
+            self._model_info_cache.clear()
+
             # Populate model info cache for get_model_info()
             # This enables context manager to get accurate context_window
             for model in result:
@@ -432,6 +418,9 @@ class CopilotSdkProvider:
                         f"[PROVIDER] Cached model info: {model_id}, "
                         f"context_window={getattr(model, 'context_window', 'N/A')}"
                     )
+
+            # Persist cache to disk for future sessions
+            self._write_model_cache_to_disk()
 
             logger.info(f"[PROVIDER] list_models() - END, got {len(result)} models")
             return result
@@ -659,8 +648,8 @@ class CopilotSdkProvider:
 
         # TIMEOUT SELECTION: Based on REQUEST INTENT, not capability detection
         #
-        # Design principle (Option C): Timeout reflects what the user REQUESTED,
-        # not what we DETECTED. Capability detection gates the parameters sent
+        # Design principle: Timeout reflects what the user REQUESTED, not what
+        # we DETECTED. Capability detection gates the parameters sent
         # to the API, not the timeout. This prevents premature timeouts when:
         # 1. User explicitly requests extended_thinking but capability check fails
         # 2. Model naturally takes longer (e.g., Claude Opus) even without explicit request
@@ -712,7 +701,15 @@ class CopilotSdkProvider:
             else request.get("tools")
         )
         if request_tools:
-            sdk_tools = convert_tools_for_sdk(request_tools)
+            # Sort tools alphabetically for consistent ordering
+            # Benefits: deterministic logs, reduced model bias, easier debugging
+            def get_tool_name(t: Any) -> str:
+                if isinstance(t, dict):
+                    return t.get("name", "")
+                return getattr(t, "name", "")
+
+            sorted_tools = sorted(request_tools, key=get_tool_name)
+            sdk_tools = convert_tools_for_sdk(sorted_tools)
             deny_hooks = make_deny_all_hook()
 
             # Exclude ALL CLI built-ins when user tools are present.
@@ -734,10 +731,13 @@ class CopilotSdkProvider:
             # 3. The model can ONLY use custom tools we control
             excluded_builtins = sorted(COPILOT_BUILTIN_TOOL_NAMES)
 
+            # Log tool names in sorted order for traceability
+            tool_names = [get_tool_name(t) or "?" for t in sorted_tools]
             logger.info(
                 f"[PROVIDER] Registering {len(sdk_tools)} tool(s) with SDK session "
                 f"(deny + destroy pattern), excluding {len(excluded_builtins)} built-in(s)"
             )
+            logger.debug(f"[PROVIDER] Tools (alphabetical): {tool_names}")
             if excluded_builtins:
                 logger.debug(f"[PROVIDER] Excluded built-ins: {excluded_builtins}")
 
@@ -1230,6 +1230,95 @@ class CopilotSdkProvider:
         self._model_capabilities_cache.clear()
         self._model_info_cache.clear()
         logger.debug("[PROVIDER] Model caches invalidated (capabilities + model info)")
+
+    def _load_model_cache_from_disk(self) -> None:
+        """
+        Load model info cache from disk if available.
+
+        Called during __init__ to populate _model_info_cache from the
+        persistent cache written by list_models() during amplifier init.
+
+        This enables get_info() to return accurate context_window and
+        max_output_tokens values without requiring an API call.
+
+        Error Handling:
+            - Missing file: OK, cache stays empty (will use BUNDLED_MODEL_LIMITS)
+            - Corrupted file: Logged warning, cache stays empty
+            - All errors are caught — cache is best-effort
+        """
+        from types import SimpleNamespace
+
+        cache = load_cache()
+        if cache is None:
+            # No cache or error loading — will fall back to BUNDLED_MODEL_LIMITS
+            return
+
+        # BUG 5 FIX: Check cache staleness and warn user
+        if is_cache_stale(cache):
+            logger.info(
+                f"[PROVIDER] Model cache is stale (cached at {cache.cached_at.isoformat()}). "
+                f"Run 'amplifier init' to refresh model metadata."
+            )
+
+        # Populate instance cache with SimpleNamespace objects
+        # (compatible with get_model_info() which expects .context_window etc.)
+        for model_id, entry in cache.models.items():
+            self._model_info_cache[model_id] = SimpleNamespace(
+                id=model_id,
+                context_window=entry.context_window,
+                max_output_tokens=entry.max_output_tokens,
+            )
+
+        logger.debug(
+            f"[PROVIDER] Loaded {len(cache.models)} model(s) from disk cache "
+            f"(SDK v{cache.sdk_version})"
+        )
+
+    def _write_model_cache_to_disk(self) -> None:
+        """
+        Write model info cache to disk.
+
+        Called by list_models() after fetching models from the SDK.
+        This persists the cache so future sessions can read it without
+        API calls.
+
+        Error Handling:
+            - All errors are caught and logged — cache write is best-effort
+            - Failure doesn't affect list_models() return value
+        """
+        # Build cache entries from instance cache
+        cache_entries: dict[str, CacheEntry] = {}
+        for model_id, model in self._model_info_cache.items():
+            context_window = getattr(model, "context_window", None)
+            max_output_tokens = getattr(model, "max_output_tokens", None)
+
+            if context_window is not None and max_output_tokens is not None:
+                cache_entries[model_id] = CacheEntry(
+                    context_window=int(context_window),
+                    max_output_tokens=int(max_output_tokens),
+                )
+
+        if not cache_entries:
+            logger.debug("[PROVIDER] No models to write to cache")
+            return
+
+        # Get SDK version if available
+        sdk_version = self._get_sdk_version()
+        write_cache(cache_entries, sdk_version)
+
+    def _get_sdk_version(self) -> str:
+        """
+        Get the current SDK version.
+
+        Returns:
+            SDK version string, or "unknown" if not available.
+        """
+        try:
+            import importlib.metadata
+
+            return importlib.metadata.version("github-copilot-sdk")
+        except Exception:
+            return "unknown"
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Internal Methods
