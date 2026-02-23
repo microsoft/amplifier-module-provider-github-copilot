@@ -119,6 +119,7 @@ class CopilotSdkProvider:
         api_key: str | None = None,  # Unused, kept for signature compatibility
         config: dict[str, Any] | None = None,
         coordinator: Any | None = None,  # ModuleCoordinator
+        client: CopilotClientWrapper | None = None,  # Shared singleton if provided
     ):
         """
         Initialize the Copilot SDK provider.
@@ -134,6 +135,10 @@ class CopilotSdkProvider:
                 - debug_truncate_length: Max length for debug output (default: 180)
                 - cli_path: Path to Copilot CLI executable
             coordinator: Amplifier's ModuleCoordinator for hooks and events
+            client: Optional pre-created CopilotClientWrapper to reuse. If None,
+                a new wrapper is created (backward-compatible default). Pass the
+                shared singleton from _acquire_shared_client() to avoid spawning
+                multiple copilot subprocesses.
 
         Note:
             Timeout is automatically selected based on whether extended_thinking
@@ -169,10 +174,15 @@ class CopilotSdkProvider:
         # Streaming configuration (default: enabled like Anthropic provider)
         self._use_streaming = bool(config.get("use_streaming", True))
 
-        # Initialize client wrapper
-        self._client = CopilotClientWrapper(
-            config=config,
-            timeout=self._timeout,
+        # Initialize client wrapper — use injected singleton if provided,
+        # otherwise create a new one (backward-compatible default).
+        self._client = (
+            client
+            if client is not None
+            else CopilotClientWrapper(
+                config=config,
+                timeout=self._timeout,
+            )
         )
 
         # Track tool call IDs that have been repaired with synthetic results.
