@@ -40,6 +40,7 @@ Prerequisites:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 from collections.abc import Awaitable, Callable
@@ -47,7 +48,8 @@ from typing import Any
 
 from amplifier_core import ChatResponse, ToolCall
 
-from .client import AuthStatus, SessionInfo, SessionListResult
+from ._constants import DEFAULT_TIMEOUT
+from .client import AuthStatus, CopilotClientWrapper, SessionInfo, SessionListResult
 from .exceptions import (
     CopilotAbortError,
     CopilotAuthenticationError,
@@ -121,6 +123,92 @@ __amplifier_module_type__ = "provider"
 
 logger = logging.getLogger(__name__)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Process-Level Singleton State
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Sub-agents spawned by the task tool run as async coroutines in the SAME
+# Python process and asyncio event loop as the parent session (kernel-guaranteed).
+# Each sub-agent gets its own fresh ModuleCoordinator — coordinators are not shared.
+#
+# This singleton ensures all mounts in a process share ONE CopilotClientWrapper
+# (one copilot CLI subprocess) regardless of how many sub-agents are spawned.
+# Without this, N sub-agents spawn N processes × ~500 MB each.
+#
+# Reference: docs/plans/2026-02-23-process-singleton-design.md
+
+_shared_client: CopilotClientWrapper | None = None
+_shared_client_refcount: int = 0
+_shared_client_lock: asyncio.Lock | None = None
+
+
+def _get_lock() -> asyncio.Lock:
+    """Return the singleton lock, creating it lazily on first call.
+
+    Lazy initialization avoids creating asyncio.Lock at import time,
+    which can fail if no event loop exists yet (common in test environments).
+    """
+    global _shared_client_lock
+    if _shared_client_lock is None:
+        _shared_client_lock = asyncio.Lock()
+    return _shared_client_lock
+
+
+async def _acquire_shared_client(
+    config: dict[str, Any],
+    timeout: float,
+) -> CopilotClientWrapper:
+    """Acquire the shared CopilotClientWrapper, creating it if this is the first mount.
+
+    Increments the reference count. Call _release_shared_client() in cleanup
+    to decrement. The subprocess is shut down when the count reaches zero.
+
+    If a second caller passes a different timeout than the first, a DEBUG warning
+    is logged and the existing client is returned unchanged — the second caller's
+    timeout is silently ignored. Sub-agents inherit bundle config from the parent,
+    so all callers typically pass the same values.
+    """
+    global _shared_client, _shared_client_refcount
+    async with _get_lock():
+        if _shared_client is None:
+            logger.info("[MOUNT] Creating shared Copilot subprocess (first mount in process)")
+            _shared_client = CopilotClientWrapper(config=config, timeout=timeout)
+        else:
+            existing_timeout = getattr(_shared_client, "_timeout", timeout)
+            if existing_timeout != timeout:
+                logger.debug(
+                    f"[MOUNT] Ignoring timeout={timeout} for shared client "
+                    f"(already created with timeout={existing_timeout})"
+                )
+        _shared_client_refcount += 1
+        logger.debug(f"[MOUNT] Shared client refcount: {_shared_client_refcount}")
+        return _shared_client
+
+
+async def _release_shared_client() -> None:
+    """Release one reference to the shared client.
+
+    When the count reaches zero, closes and destroys the shared subprocess.
+    Safe to call if already at zero (safety floor prevents negative counts).
+
+    NOTE: If the Python process is killed (SIGKILL/crash), the refcount
+    never reaches zero and close() is never called. This is acceptable —
+    the OS reclaims the copilot subprocess when the parent process exits.
+    There is no mitigation needed for this case.
+    """
+    global _shared_client, _shared_client_refcount
+    async with _get_lock():
+        _shared_client_refcount -= 1
+        logger.debug(f"[MOUNT] Shared client refcount after release: {_shared_client_refcount}")
+        if _shared_client_refcount <= 0:
+            if _shared_client is not None:
+                logger.info(
+                    "[MOUNT] Last mount cleaned up — shutting down shared Copilot subprocess"
+                )
+                await _shared_client.close()
+                _shared_client = None
+            _shared_client_refcount = 0  # safety floor: prevent negative counts
+
 
 async def mount(
     coordinator: Any,  # ModuleCoordinator
@@ -178,26 +266,39 @@ async def mount(
     # Set CLI path in config for provider to use
     config["cli_path"] = cli_path
 
+    # Track whether this call acquired a shared client reference,
+    # so the error path only releases what this call actually acquired.
+    acquired_client: CopilotClientWrapper | None = None
+
     try:
-        # Create provider (api_key is None for Copilot - uses GitHub auth)
-        provider = CopilotSdkProvider(None, config, coordinator)
+        timeout = float(config.get("timeout", DEFAULT_TIMEOUT))
+
+        # Acquire (or reuse) the process-level shared client.
+        # All mounts in this Python process share one CopilotClientWrapper instance.
+        acquired_client = await _acquire_shared_client(config, timeout)
+
+        # Create provider, injecting the shared client
+        provider = CopilotSdkProvider(None, config, coordinator, client=acquired_client)
 
         # Register with coordinator
         await coordinator.mount("providers", provider, name="github-copilot")
 
         logger.info("[MOUNT] CopilotSdkProvider mounted successfully")
 
-        # Return cleanup function
+        # Return cleanup function — releases the shared reference, not the provider
         async def cleanup() -> None:
             """Cleanup function called when unmounting."""
             logger.info("[MOUNT] Unmounting CopilotSdkProvider...")
-            await provider.close()
+            await _release_shared_client()
             logger.info("[MOUNT] CopilotSdkProvider unmounted")
 
         return cleanup
 
     except Exception as e:
         logger.error(f"[MOUNT] Failed to mount CopilotSdkProvider: {e}")
+        # Only release if this call successfully acquired a reference before the failure
+        if acquired_client is not None:
+            await _release_shared_client()
         return None
 
 

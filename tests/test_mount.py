@@ -50,7 +50,7 @@ class TestMount:
                 with patch(
                     "amplifier_module_provider_github_copilot.CopilotClientWrapper"
                 ) as mock_wrapper_cls:
-                    mock_wrapper_cls.return_value = Mock()
+                    mock_wrapper_cls.return_value = AsyncMock()
 
                     cleanup = await mount(mock_coordinator, {})
                     assert cleanup is not None
