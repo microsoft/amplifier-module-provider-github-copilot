@@ -3848,3 +3848,39 @@ class TestBug3DoubleFallbackCall:
             f"get_fallback_limits called {call_count['count']} times, expected exactly 1. "
             f"The fix should cache the fallback lookup."
         )
+
+
+class TestConfigFields:
+    """Tests for config_fields in get_info()."""
+
+    @pytest.fixture
+    def provider(self, mock_coordinator, provider_config):
+        return CopilotSdkProvider(
+            api_key=None, config=provider_config, coordinator=mock_coordinator
+        )
+
+    def test_config_fields_not_empty(self, provider):
+        """get_info should return config_fields for the setup wizard."""
+        info = provider.get_info()
+        assert len(info.config_fields) >= 2
+
+    def test_auth_guidance_field(self, provider):
+        """Should have an auth guidance text field."""
+        info = provider.get_info()
+        auth_field = next((f for f in info.config_fields if f.id == "auth_info"), None)
+        assert auth_field is not None
+        assert auth_field.field_type == "text"
+        assert auth_field.required is False
+        assert auth_field.default == ""
+
+    def test_default_model_field(self, provider):
+        """Should have a model choice field with curated options."""
+        info = provider.get_info()
+        model_field = next((f for f in info.config_fields if f.id == "model"), None)
+        assert model_field is not None
+        assert model_field.field_type == "choice"
+        assert model_field.required is True
+        assert model_field.default == "claude-sonnet-4"
+        assert model_field.choices is not None
+        assert "claude-sonnet-4" in model_field.choices
+        assert "gpt-4o" in model_field.choices
