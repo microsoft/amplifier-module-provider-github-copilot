@@ -7,50 +7,62 @@ GitHub Copilot SDK integration for Amplifier via Copilot CLI.
 ## Prerequisites
 
 - **Python 3.11+**
-- **Node.js 18+** — Required to install the Copilot CLI
 - **GitHub Copilot subscription** — Active Business or Enterprise subscription
 - **[UV](https://github.com/astral-sh/uv)** (optional) — Fast Python package manager (pip works too)
 
-### Installing Copilot CLI
+> **No Node.js required.** The Copilot SDK binary is bundled with the Python package
+> and discovered automatically.
 
-The Copilot CLI is a Node.js binary that the Python SDK controls via JSON-RPC.
-Both the CLI and the SDK are required.
+## Authentication
 
-```bash
-# Install Copilot CLI (requires Node.js/npm)
-npm install -g @github/copilot
+Set a GitHub token as an environment variable. The provider checks these in order:
+`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`.
 
-# Verify installation
-copilot --version
-```
-
-### Authentication
-
-You must be authenticated to GitHub Copilot:
+### Option 1: Environment variable (recommended)
 
 ```bash
-copilot auth login
+export GITHUB_TOKEN="ghp_your_token_here"
 ```
+
+> **Tip:** Many developers already have `GITHUB_TOKEN` set from `gh` CLI usage —
+> if so, you're already authenticated. No extra setup needed.
+
+### Option 2: `amplifier init` setup wizard
+
+```bash
+amplifier init
+# Select "GitHub Copilot" from the provider list
+# Launches browser OAuth flow if no token is set
+```
+
+### Option 3: `gh` CLI bridge
+
+```bash
+export GITHUB_TOKEN=$(gh auth token)
+```
+
+One command to bridge your existing `gh` CLI authentication into Amplifier.
 
 ## Installation
 
-Register the module, install its dependencies, and set it as your active provider:
+GitHub Copilot is a well-known provider — `amplifier init` handles everything:
 
 ```bash
-amplifier module add provider-github-copilot \
-  --source git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
+# Interactive setup — select Copilot from the provider list
+amplifier init
 
+# Non-interactive — auto-detects GITHUB_TOKEN
+amplifier init --yes
+```
+
+Or install manually:
+
+```bash
 amplifier provider install github-copilot
-
 amplifier provider use github-copilot
 ```
 
-> **Note:** The `provider install` step is required to install the module's Python
-> dependencies (including the GitHub Copilot SDK) into the Amplifier environment.
-> The built-in providers skip this step because they are pre-installed during
-> `amplifier init`.
-
-Or reference it directly in a bundle (no separate install needed):
+Or reference it directly in a bundle:
 
 ```yaml
 providers:
