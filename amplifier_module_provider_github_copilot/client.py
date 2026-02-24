@@ -362,7 +362,9 @@ class CopilotClientWrapper:
             auth_status = await self._client.get_auth_status()
             if not auth_status.isAuthenticated:
                 raise CopilotAuthenticationError(
-                    "Not authenticated to GitHub Copilot. Run 'copilot auth login' to authenticate."
+                    "Not authenticated to GitHub Copilot. "
+                    "Set GITHUB_TOKEN, run 'gh auth login', "
+                    "or run 'amplifier init' to authenticate."
                 )
             logger.debug(f"[CLIENT] Authenticated as: {auth_status.login}")
         except CopilotAuthenticationError:

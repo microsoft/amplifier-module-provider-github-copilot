@@ -286,7 +286,7 @@ class CopilotSdkProvider:
         return ProviderInfo(
             id=self.name,
             display_name="GitHub Copilot SDK",
-            credential_env_vars=[],  # Copilot uses GitHub auth, not API keys
+            credential_env_vars=["GITHUB_TOKEN", "GH_TOKEN", "COPILOT_GITHUB_TOKEN"],
             # Provider-level capabilities (model-specific caps like "thinking" are in list_models)
             capabilities=["streaming", "tools", "vision"],
             defaults={

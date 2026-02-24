@@ -104,6 +104,13 @@ class TestProviderProtocol:
         assert "tools" in info.capabilities
         assert "vision" in info.capabilities
 
+    def test_get_info_credential_env_vars(self, provider):
+        """get_info should advertise credential env vars for CLI detection."""
+        info = provider.get_info()
+        assert "GITHUB_TOKEN" in info.credential_env_vars
+        assert "GH_TOKEN" in info.credential_env_vars
+        assert "COPILOT_GITHUB_TOKEN" in info.credential_env_vars
+
     @pytest.mark.asyncio
     async def test_list_models(self, provider, mock_copilot_client):
         """list_models should return available models."""
@@ -136,7 +143,11 @@ class TestProviderProtocol:
 
     def test_get_model_info_returns_none_for_unknown_model(self, mock_coordinator, provider_config):
         """get_model_info returns None for unknown models when cache is cold."""
-        config = {**provider_config, "model": "unknown-model-xyz", "default_model": "unknown-model-xyz"}
+        config = {
+            **provider_config,
+            "model": "unknown-model-xyz",
+            "default_model": "unknown-model-xyz",
+        }
         provider = CopilotSdkProvider(
             api_key=None,
             config=config,
@@ -3741,9 +3752,7 @@ class TestBug3DoubleFallbackCall:
     Fix: Cache the fallback lookup at start of method, use cached value.
     """
 
-    def test_get_info_single_fallback_lookup(
-        self, mock_coordinator, provider_config, monkeypatch
-    ):
+    def test_get_info_single_fallback_lookup(self, mock_coordinator, provider_config, monkeypatch):
         """get_info should call get_fallback_limits at most once."""
         from amplifier_module_provider_github_copilot import model_cache
 
@@ -3757,7 +3766,7 @@ class TestBug3DoubleFallbackCall:
 
         monkeypatch.setattr(
             "amplifier_module_provider_github_copilot.provider.get_fallback_limits",
-            tracking_fallback
+            tracking_fallback,
         )
 
         # Use a model that's in BUNDLED_MODEL_LIMITS so fallback is used
@@ -3780,9 +3789,7 @@ class TestBug3DoubleFallbackCall:
             f"Fix: cache the fallback lookup at start of get_info()"
         )
 
-    def test_get_info_fallback_returns_consistent_values(
-        self, mock_coordinator, provider_config
-    ):
+    def test_get_info_fallback_returns_consistent_values(self, mock_coordinator, provider_config):
         """get_info should return same context_window and max_output_tokens from single lookup."""
         config = {**provider_config, "model": "gpt-4.1", "default_model": "gpt-4.1"}
         provider = CopilotSdkProvider(
@@ -3807,7 +3814,11 @@ class TestBug3DoubleFallbackCall:
         from amplifier_module_provider_github_copilot import model_cache
 
         # Use an unknown model that's not in cache or BUNDLED_MODEL_LIMITS
-        config = {**provider_config, "model": "unknown-test-model-xyz", "default_model": "unknown-test-model-xyz"}
+        config = {
+            **provider_config,
+            "model": "unknown-test-model-xyz",
+            "default_model": "unknown-test-model-xyz",
+        }
         provider = CopilotSdkProvider(
             api_key=None,
             config=config,
@@ -3828,7 +3839,7 @@ class TestBug3DoubleFallbackCall:
         # Patch at the provider module level (where it's imported)
         with patch(
             "amplifier_module_provider_github_copilot.provider.get_fallback_limits",
-            tracking_fallback
+            tracking_fallback,
         ):
             provider.get_info()
 

@@ -1030,3 +1030,23 @@ class TestBuildClientOptionsTokenPassthrough:
         with patch.dict(os.environ, {"GITHUB_TOKEN": ""}, clear=True):
             options = wrapper._build_client_options()
             assert "github_token" not in options
+
+
+class TestVerifyAuthenticationMessage:
+    """Tests for improved auth error messages."""
+
+    @pytest.mark.asyncio
+    async def test_auth_error_mentions_env_vars(self):
+        """Auth error message should mention GITHUB_TOKEN and amplifier init."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+
+        mock_client = AsyncMock()
+        auth_status = Mock()
+        auth_status.isAuthenticated = False
+        mock_client.get_auth_status = AsyncMock(return_value=auth_status)
+
+        wrapper._client = mock_client
+        wrapper._started = True
+
+        with pytest.raises(CopilotAuthenticationError, match="GITHUB_TOKEN"):
+            await wrapper._verify_authentication()
