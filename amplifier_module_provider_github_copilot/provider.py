@@ -45,6 +45,30 @@ from amplifier_core import (
     ToolCall,
     ToolCallContent,
 )
+from amplifier_core.llm_errors import (
+    AbortError as KernelAbortError,
+)
+from amplifier_core.llm_errors import (
+    AuthenticationError as KernelAuthenticationError,
+)
+from amplifier_core.llm_errors import (
+    LLMError as KernelLLMError,
+)
+from amplifier_core.llm_errors import (
+    LLMTimeoutError as KernelLLMTimeoutError,
+)
+from amplifier_core.llm_errors import (
+    NetworkError as KernelNetworkError,
+)
+from amplifier_core.llm_errors import (
+    NotFoundError as KernelNotFoundError,
+)
+from amplifier_core.llm_errors import (
+    ProviderUnavailableError as KernelProviderUnavailableError,
+)
+from amplifier_core.llm_errors import (
+    RateLimitError as KernelRateLimitError,
+)
 from amplifier_core.utils import truncate_values
 
 from ._constants import (
@@ -61,7 +85,17 @@ from .converters import (
     convert_messages_to_prompt,
     extract_system_message,
 )
-from .exceptions import CopilotTimeoutError
+from .exceptions import (
+    CopilotAbortError,
+    CopilotAuthenticationError,
+    CopilotConnectionError,
+    CopilotModelNotFoundError,
+    CopilotProviderError,
+    CopilotRateLimitError,
+    CopilotSdkLoopError,
+    CopilotSessionError,
+    CopilotTimeoutError,
+)
 from .model_cache import (
     CacheEntry,
     get_fallback_limits,
@@ -880,9 +914,47 @@ class CopilotSdkProvider:
             # Track response time in milliseconds
             self._total_response_time_ms += elapsed_ms
 
-        except Exception:
+        except KernelLLMError:
+            # Kernel errors pass through — prevent double-wrapping
             self._error_count += 1
             raise
+        except CopilotAuthenticationError as e:
+            self._error_count += 1
+            raise KernelAuthenticationError(str(e), provider=self.name, retryable=False) from e
+        except CopilotRateLimitError as e:
+            self._error_count += 1
+            raise KernelRateLimitError(
+                str(e),
+                provider=self.name,
+                retry_after=e.retry_after,
+                retryable=True,
+            ) from e
+        except CopilotTimeoutError as e:
+            self._error_count += 1
+            raise KernelLLMTimeoutError(str(e), provider=self.name, retryable=True) from e
+        except CopilotConnectionError as e:
+            self._error_count += 1
+            raise KernelNetworkError(str(e), provider=self.name, retryable=True) from e
+        except CopilotModelNotFoundError as e:
+            self._error_count += 1
+            raise KernelNotFoundError(str(e), provider=self.name, retryable=False) from e
+        except CopilotSdkLoopError as e:
+            self._error_count += 1
+            raise KernelProviderUnavailableError(str(e), provider=self.name, retryable=False) from e
+        except CopilotSessionError as e:
+            self._error_count += 1
+            raise KernelProviderUnavailableError(str(e), provider=self.name, retryable=True) from e
+        except CopilotAbortError as e:
+            self._error_count += 1
+            raise KernelAbortError(str(e), provider=self.name, retryable=False) from e
+        except CopilotProviderError as e:
+            self._error_count += 1
+            raise KernelLLMError(str(e), provider=self.name, retryable=True) from e
+        except Exception as e:
+            self._error_count += 1
+            raise KernelLLMError(
+                f"Unexpected error: {e}", provider=self.name, retryable=True
+            ) from e
 
         if self._debug:
             content_preview = self._truncate(str(response.content))
