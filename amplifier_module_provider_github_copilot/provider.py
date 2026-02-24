@@ -38,7 +38,6 @@ from typing import Any
 
 from amplifier_core import (
     ChatResponse,
-    ConfigField,
     ProviderInfo,
     TextContent,
     ThinkingContent,
@@ -345,19 +344,7 @@ class CopilotSdkProvider:
                 "context_window": context_window,
                 "max_output_tokens": max_output_tokens,
             },
-            config_fields=[
-                ConfigField(
-                    id="github_token",
-                    display_name="GitHub Copilot Authentication",
-                    field_type="secret",
-                    prompt=(
-                        "No token found. Run 'gh auth login' or "
-                        "'copilot login' to authenticate, then press Enter"
-                    ),
-                    env_var="GITHUB_TOKEN",
-                    required=False,
-                ),
-            ],
+            config_fields=[],
         )
 
     def get_model_info(self) -> Any | None:
