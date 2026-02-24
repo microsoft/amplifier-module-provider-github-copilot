@@ -348,9 +348,12 @@ class CopilotSdkProvider:
             config_fields=[
                 ConfigField(
                     id="github_token",
-                    display_name="GitHub Token",
+                    display_name="GitHub Copilot Authentication",
                     field_type="secret",
-                    prompt="Enter your GitHub token (or press Enter to use existing)",
+                    prompt=(
+                        "No token found. Run 'gh auth login' or "
+                        "'copilot login' to authenticate, then press Enter"
+                    ),
                     env_var="GITHUB_TOKEN",
                     required=False,
                 ),

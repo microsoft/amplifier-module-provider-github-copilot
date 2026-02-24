@@ -3893,14 +3893,18 @@ class TestConfigFields:
         )
 
     def test_config_fields_has_token_field(self, provider):
-        """get_info should return a github_token secret field for credential detection."""
+        """get_info should return a github_token secret field guiding users to gh auth login."""
         info = provider.get_info()
         assert len(info.config_fields) == 1
         token_field = info.config_fields[0]
         assert token_field.id == "github_token"
+        assert token_field.display_name == "GitHub Copilot Authentication"
         assert token_field.field_type == "secret"
         assert token_field.env_var == "GITHUB_TOKEN"
         assert token_field.required is False
+        # Prompt should guide users to gh auth login, not ask them to paste a token
+        assert "gh auth login" in token_field.prompt
+        assert "copilot login" in token_field.prompt
 
     def test_no_hardcoded_model_field(self, provider):
         """Models should come from list_models(), not hardcoded config_fields."""
