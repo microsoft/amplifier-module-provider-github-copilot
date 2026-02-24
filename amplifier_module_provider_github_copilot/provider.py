@@ -347,32 +347,12 @@ class CopilotSdkProvider:
             },
             config_fields=[
                 ConfigField(
-                    id="auth_info",
-                    display_name="Authentication",
-                    field_type="text",
-                    prompt=(
-                        "GitHub Copilot authenticates via your GitHub credentials. "
-                        "Set GITHUB_TOKEN, or press Enter to launch browser login."
-                    ),
+                    id="github_token",
+                    display_name="GitHub Token",
+                    field_type="secret",
+                    prompt="Enter your GitHub token (or press Enter to use existing)",
+                    env_var="GITHUB_TOKEN",
                     required=False,
-                    default="",
-                ),
-                ConfigField(
-                    id="model",
-                    display_name="Default Model",
-                    field_type="choice",
-                    prompt="Choose a default model:",
-                    required=True,
-                    default="claude-sonnet-4",
-                    choices=[
-                        "claude-sonnet-4",
-                        "claude-sonnet-4.5",
-                        "claude-opus-4.5",
-                        "gpt-4o",
-                        "gpt-4.1",
-                        "o4-mini",
-                        "gemini-2.5-pro",
-                    ],
                 ),
             ],
         )

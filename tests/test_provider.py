@@ -3892,31 +3892,21 @@ class TestConfigFields:
             api_key=None, config=provider_config, coordinator=mock_coordinator
         )
 
-    def test_config_fields_not_empty(self, provider):
-        """get_info should return config_fields for the setup wizard."""
+    def test_config_fields_has_token_field(self, provider):
+        """get_info should return a github_token secret field for credential detection."""
         info = provider.get_info()
-        assert len(info.config_fields) >= 2
+        assert len(info.config_fields) == 1
+        token_field = info.config_fields[0]
+        assert token_field.id == "github_token"
+        assert token_field.field_type == "secret"
+        assert token_field.env_var == "GITHUB_TOKEN"
+        assert token_field.required is False
 
-    def test_auth_guidance_field(self, provider):
-        """Should have an auth guidance text field."""
+    def test_no_hardcoded_model_field(self, provider):
+        """Models should come from list_models(), not hardcoded config_fields."""
         info = provider.get_info()
-        auth_field = next((f for f in info.config_fields if f.id == "auth_info"), None)
-        assert auth_field is not None
-        assert auth_field.field_type == "text"
-        assert auth_field.required is False
-        assert auth_field.default == ""
-
-    def test_default_model_field(self, provider):
-        """Should have a model choice field with curated options."""
-        info = provider.get_info()
-        model_field = next((f for f in info.config_fields if f.id == "model"), None)
-        assert model_field is not None
-        assert model_field.field_type == "choice"
-        assert model_field.required is True
-        assert model_field.default == "claude-sonnet-4"
-        assert model_field.choices is not None
-        assert "claude-sonnet-4" in model_field.choices
-        assert "gpt-4o" in model_field.choices
+        model_fields = [f for f in info.config_fields if f.id == "model"]
+        assert len(model_fields) == 0, "Model selection should use list_models(), not config_fields"
 
 
 class TestErrorTranslation:
