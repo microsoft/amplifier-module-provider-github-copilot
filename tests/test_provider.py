@@ -10,6 +10,30 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from amplifier_core import ChatResponse, TextBlock, ToolCall, Usage
+from amplifier_core.llm_errors import (
+    AbortError as KernelAbortError,
+)
+from amplifier_core.llm_errors import (
+    AuthenticationError as KernelAuthenticationError,
+)
+from amplifier_core.llm_errors import (
+    LLMError as KernelLLMError,
+)
+from amplifier_core.llm_errors import (
+    LLMTimeoutError as KernelLLMTimeoutError,
+)
+from amplifier_core.llm_errors import (
+    NetworkError as KernelNetworkError,
+)
+from amplifier_core.llm_errors import (
+    NotFoundError as KernelNotFoundError,
+)
+from amplifier_core.llm_errors import (
+    ProviderUnavailableError as KernelProviderUnavailableError,
+)
+from amplifier_core.llm_errors import (
+    RateLimitError as KernelRateLimitError,
+)
 
 from amplifier_module_provider_github_copilot import ProviderInfo
 from amplifier_module_provider_github_copilot._constants import (
@@ -19,6 +43,17 @@ from amplifier_module_provider_github_copilot._constants import (
     DEFAULT_TIMEOUT,
 )
 from amplifier_module_provider_github_copilot.client import CopilotClientWrapper
+from amplifier_module_provider_github_copilot.exceptions import (
+    CopilotAbortError,
+    CopilotAuthenticationError,
+    CopilotConnectionError,
+    CopilotModelNotFoundError,
+    CopilotProviderError,
+    CopilotRateLimitError,
+    CopilotSdkLoopError,
+    CopilotSessionError,
+    CopilotTimeoutError,
+)
 from amplifier_module_provider_github_copilot.provider import CopilotSdkProvider
 
 
@@ -104,6 +139,13 @@ class TestProviderProtocol:
         assert "tools" in info.capabilities
         assert "vision" in info.capabilities
 
+    def test_get_info_credential_env_vars(self, provider):
+        """get_info should advertise credential env vars for CLI detection."""
+        info = provider.get_info()
+        assert "GITHUB_TOKEN" in info.credential_env_vars
+        assert "GH_TOKEN" in info.credential_env_vars
+        assert "COPILOT_GITHUB_TOKEN" in info.credential_env_vars
+
     @pytest.mark.asyncio
     async def test_list_models(self, provider, mock_copilot_client):
         """list_models should return available models."""
@@ -136,7 +178,11 @@ class TestProviderProtocol:
 
     def test_get_model_info_returns_none_for_unknown_model(self, mock_coordinator, provider_config):
         """get_model_info returns None for unknown models when cache is cold."""
-        config = {**provider_config, "model": "unknown-model-xyz", "default_model": "unknown-model-xyz"}
+        config = {
+            **provider_config,
+            "model": "unknown-model-xyz",
+            "default_model": "unknown-model-xyz",
+        }
         provider = CopilotSdkProvider(
             api_key=None,
             config=config,
@@ -2608,8 +2654,6 @@ class TestCompleteStreamingEdgeCases:
     async def test_timeout_without_tools_raises(self, provider):
         """Should raise CopilotTimeoutError on timeout with no captured tools."""
 
-        from amplifier_module_provider_github_copilot.exceptions import CopilotTimeoutError
-
         mock_session = self._make_mock_session()
         handler = self._make_mock_handler(
             wait_for_capture_or_idle=AsyncMock(side_effect=TimeoutError()),
@@ -3044,7 +3088,7 @@ class TestSessionMetricsTracking:
             "create_session",
             mock_create_session_that_fails,
         ):
-            with pytest.raises(RuntimeError, match="Connection refused"):
+            with pytest.raises(KernelLLMError, match="Connection refused"):
                 await provider.complete({"messages": sample_messages})
 
         # Request was ATTEMPTED, so count should be 1
@@ -3099,7 +3143,7 @@ class TestSessionMetricsTracking:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("API error"),
             ):
-                with pytest.raises(RuntimeError, match="API error"):
+                with pytest.raises(KernelLLMError, match="API error"):
                     await provider.complete({"messages": sample_messages})
 
         assert provider._error_count == 1
@@ -3175,7 +3219,7 @@ class TestSessionMetricsTracking:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("Timeout"),
             ):
-                with pytest.raises(RuntimeError, match="Timeout"):
+                with pytest.raises(KernelLLMError, match="Timeout"):
                     await provider.complete({"messages": sample_messages})
 
         # Time should NOT be accumulated for failed requests
@@ -3741,9 +3785,7 @@ class TestBug3DoubleFallbackCall:
     Fix: Cache the fallback lookup at start of method, use cached value.
     """
 
-    def test_get_info_single_fallback_lookup(
-        self, mock_coordinator, provider_config, monkeypatch
-    ):
+    def test_get_info_single_fallback_lookup(self, mock_coordinator, provider_config, monkeypatch):
         """get_info should call get_fallback_limits at most once."""
         from amplifier_module_provider_github_copilot import model_cache
 
@@ -3757,7 +3799,7 @@ class TestBug3DoubleFallbackCall:
 
         monkeypatch.setattr(
             "amplifier_module_provider_github_copilot.provider.get_fallback_limits",
-            tracking_fallback
+            tracking_fallback,
         )
 
         # Use a model that's in BUNDLED_MODEL_LIMITS so fallback is used
@@ -3780,9 +3822,7 @@ class TestBug3DoubleFallbackCall:
             f"Fix: cache the fallback lookup at start of get_info()"
         )
 
-    def test_get_info_fallback_returns_consistent_values(
-        self, mock_coordinator, provider_config
-    ):
+    def test_get_info_fallback_returns_consistent_values(self, mock_coordinator, provider_config):
         """get_info should return same context_window and max_output_tokens from single lookup."""
         config = {**provider_config, "model": "gpt-4.1", "default_model": "gpt-4.1"}
         provider = CopilotSdkProvider(
@@ -3807,7 +3847,11 @@ class TestBug3DoubleFallbackCall:
         from amplifier_module_provider_github_copilot import model_cache
 
         # Use an unknown model that's not in cache or BUNDLED_MODEL_LIMITS
-        config = {**provider_config, "model": "unknown-test-model-xyz", "default_model": "unknown-test-model-xyz"}
+        config = {
+            **provider_config,
+            "model": "unknown-test-model-xyz",
+            "default_model": "unknown-test-model-xyz",
+        }
         provider = CopilotSdkProvider(
             api_key=None,
             config=config,
@@ -3828,7 +3872,7 @@ class TestBug3DoubleFallbackCall:
         # Patch at the provider module level (where it's imported)
         with patch(
             "amplifier_module_provider_github_copilot.provider.get_fallback_limits",
-            tracking_fallback
+            tracking_fallback,
         ):
             provider.get_info()
 
@@ -3837,3 +3881,307 @@ class TestBug3DoubleFallbackCall:
             f"get_fallback_limits called {call_count['count']} times, expected exactly 1. "
             f"The fix should cache the fallback lookup."
         )
+
+
+class TestConfigFields:
+    """Tests for config_fields in get_info()."""
+
+    @pytest.fixture
+    def provider(self, mock_coordinator, provider_config):
+        return CopilotSdkProvider(
+            api_key=None, config=provider_config, coordinator=mock_coordinator
+        )
+
+    def test_config_fields_empty(self, provider):
+        """Config fields should be empty — auth is handled by stored OAuth or env vars,
+        and model selection uses list_models() discovery."""
+        info = provider.get_info()
+        assert info.config_fields == []
+
+
+class TestErrorTranslation:
+    """Tests for Copilot exception -> kernel LLMError translation at complete() boundary."""
+
+    @pytest.fixture
+    def provider(self, mock_coordinator, provider_config):
+        return CopilotSdkProvider(
+            api_key=None, config=provider_config, coordinator=mock_coordinator
+        )
+
+    def _make_mock_request(self):
+        """Create a minimal mock request for complete()."""
+        request = Mock()
+        request.messages = [{"role": "user", "content": "test"}]
+        request.tools = None
+        request.stream = None
+        return request
+
+    def _make_raising_create_session(self, error):
+        """Create an @asynccontextmanager that raises the given error.
+
+        This patches CopilotClientWrapper.create_session (the async context manager)
+        to raise the specified Copilot exception. We patch at the wrapper level
+        because the wrapper internally catches raw SDK errors and wraps them,
+        so we must inject Copilot-typed errors above that layer.
+        """
+
+        @asynccontextmanager
+        async def mock_create_session(self_wrapper, *args, **kwargs):
+            raise error
+            yield  # noqa: unreachable but required for generator syntax
+
+        return mock_create_session
+
+    @pytest.mark.asyncio
+    async def test_auth_error_translated(self, provider):
+        """CopilotAuthenticationError -> KernelAuthenticationError."""
+        copilot_err = CopilotAuthenticationError("Not authenticated")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelAuthenticationError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is False
+            assert exc_info.value.__cause__ is copilot_err
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_error_translated(self, provider):
+        """CopilotRateLimitError -> KernelRateLimitError with retry_after."""
+        copilot_err = CopilotRateLimitError(retry_after=30.0)
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelRateLimitError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retry_after == 30.0
+            assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_translated(self, provider):
+        """CopilotTimeoutError -> KernelLLMTimeoutError."""
+        copilot_err = CopilotTimeoutError(timeout=300.0)
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelLLMTimeoutError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_connection_error_translated(self, provider):
+        """CopilotConnectionError -> KernelNetworkError."""
+        copilot_err = CopilotConnectionError("Connection refused")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelNetworkError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_model_not_found_error_translated(self, provider):
+        """CopilotModelNotFoundError -> KernelNotFoundError."""
+        copilot_err = CopilotModelNotFoundError(model="nonexistent")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelNotFoundError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_sdk_loop_error_translated_not_retryable(self, provider):
+        """CopilotSdkLoopError -> KernelProviderUnavailableError (NOT retryable)."""
+        copilot_err = CopilotSdkLoopError(
+            message="Circuit breaker tripped",
+            turn_count=10,
+            max_turns=3,
+        )
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelProviderUnavailableError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_session_error_translated_retryable(self, provider):
+        """CopilotSessionError -> KernelProviderUnavailableError (retryable)."""
+        copilot_err = CopilotSessionError("Session creation failed")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelProviderUnavailableError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_abort_error_translated(self, provider):
+        """CopilotAbortError -> KernelAbortError."""
+        copilot_err = CopilotAbortError("Aborted")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelAbortError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_generic_copilot_error_translated(self, provider):
+        """Generic CopilotProviderError -> KernelLLMError."""
+        copilot_err = CopilotProviderError("Something went wrong")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            with pytest.raises(KernelLLMError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_kernel_error_passes_through(self, provider):
+        """Kernel LLMError should pass through without double-wrapping."""
+        original = KernelAuthenticationError("Already a kernel error", provider="github-copilot")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(original),
+        ):
+            with pytest.raises(KernelAuthenticationError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value is original
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_translated(self, provider):
+        """Unexpected non-Copilot exception -> KernelLLMError."""
+        raw_err = RuntimeError("Something totally unexpected")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(raw_err),
+        ):
+            with pytest.raises(KernelLLMError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retryable is True
+            assert exc_info.value.__cause__ is raw_err
+
+    @pytest.mark.asyncio
+    async def test_error_count_incremented(self, provider):
+        """Error count should be incremented on any failure."""
+        copilot_err = CopilotConnectionError("Oops")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(copilot_err),
+        ):
+            assert provider._error_count == 0
+
+            with pytest.raises(KernelNetworkError):
+                await provider.complete(self._make_mock_request())
+
+            assert provider._error_count == 1
+
+
+class TestRetryIntegration:
+    """Tests for retry_with_backoff integration in complete()."""
+
+    @pytest.fixture
+    def provider(self, mock_coordinator, provider_config):
+        return CopilotSdkProvider(
+            api_key=None, config=provider_config, coordinator=mock_coordinator
+        )
+
+    def _make_mock_request(self):
+        """Create a minimal mock request for complete()."""
+        request = Mock()
+        request.messages = [{"role": "user", "content": "test"}]
+        request.tools = None
+        request.stream = None
+        return request
+
+    def test_retry_config_exists(self, mock_coordinator):
+        """Provider should have a _retry_config attribute with production defaults."""
+        # Use empty config (no max_retries override) to test production defaults
+        provider = CopilotSdkProvider(api_key=None, config={}, coordinator=mock_coordinator)
+        assert hasattr(provider, "_retry_config")
+        assert provider._retry_config.max_retries == 3
+        assert provider._retry_config.min_delay == 1.0
+        assert provider._retry_config.max_delay == 60.0
+
+    def test_retry_config_from_provider_config(self, mock_coordinator):
+        """Retry config should be customizable via provider config."""
+        config = {
+            "model": "claude-opus-4.5",
+            "timeout": 60.0,
+            "max_retries": 5,
+            "retry_min_delay": 2.0,
+            "retry_max_delay": 120.0,
+            "retry_jitter": 0.3,
+        }
+        provider = CopilotSdkProvider(api_key=None, config=config, coordinator=mock_coordinator)
+        assert provider._retry_config.max_retries == 5
+        assert provider._retry_config.min_delay == 2.0
+        assert provider._retry_config.max_delay == 120.0
+        assert provider._retry_config.jitter == 0.3
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_non_retryable(self, provider):
+        """Non-retryable errors should fail immediately."""
+        call_count = {"n": 0}
+
+        @asynccontextmanager
+        async def mock_create_session(self_wrapper, *args, **kwargs):
+            call_count["n"] += 1
+            raise CopilotAuthenticationError("Bad creds")
+            yield  # noqa: unreachable but required for generator syntax
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            mock_create_session,
+        ):
+            with pytest.raises(KernelAuthenticationError):
+                await provider.complete(self._make_mock_request())
+
+            # Should only have been called once (no retry on non-retryable)
+            assert call_count["n"] == 1

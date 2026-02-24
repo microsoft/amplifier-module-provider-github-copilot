@@ -221,9 +221,12 @@ def _find_copilot_cli(config: dict[str, Any]) -> str | None:
     """
     Find the Copilot CLI executable path.
 
-    Uses the SDK's bundled CLI binary by default. Falls back to system PATH
-    if the bundled binary is not found. The SDK bundles its own CLI binary
-    which is version-matched, avoiding potential version mismatches.
+    Resolution order:
+    1. SDK bundled binary (import copilot -> copilot/bin/copilot)
+    2. System PATH fallback (shutil.which)
+
+    The SDK bundles its own CLI binary which is version-matched,
+    avoiding potential version mismatches with separately installed CLIs.
 
     Args:
         config: Provider configuration (unused, kept for API compatibility)
@@ -232,14 +235,32 @@ def _find_copilot_cli(config: dict[str, Any]) -> str | None:
         Resolved CLI path, or None if not found
     """
     try:
-        # Let SDK use its bundled CLI - only fall back to system PATH
+        try:
+            from pathlib import Path
+
+            import copilot as _copilot_mod  # type: ignore[import-untyped]
+
+            _mod_file = _copilot_mod.__file__
+            if _mod_file is None:
+                raise ImportError("copilot module has no __file__")
+            _cli_bin = Path(_mod_file).parent / "bin" / "copilot"
+            if _cli_bin.exists():
+                cli_path = str(_cli_bin)
+                _ensure_executable(cli_path)
+                logger.debug(f"[MOUNT] Found SDK bundled CLI at: {cli_path}")
+                return cli_path
+            else:
+                logger.debug("[MOUNT] SDK bundled CLI binary not found on disk")
+        except ImportError:
+            logger.debug("[MOUNT] copilot SDK not installed, trying PATH")
+
         found = shutil.which("copilot") or shutil.which("copilot.exe")
         if found:
             _ensure_executable(found)
-            logger.debug(f"[MOUNT] Found Copilot CLI at: {found}")
+            logger.debug(f"[MOUNT] Found Copilot CLI in PATH at: {found}")
             return found
 
-        logger.debug("[MOUNT] Copilot CLI not found in PATH")
+        logger.debug("[MOUNT] Copilot CLI not found via SDK or PATH")
         return None
 
     except Exception as e:
