@@ -38,6 +38,7 @@ def mock_cache_home(tmp_path, monkeypatch):
     )
     return tmp_path
 
+
 # Fix for Windows asyncio cleanup issues causing KeyboardInterrupt
 # See: https://github.com/pytest-dev/pytest-asyncio/issues/671
 if sys.platform == "win32":
@@ -275,6 +276,7 @@ def provider_config():
         "debug": True,
         "debug_truncate_length": 100,
         "use_streaming": False,  # Use non-streaming mode for simpler test mocking
+        "max_retries": 0,  # Disable retries in tests to avoid real asyncio.sleep delays
     }
 
 

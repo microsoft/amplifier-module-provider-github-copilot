@@ -4140,3 +4140,68 @@ class TestErrorTranslation:
                 await provider.complete(self._make_mock_request())
 
             assert provider._error_count == 1
+
+
+class TestRetryIntegration:
+    """Tests for retry_with_backoff integration in complete()."""
+
+    @pytest.fixture
+    def provider(self, mock_coordinator, provider_config):
+        return CopilotSdkProvider(
+            api_key=None, config=provider_config, coordinator=mock_coordinator
+        )
+
+    def _make_mock_request(self):
+        """Create a minimal mock request for complete()."""
+        request = Mock()
+        request.messages = [{"role": "user", "content": "test"}]
+        request.tools = None
+        request.stream = None
+        return request
+
+    def test_retry_config_exists(self, mock_coordinator):
+        """Provider should have a _retry_config attribute with production defaults."""
+        # Use empty config (no max_retries override) to test production defaults
+        provider = CopilotSdkProvider(api_key=None, config={}, coordinator=mock_coordinator)
+        assert hasattr(provider, "_retry_config")
+        assert provider._retry_config.max_retries == 3
+        assert provider._retry_config.min_delay == 1.0
+        assert provider._retry_config.max_delay == 60.0
+
+    def test_retry_config_from_provider_config(self, mock_coordinator):
+        """Retry config should be customizable via provider config."""
+        config = {
+            "model": "claude-opus-4.5",
+            "timeout": 60.0,
+            "max_retries": 5,
+            "retry_min_delay": 2.0,
+            "retry_max_delay": 120.0,
+            "retry_jitter": 0.3,
+        }
+        provider = CopilotSdkProvider(api_key=None, config=config, coordinator=mock_coordinator)
+        assert provider._retry_config.max_retries == 5
+        assert provider._retry_config.min_delay == 2.0
+        assert provider._retry_config.max_delay == 120.0
+        assert provider._retry_config.jitter == 0.3
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_non_retryable(self, provider):
+        """Non-retryable errors should fail immediately."""
+        call_count = {"n": 0}
+
+        @asynccontextmanager
+        async def mock_create_session(self_wrapper, *args, **kwargs):
+            call_count["n"] += 1
+            raise CopilotAuthenticationError("Bad creds")
+            yield  # noqa: unreachable but required for generator syntax
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            mock_create_session,
+        ):
+            with pytest.raises(KernelAuthenticationError):
+                await provider.complete(self._make_mock_request())
+
+            # Should only have been called once (no retry on non-retryable)
+            assert call_count["n"] == 1
