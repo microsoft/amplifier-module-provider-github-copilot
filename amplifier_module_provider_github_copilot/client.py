@@ -315,6 +315,13 @@ class CopilotClientWrapper:
 
         The SDK bundles its own CLI binary which is version-matched to the SDK.
         We always use the bundled CLI to avoid version mismatches and auth issues.
+
+        Token precedence (highest to lowest):
+        1. config["github_token"] (explicit config)
+        2. COPILOT_GITHUB_TOKEN env var (SDK-preferred)
+        3. GH_TOKEN env var (gh CLI compat)
+        4. GITHUB_TOKEN env var (most common)
+        5. No token — SDK uses stored OAuth creds (use_logged_in_user=True)
         """
         options: dict[str, Any] = {}
 
@@ -326,6 +333,18 @@ class CopilotClientWrapper:
 
         if self._config.get("cwd"):
             options["cwd"] = self._config["cwd"]
+
+        # Token resolution: config > COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN
+        token = self._config.get("github_token") or None
+        if not token:
+            for env_var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+                token = os.environ.get(env_var)
+                if token:
+                    logger.debug(f"[CLIENT] Using token from {env_var}")
+                    break
+
+        if token:
+            options["github_token"] = token
 
         return options
 

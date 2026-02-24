@@ -6,6 +6,7 @@ error handling, session creation, input validation, and cancellation handling.
 """
 
 import asyncio
+import os
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -967,3 +968,65 @@ class TestListSessionsPaths:
 
         assert result.sessions == ()
         assert result.error == "Connection dropped"
+
+
+class TestBuildClientOptionsTokenPassthrough:
+    """Tests for github_token passthrough in _build_client_options()."""
+
+    @pytest.fixture
+    def wrapper(self):
+        """Create a CopilotClientWrapper for testing."""
+        return CopilotClientWrapper(config={}, timeout=60.0)
+
+    def test_no_token_by_default(self, wrapper):
+        """Options should not include github_token when no token is available."""
+        with patch.dict(os.environ, {}, clear=True):
+            options = wrapper._build_client_options()
+            assert "github_token" not in options
+
+    def test_token_from_config(self, wrapper):
+        """Config github_token should take highest precedence."""
+        wrapper._config = {"github_token": "config-token-123"}
+        with patch.dict(
+            os.environ,
+            {"GITHUB_TOKEN": "env-token", "GH_TOKEN": "gh-token"},
+            clear=True,
+        ):
+            options = wrapper._build_client_options()
+            assert options["github_token"] == "config-token-123"
+
+    def test_token_from_copilot_github_token_env(self, wrapper):
+        """COPILOT_GITHUB_TOKEN should be second precedence."""
+        with patch.dict(
+            os.environ,
+            {
+                "COPILOT_GITHUB_TOKEN": "copilot-token",
+                "GH_TOKEN": "gh-token",
+                "GITHUB_TOKEN": "github-token",
+            },
+            clear=True,
+        ):
+            options = wrapper._build_client_options()
+            assert options["github_token"] == "copilot-token"
+
+    def test_token_from_gh_token_env(self, wrapper):
+        """GH_TOKEN should be third precedence."""
+        with patch.dict(
+            os.environ,
+            {"GH_TOKEN": "gh-token", "GITHUB_TOKEN": "github-token"},
+            clear=True,
+        ):
+            options = wrapper._build_client_options()
+            assert options["github_token"] == "gh-token"
+
+    def test_token_from_github_token_env(self, wrapper):
+        """GITHUB_TOKEN should be lowest env var precedence."""
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "github-token"}, clear=True):
+            options = wrapper._build_client_options()
+            assert options["github_token"] == "github-token"
+
+    def test_empty_env_var_ignored(self, wrapper):
+        """Empty string env vars should be ignored."""
+        with patch.dict(os.environ, {"GITHUB_TOKEN": ""}, clear=True):
+            options = wrapper._build_client_options()
+            assert "github_token" not in options
