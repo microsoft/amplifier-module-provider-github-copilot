@@ -44,23 +44,23 @@ class TestMount:
 
     @pytest.mark.asyncio
     async def test_mount_cleanup_function(self, mock_coordinator):
-        """Cleanup function should close provider."""
+        """Cleanup function should release the shared client reference."""
         with patch("shutil.which", return_value="/usr/bin/copilot"):
-            with patch("os.path.isfile", return_value=True):
-                with patch("os.path.isabs", return_value=True):
-                    with patch("amplifier_module_provider_github_copilot._ensure_executable"):
-                        cleanup = await mount(mock_coordinator, {})
+            with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                with patch(
+                    "amplifier_module_provider_github_copilot.CopilotClientWrapper"
+                ) as mock_wrapper_cls:
+                    mock_wrapper_cls.return_value = AsyncMock()
 
-                        assert cleanup is not None
+                    cleanup = await mount(mock_coordinator, {})
+                    assert cleanup is not None
 
-                        # Get the mounted provider
-                        provider = mock_coordinator.mounted_providers.get("github-copilot")
-                        assert provider is not None
+                    import amplifier_module_provider_github_copilot as mod
 
-                        # Mock the provider's close method
-                        with patch.object(provider, "close", new_callable=AsyncMock) as mock_close:
-                            await cleanup()
-                            mock_close.assert_called_once()
+                    assert mod._shared_client_refcount == 1
+
+                    await cleanup()
+                    assert mod._shared_client_refcount == 0
 
     @pytest.mark.asyncio
     async def test_mount_default_config(self, mock_coordinator):
@@ -204,6 +204,155 @@ class TestFindCopilotCli:
                     result = _find_copilot_cli({})
                     assert result == "C:\\Program Files\\copilot\\copilot.exe"
 
+
+class TestSingleton:
+    """Tests for the process-level singleton CopilotClientWrapper."""
+
+    @pytest.mark.asyncio
+    async def test_singleton_creates_one_wrapper(self, mock_coordinator):
+        """First mount should create exactly one CopilotClientWrapper."""
+        with patch("shutil.which", return_value="/usr/bin/copilot"):
+            with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                with patch(
+                    "amplifier_module_provider_github_copilot.CopilotClientWrapper"
+                ) as mock_wrapper_cls:
+                    mock_wrapper_cls.return_value = Mock()
+
+                    await mount(mock_coordinator, {})
+
+                    mock_wrapper_cls.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_singleton_reuses_wrapper_across_mounts(self):
+        """Multiple mounts should reuse the same CopilotClientWrapper instance."""
+        with patch("shutil.which", return_value="/usr/bin/copilot"):
+            with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                with patch(
+                    "amplifier_module_provider_github_copilot.CopilotClientWrapper"
+                ) as mock_wrapper_cls:
+                    mock_wrapper_cls.return_value = Mock()
+
+                    coordinator_a = Mock()
+                    coordinator_a.mount = AsyncMock()
+                    coordinator_a.hooks = Mock()
+                    coordinator_a.hooks.emit = AsyncMock()
+
+                    coordinator_b = Mock()
+                    coordinator_b.mount = AsyncMock()
+                    coordinator_b.hooks = Mock()
+                    coordinator_b.hooks.emit = AsyncMock()
+
+                    coordinator_c = Mock()
+                    coordinator_c.mount = AsyncMock()
+                    coordinator_c.hooks = Mock()
+                    coordinator_c.hooks.emit = AsyncMock()
+
+                    await mount(coordinator_a, {})
+                    await mount(coordinator_b, {})
+                    await mount(coordinator_c, {})
+
+                    # Only ONE wrapper should ever be created
+                    assert mock_wrapper_cls.call_count == 1
+
+                    import amplifier_module_provider_github_copilot as mod
+
+                    assert mod._shared_client_refcount == 3
+
+    @pytest.mark.asyncio
+    async def test_singleton_close_only_on_last_cleanup(self):
+        """close() should be called only when the last session's cleanup runs."""
+        with patch("shutil.which", return_value="/usr/bin/copilot"):
+            with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                with patch(
+                    "amplifier_module_provider_github_copilot.CopilotClientWrapper"
+                ) as mock_wrapper_cls:
+                    mock_client_instance = AsyncMock()
+                    mock_client_instance.close = AsyncMock()
+                    mock_wrapper_cls.return_value = mock_client_instance
+
+                    coordinator_a = Mock()
+                    coordinator_a.mount = AsyncMock()
+                    coordinator_a.hooks = Mock()
+                    coordinator_a.hooks.emit = AsyncMock()
+
+                    coordinator_b = Mock()
+                    coordinator_b.mount = AsyncMock()
+                    coordinator_b.hooks = Mock()
+                    coordinator_b.hooks.emit = AsyncMock()
+
+                    cleanup_a = await mount(coordinator_a, {})
+                    cleanup_b = await mount(coordinator_b, {})
+
+                    assert cleanup_a is not None
+                    assert cleanup_b is not None
+
+                    await cleanup_a()
+                    # close() must NOT have been called yet — b is still mounted
+                    mock_client_instance.close.assert_not_called()
+
+                    await cleanup_b()
+                    # Now the last reference is gone — close() must have been called
+                    mock_client_instance.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_singleton_concurrent_mounts_create_one_wrapper(self):
+        """Concurrent mount() calls must not create more than one CopilotClientWrapper."""
+        import asyncio
+
+        with patch("shutil.which", return_value="/usr/bin/copilot"):
+            with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                with patch(
+                    "amplifier_module_provider_github_copilot.CopilotClientWrapper"
+                ) as mock_wrapper_cls:
+                    mock_wrapper_cls.return_value = Mock()
+
+                    def make_coordinator():
+                        c = Mock()
+                        c.mount = AsyncMock()
+                        c.hooks = Mock()
+                        c.hooks.emit = AsyncMock()
+                        return c
+
+                    coordinators = [make_coordinator() for _ in range(5)]
+                    await asyncio.gather(*[mount(c, {}) for c in coordinators])
+
+                    # All five concurrent mounts must share ONE wrapper
+                    assert mock_wrapper_cls.call_count == 1
+
+                    import amplifier_module_provider_github_copilot as mod
+
+                    assert mod._shared_client_refcount == 5
+
+    @pytest.mark.asyncio
+    async def test_singleton_logs_debug_on_timeout_mismatch(self, caplog):
+        """Mismatched timeout on second mount emits DEBUG log, does not raise."""
+        import logging
+
+        with patch("shutil.which", return_value="/usr/bin/copilot"):
+            with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                with patch(
+                    "amplifier_module_provider_github_copilot.CopilotClientWrapper"
+                ) as mock_wrapper_cls:
+                    mock_wrapper_cls.return_value = Mock(_timeout=300.0)
+
+                    coordinator_a = Mock()
+                    coordinator_a.mount = AsyncMock()
+                    coordinator_a.hooks = Mock()
+                    coordinator_a.hooks.emit = AsyncMock()
+
+                    coordinator_b = Mock()
+                    coordinator_b.mount = AsyncMock()
+                    coordinator_b.hooks = Mock()
+                    coordinator_b.hooks.emit = AsyncMock()
+
+                    await mount(coordinator_a, {"timeout": 300.0})
+
+                    with caplog.at_level(logging.DEBUG):
+                        cleanup = await mount(coordinator_b, {"timeout": 600.0})
+
+                    assert cleanup is not None  # No exception raised
+                    assert "Ignoring timeout" in caplog.text
+                    assert mock_wrapper_cls.call_count == 1  # Still only one wrapper
     def test_cli_from_sdk_bundled_binary(self):
         """_find_copilot_cli should find the SDK's bundled binary first."""
         from amplifier_module_provider_github_copilot import _find_copilot_cli

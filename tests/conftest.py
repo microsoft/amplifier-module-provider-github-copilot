@@ -39,6 +39,36 @@ def mock_cache_home(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def reset_singleton_state():
+    """Reset module-level singleton state before each test.
+
+    Required for test isolation: module-level variables persist across
+    tests in the same pytest session. Without this reset, singleton tests
+    bleed state into each other.
+
+    Uses hasattr guards because the singleton attributes don't exist yet
+    until Task 4 adds them to __init__.py. Guards make this fixture safe
+    to land before the implementation.
+    """
+    import amplifier_module_provider_github_copilot as mod
+
+    # Guard: attributes may not exist until implementation is added (Task 4)
+    if hasattr(mod, "_shared_client"):
+        mod._shared_client = None  # type: ignore[attr-defined]
+    if hasattr(mod, "_shared_client_refcount"):
+        mod._shared_client_refcount = 0  # type: ignore[attr-defined]
+    if hasattr(mod, "_shared_client_lock"):
+        mod._shared_client_lock = None  # type: ignore[attr-defined]
+    yield
+    if hasattr(mod, "_shared_client"):
+        mod._shared_client = None  # type: ignore[attr-defined]
+    if hasattr(mod, "_shared_client_refcount"):
+        mod._shared_client_refcount = 0  # type: ignore[attr-defined]
+    if hasattr(mod, "_shared_client_lock"):
+        mod._shared_client_lock = None  # type: ignore[attr-defined]
+
+
 # Fix for Windows asyncio cleanup issues causing KeyboardInterrupt
 # See: https://github.com/pytest-dev/pytest-asyncio/issues/671
 if sys.platform == "win32":
