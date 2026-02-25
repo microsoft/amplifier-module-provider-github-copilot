@@ -44,7 +44,32 @@ from amplifier_core import (
     ToolCall,
     ToolCallContent,
 )
+from amplifier_core.llm_errors import (
+    AbortError as KernelAbortError,
+)
+from amplifier_core.llm_errors import (
+    AuthenticationError as KernelAuthenticationError,
+)
+from amplifier_core.llm_errors import (
+    LLMError as KernelLLMError,
+)
+from amplifier_core.llm_errors import (
+    LLMTimeoutError as KernelLLMTimeoutError,
+)
+from amplifier_core.llm_errors import (
+    NetworkError as KernelNetworkError,
+)
+from amplifier_core.llm_errors import (
+    NotFoundError as KernelNotFoundError,
+)
+from amplifier_core.llm_errors import (
+    ProviderUnavailableError as KernelProviderUnavailableError,
+)
+from amplifier_core.llm_errors import (
+    RateLimitError as KernelRateLimitError,
+)
 from amplifier_core.utils import truncate_values
+from amplifier_core.utils.retry import RetryConfig, retry_with_backoff
 
 from ._constants import (
     COPILOT_BUILTIN_TOOL_NAMES,
@@ -60,7 +85,17 @@ from .converters import (
     convert_messages_to_prompt,
     extract_system_message,
 )
-from .exceptions import CopilotTimeoutError
+from .exceptions import (
+    CopilotAbortError,
+    CopilotAuthenticationError,
+    CopilotConnectionError,
+    CopilotModelNotFoundError,
+    CopilotProviderError,
+    CopilotRateLimitError,
+    CopilotSdkLoopError,
+    CopilotSessionError,
+    CopilotTimeoutError,
+)
 from .model_cache import (
     CacheEntry,
     get_fallback_limits,
@@ -185,6 +220,15 @@ class CopilotSdkProvider:
             )
         )
 
+        # Retry configuration (lighter defaults than HTTP-only providers
+        # because each Copilot retry creates a new SDK session + subprocess health check)
+        self._retry_config = RetryConfig(
+            max_retries=int(config.get("max_retries", 3)),
+            min_delay=float(config.get("retry_min_delay", 1.0)),
+            max_delay=float(config.get("retry_max_delay", 60.0)),
+            jitter=float(config.get("retry_jitter", 0.2)),
+        )
+
         # Track tool call IDs that have been repaired with synthetic results.
         # This prevents infinite loops when the same missing tool results are
         # detected repeatedly across LLM iterations.
@@ -296,7 +340,7 @@ class CopilotSdkProvider:
         return ProviderInfo(
             id=self.name,
             display_name="GitHub Copilot SDK",
-            credential_env_vars=[],  # Copilot uses GitHub auth, not API keys
+            credential_env_vars=["GITHUB_TOKEN", "GH_TOKEN", "COPILOT_GITHUB_TOKEN"],
             # Provider-level capabilities (model-specific caps like "thinking" are in list_models)
             capabilities=["streaming", "tools", "vision"],
             defaults={
@@ -310,7 +354,7 @@ class CopilotSdkProvider:
                 "context_window": context_window,
                 "max_output_tokens": max_output_tokens,
             },
-            config_fields=[],  # No config fields needed - Copilot uses GitHub auth
+            config_fields=[],
         )
 
     def get_model_info(self) -> Any | None:
@@ -820,49 +864,133 @@ class CopilotSdkProvider:
             )
 
         # ── Start timing ───────────────────────────────────────────────
-        start_time = time.time()
+        # Inner function for retry_with_backoff wrapping
+        async def _do_complete() -> ChatResponse:
+            """Inner function wrapping session creation, send, and error translation.
 
-        # Create ephemeral session (Pattern A: stateless, Deny + Destroy)
-        try:
-            async with self._client.create_session(
-                model=model,
-                system_message=system_message,
-                streaming=use_streaming,
-                reasoning_effort=effective_reasoning_effort,
-                tools=sdk_tools,
-                excluded_tools=excluded_builtins if excluded_builtins else None,
-                hooks=deny_hooks,
-            ) as session:
-                # Increment session counter
-                self._session_count += 1
+            retry_with_backoff catches LLMError subtypes and retries those
+            marked retryable=True. Non-retryable errors propagate immediately.
+            """
+            start_time = time.time()
 
-                if use_streaming:
-                    # Streaming mode: collect events and emit content blocks
-                    # Event-based tool capture from ASSISTANT_MESSAGE
-                    response = await self._complete_streaming(
-                        session,
-                        prompt,
-                        model,
-                        timeout,
-                        extended_thinking_enabled,
-                        has_tools=bool(sdk_tools),
+            # Create ephemeral session (Pattern A: stateless, Deny + Destroy)
+            try:
+                async with self._client.create_session(
+                    model=model,
+                    system_message=system_message,
+                    streaming=use_streaming,
+                    reasoning_effort=effective_reasoning_effort,
+                    tools=sdk_tools,
+                    excluded_tools=excluded_builtins if excluded_builtins else None,
+                    hooks=deny_hooks,
+                ) as session:
+                    # Increment session counter
+                    self._session_count += 1
+
+                    if use_streaming:
+                        # Streaming mode: collect events and emit content blocks
+                        # Event-based tool capture from ASSISTANT_MESSAGE
+                        result = await self._complete_streaming(
+                            session,
+                            prompt,
+                            model,
+                            timeout,
+                            extended_thinking_enabled,
+                            has_tools=bool(sdk_tools),
+                        )
+                    else:
+                        # Blocking mode: send and wait for complete response
+                        raw_response = await self._client.send_and_wait(
+                            session, prompt, timeout=timeout
+                        )
+                        result = convert_copilot_response_to_chat_response(raw_response, model)
+
+                # Compute timing (inside try, after context manager exits)
+                elapsed_ms_inner = int((time.time() - start_time) * 1000)
+
+                # Track response time in milliseconds
+                self._total_response_time_ms += elapsed_ms_inner
+
+            except KernelLLMError:
+                # Kernel errors pass through — prevent double-wrapping
+                self._error_count += 1
+                raise
+            except CopilotAuthenticationError as e:
+                self._error_count += 1
+                raise KernelAuthenticationError(str(e), provider=self.name, retryable=False) from e
+            except CopilotRateLimitError as e:
+                self._error_count += 1
+                # Rate-limit fail-fast: if retry_after exceeds max_delay,
+                # mark as non-retryable to avoid pointless waits
+                retryable = True
+                if e.retry_after and e.retry_after > self._retry_config.max_delay:
+                    retryable = False
+                    logger.info(
+                        f"[PROVIDER] Rate limit retry_after={e.retry_after}s "
+                        f"exceeds max_delay={self._retry_config.max_delay}s, "
+                        f"marking non-retryable"
                     )
-                else:
-                    # Blocking mode: send and wait for complete response
-                    raw_response = await self._client.send_and_wait(
-                        session, prompt, timeout=timeout
-                    )
-                    response = convert_copilot_response_to_chat_response(raw_response, model)
+                raise KernelRateLimitError(
+                    str(e),
+                    provider=self.name,
+                    retry_after=e.retry_after,
+                    retryable=retryable,
+                ) from e
+            except CopilotTimeoutError as e:
+                self._error_count += 1
+                raise KernelLLMTimeoutError(str(e), provider=self.name, retryable=True) from e
+            except CopilotConnectionError as e:
+                self._error_count += 1
+                raise KernelNetworkError(str(e), provider=self.name, retryable=True) from e
+            except CopilotModelNotFoundError as e:
+                self._error_count += 1
+                raise KernelNotFoundError(str(e), provider=self.name, retryable=False) from e
+            except CopilotSdkLoopError as e:
+                self._error_count += 1
+                raise KernelProviderUnavailableError(
+                    str(e), provider=self.name, retryable=False
+                ) from e
+            except CopilotSessionError as e:
+                self._error_count += 1
+                raise KernelProviderUnavailableError(
+                    str(e), provider=self.name, retryable=True
+                ) from e
+            except CopilotAbortError as e:
+                self._error_count += 1
+                raise KernelAbortError(str(e), provider=self.name, retryable=False) from e
+            except CopilotProviderError as e:
+                self._error_count += 1
+                raise KernelLLMError(str(e), provider=self.name, retryable=True) from e
+            except Exception as e:
+                self._error_count += 1
+                raise KernelLLMError(
+                    f"Unexpected error: {e}", provider=self.name, retryable=True
+                ) from e
 
-            # ── Compute timing ─────────────────────────────────────────
-            elapsed_ms = int((time.time() - start_time) * 1000)
+            return result
 
-            # Track response time in milliseconds
-            self._total_response_time_ms += elapsed_ms
+        async def _on_retry(attempt: int, delay: float, error: KernelLLMError) -> None:
+            """Emit provider:retry event for observability."""
+            logger.info(
+                f"[PROVIDER] Retrying complete() - attempt {attempt}, "
+                f"delay {delay:.1f}s, error: {error}"
+            )
+            await self._emit_event(
+                "provider:retry",
+                {
+                    "provider": self.name,
+                    "attempt": attempt,
+                    "delay": delay,
+                    "error_type": type(error).__name__,
+                    "error_message": str(error),
+                    "model": model,
+                },
+            )
 
-        except Exception:
-            self._error_count += 1
-            raise
+        # Execute with retry_with_backoff (track wall-clock time across retries)
+        outer_start = time.time()
+        response = await retry_with_backoff(_do_complete, self._retry_config, on_retry=_on_retry)
+        elapsed_ms = int((time.time() - outer_start) * 1000)
 
         if self._debug:
             content_preview = self._truncate(str(response.content))
@@ -871,7 +999,7 @@ class CopilotSdkProvider:
                 tc_count = len(response.tool_calls) if response.tool_calls else 0
                 logger.debug(f"[PROVIDER] Tool calls: {tc_count}")
 
-        # ── Emit llm:response events (after API call) ──────────────────
+        # Emit llm:response events (after API call, outside retry loop)
         response_tool_calls = len(response.tool_calls) if response.tool_calls else 0
         response_event: dict[str, Any] = {
             "provider": self.name,
@@ -881,12 +1009,12 @@ class CopilotSdkProvider:
                 "output": response.usage.output_tokens if response.usage else 0,
             },
             "status": "ok",
-            "duration_ms": elapsed_ms,
             "finish_reason": response.finish_reason
             or ("tool_use" if response_tool_calls else "end_turn"),
             "content_blocks": len(response.content) if response.content else 0,
             "tool_calls": response_tool_calls,
             "streaming": use_streaming,
+            "duration_ms": elapsed_ms,
         }
         await self._emit_event("llm:response", response_event)
 

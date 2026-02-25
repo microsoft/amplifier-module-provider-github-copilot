@@ -306,6 +306,7 @@ def provider_config():
         "debug": True,
         "debug_truncate_length": 100,
         "use_streaming": False,  # Use non-streaming mode for simpler test mocking
+        "max_retries": 0,  # Disable retries in tests to avoid real asyncio.sleep delays
     }
 
 

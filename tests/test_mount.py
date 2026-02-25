@@ -353,3 +353,50 @@ class TestSingleton:
                     assert cleanup is not None  # No exception raised
                     assert "Ignoring timeout" in caplog.text
                     assert mock_wrapper_cls.call_count == 1  # Still only one wrapper
+    def test_cli_from_sdk_bundled_binary(self):
+        """_find_copilot_cli should find the SDK's bundled binary first."""
+        from amplifier_module_provider_github_copilot import _find_copilot_cli
+
+        mock_copilot_mod = Mock()
+        mock_copilot_mod.__file__ = "/fake/site-packages/copilot/__init__.py"
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch.dict("sys.modules", {"copilot": mock_copilot_mod}):
+                with patch("pathlib.Path.exists", return_value=True):
+                    with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                        with patch("shutil.which", return_value=None):
+                            result = _find_copilot_cli({})
+                            assert result is not None
+                            assert "copilot" in result
+                            assert "bin" in result
+
+    def test_cli_sdk_binary_preferred_over_path(self):
+        """SDK bundled binary should be preferred over PATH binary."""
+        from amplifier_module_provider_github_copilot import _find_copilot_cli
+
+        mock_copilot_mod = Mock()
+        mock_copilot_mod.__file__ = "/fake/site-packages/copilot/__init__.py"
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch.dict("sys.modules", {"copilot": mock_copilot_mod}):
+                with patch("pathlib.Path.exists", return_value=True):
+                    with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                        with patch("shutil.which", return_value="/usr/bin/copilot"):
+                            result = _find_copilot_cli({})
+                            assert result is not None
+                            assert "/fake/site-packages/copilot/bin/copilot" in result
+
+    def test_cli_falls_back_to_path_when_sdk_missing(self):
+        """When SDK bundled binary doesn't exist, fall back to PATH."""
+        from amplifier_module_provider_github_copilot import _find_copilot_cli
+
+        mock_copilot_mod = Mock()
+        mock_copilot_mod.__file__ = "/fake/site-packages/copilot/__init__.py"
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch.dict("sys.modules", {"copilot": mock_copilot_mod}):
+                with patch("pathlib.Path.exists", return_value=False):
+                    with patch("amplifier_module_provider_github_copilot._ensure_executable"):
+                        with patch("shutil.which", return_value="/usr/bin/copilot"):
+                            result = _find_copilot_cli({})
+                            assert result == "/usr/bin/copilot"
