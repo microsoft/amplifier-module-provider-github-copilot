@@ -213,11 +213,14 @@ class TestRateLimitDetection:
         result = detect_rate_limit_error("HTTP 429 response")
         assert isinstance(result, CopilotRateLimitError)
 
-    def test_detects_throttle_variants(self):
+    @pytest.mark.parametrize(
+        "msg",
+        ["Request throttled", "Throttling in effect", "throttle limit"],
+    )
+    def test_detects_throttle_variants(self, msg):
         """Should detect 'throttl' variants (throttle, throttled, throttling)."""
-        for msg in ["Request throttled", "Throttling in effect", "throttle limit"]:
-            result = detect_rate_limit_error(msg)
-            assert isinstance(result, CopilotRateLimitError), f"Failed for: {msg}"
+        result = detect_rate_limit_error(msg)
+        assert isinstance(result, CopilotRateLimitError)
 
     def test_detects_quota_exceeded(self):
         """Should detect 'quota exceeded' phrase."""
