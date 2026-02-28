@@ -32,6 +32,7 @@ from .exceptions import (
     CopilotProviderError,
     CopilotSessionError,
     CopilotTimeoutError,
+    detect_rate_limit_error,
 )
 
 
@@ -512,6 +513,9 @@ class CopilotClientWrapper:
             # Heuristic detection - SDK doesn't expose typed model exceptions
             if "model" in error_msg and ("not found" in error_msg or "invalid" in error_msg):
                 raise CopilotModelNotFoundError(model=model) from e
+            rate_limit_err = detect_rate_limit_error(str(e))
+            if rate_limit_err is not None:
+                raise rate_limit_err from e
             raise CopilotSessionError(f"Failed to create session: {e}") from e
 
         # Yield session and ensure cleanup - exceptions from caller pass through unchanged
@@ -586,6 +590,9 @@ class CopilotClientWrapper:
         except CopilotTimeoutError:
             raise
         except Exception as e:
+            rate_limit_err = detect_rate_limit_error(str(e))
+            if rate_limit_err is not None:
+                raise rate_limit_err from e
             raise CopilotProviderError(f"Request failed: {e}") from e
 
     async def list_models(self) -> list[ModelInfo]:

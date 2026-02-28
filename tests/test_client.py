@@ -23,6 +23,7 @@ from amplifier_module_provider_github_copilot.exceptions import (
     CopilotConnectionError,
     CopilotModelNotFoundError,
     CopilotProviderError,
+    CopilotRateLimitError,
     CopilotSessionError,
     CopilotTimeoutError,
 )
@@ -1050,3 +1051,109 @@ class TestVerifyAuthenticationMessage:
 
         with pytest.raises(CopilotAuthenticationError, match="GITHUB_TOKEN"):
             await wrapper._verify_authentication()
+
+
+class TestRateLimitDetectionInClient:
+    """Tests that rate-limit errors from the SDK are detected and raised as CopilotRateLimitError."""
+
+    @pytest.mark.asyncio
+    async def test_send_and_wait_detects_rate_limit_with_retry_after(self, mock_copilot_session):
+        """send_and_wait should raise CopilotRateLimitError with retry_after when SDK error contains rate limit info."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+        mock_copilot_session.send_and_wait = AsyncMock(
+            side_effect=RuntimeError("Rate limit exceeded. Retry after 30.0 seconds")
+        )
+
+        with pytest.raises(CopilotRateLimitError) as exc_info:
+            await wrapper.send_and_wait(mock_copilot_session, "Hello!")
+
+        assert exc_info.value.retry_after == 30.0
+
+    @pytest.mark.asyncio
+    async def test_send_and_wait_detects_rate_limit_without_retry_after(self, mock_copilot_session):
+        """send_and_wait should raise CopilotRateLimitError even without retry_after hint."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+        mock_copilot_session.send_and_wait = AsyncMock(
+            side_effect=RuntimeError("429 Too Many Requests")
+        )
+
+        with pytest.raises(CopilotRateLimitError) as exc_info:
+            await wrapper.send_and_wait(mock_copilot_session, "Hello!")
+
+        assert exc_info.value.retry_after is None
+
+    @pytest.mark.asyncio
+    async def test_send_and_wait_non_rate_limit_still_wraps_as_provider_error(
+        self, mock_copilot_session
+    ):
+        """Non-rate-limit errors in send_and_wait should still wrap as CopilotProviderError."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+        mock_copilot_session.send_and_wait = AsyncMock(side_effect=RuntimeError("Connection reset"))
+
+        with pytest.raises(CopilotProviderError, match="Request failed"):
+            await wrapper.send_and_wait(mock_copilot_session, "Hello!")
+
+    @pytest.mark.asyncio
+    async def test_create_session_detects_rate_limit(self, mock_copilot_client):
+        """create_session should raise CopilotRateLimitError when SDK error contains rate limit info."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+        mock_copilot_client.create_session = AsyncMock(
+            side_effect=Exception("Rate limit exceeded. Retry after 60 seconds")
+        )
+
+        with patch(
+            "copilot.CopilotClient",
+            return_value=mock_copilot_client,
+        ):
+            with pytest.raises(CopilotRateLimitError) as exc_info:
+                async with wrapper.create_session("model"):
+                    pass
+
+            assert exc_info.value.retry_after == 60.0
+
+    @pytest.mark.asyncio
+    async def test_create_session_non_rate_limit_still_wraps_as_session_error(
+        self, mock_copilot_client
+    ):
+        """Non-rate-limit errors in create_session should still wrap as CopilotSessionError."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+        mock_copilot_client.create_session = AsyncMock(
+            side_effect=Exception("Session creation failed")
+        )
+
+        with patch(
+            "copilot.CopilotClient",
+            return_value=mock_copilot_client,
+        ):
+            with pytest.raises(CopilotSessionError):
+                async with wrapper.create_session("model"):
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_send_and_wait_preserves_cause_chain(self, mock_copilot_session):
+        """CopilotRateLimitError should preserve the original exception as __cause__."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+        original = RuntimeError("Rate limit exceeded")
+        mock_copilot_session.send_and_wait = AsyncMock(side_effect=original)
+
+        with pytest.raises(CopilotRateLimitError) as exc_info:
+            await wrapper.send_and_wait(mock_copilot_session, "Hello!")
+
+        assert exc_info.value.__cause__ is original
+
+    @pytest.mark.asyncio
+    async def test_create_session_preserves_cause_chain(self, mock_copilot_client):
+        """CopilotRateLimitError from create_session should preserve the original exception as __cause__."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+        original = Exception("Too many requests")
+        mock_copilot_client.create_session = AsyncMock(side_effect=original)
+
+        with patch(
+            "copilot.CopilotClient",
+            return_value=mock_copilot_client,
+        ):
+            with pytest.raises(CopilotRateLimitError) as exc_info:
+                async with wrapper.create_session("model"):
+                    pass
+
+            assert exc_info.value.__cause__ is original
