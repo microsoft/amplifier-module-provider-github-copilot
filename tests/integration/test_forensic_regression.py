@@ -37,7 +37,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 import shutil
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
@@ -677,6 +679,33 @@ def _get_provider_cwd() -> str:
     return str(module_root)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# WINDOWS ARM64 SKIP — Class-Level
+# ═══════════════════════════════════════════════════════════════════════════════
+# Amplifier's bundle preparation tries to install `tool-mcp` module which
+# depends on `cryptography` via the dependency chain:
+#   tool-mcp → mcp → pyjwt[crypto] → cryptography
+#
+# On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
+# to compile from source. The build fails with:
+#   "Unsupported platform: win_arm64"
+#
+# This causes Amplifier's bundle prep to hang for ~30 seconds attempting
+# the build, which exhausts the Copilot SDK's internal ping() timeout
+# (also 30s), resulting in TimeoutError during client initialization.
+#
+# This is NOT a provider bug - it's a platform limitation. The raw SDK
+# works perfectly on Windows ARM64 when tested in isolation.
+#
+# Windows x64 DOES work because cryptography has pre-built wheels for x64.
+# ═══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.skipif(
+    platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"),
+    reason=(
+        "Amplifier's tool-mcp module requires cryptography which has no ARM64 wheel. "
+        "This test passes on Windows x64, Linux, and macOS."
+    ),
+)
 class TestAmplifierEndToEnd:
     """
     Full end-to-end tests that invoke Amplifier CLI and verify
@@ -688,6 +717,12 @@ class TestAmplifierEndToEnd:
     Prerequisites:
         - Amplifier CLI installed via 'uv tool install' and on PATH
         - Copilot provider configured in Amplifier
+
+    Platform Notes:
+        - Windows x64: ✓ Works (cryptography has pre-built wheels)
+        - Windows ARM64: ✗ Skipped (no cryptography wheel, see class decorator)
+        - Linux/WSL: ✓ Works
+        - macOS: ✓ Works
     """
 
     @pytest.mark.asyncio
@@ -697,43 +732,7 @@ class TestAmplifierEndToEnd:
 
         This is a smoke test that validates Amplifier can use the Copilot
         provider without errors.
-
-        Platform Notes:
-            - Windows x64: ✓ Works fine (cryptography has pre-built wheels)
-            - Windows ARM64: ✗ Skipped (see skip condition below)
-            - Linux/WSL: ✓ Works fine
-            - macOS: ✓ Works fine
         """
-        import platform
-        import subprocess
-
-        # ═══════════════════════════════════════════════════════════════════════════
-        # WINDOWS ARM64 SKIP EXPLANATION
-        # ═══════════════════════════════════════════════════════════════════════════
-        # Amplifier's bundle preparation tries to install `tool-mcp` module which
-        # depends on `cryptography` via the dependency chain:
-        #   tool-mcp → mcp → pyjwt[crypto] → cryptography
-        #
-        # On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
-        # to compile from source. The build fails with:
-        #   "Unsupported platform: win_arm64"
-        #
-        # This causes Amplifier's bundle prep to hang for ~30 seconds attempting
-        # the build, which exhausts the Copilot SDK's internal ping() timeout
-        # (also 30s), resulting in TimeoutError during client initialization.
-        #
-        # This is NOT a provider bug - it's a platform limitation. The raw SDK
-        # works perfectly on Windows ARM64 when tested in isolation.
-        #
-        # Windows x64 DOES work because cryptography has pre-built wheels for x64.
-        # ═══════════════════════════════════════════════════════════════════════════
-        if platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"):
-            pytest.skip(
-                "Skipping on Windows ARM64: Amplifier's tool-mcp module requires "
-                "cryptography which has no ARM64 wheel (needs Rust to build). "
-                "This test passes on Windows x64, Linux, and macOS."
-            )
-
         amplifier_bin = _find_amplifier_cli()
         if not amplifier_bin:
             pytest.skip(
@@ -777,43 +776,7 @@ class TestAmplifierEndToEnd:
 
         This is the definitive proof that the SDK Driver architecture
         fixes the 305-turn loop.
-
-        Platform Notes:
-            - Windows x64: ✓ Works fine (cryptography has pre-built wheels)
-            - Windows ARM64: ✗ Skipped (see skip condition below)
-            - Linux/WSL: ✓ Works fine
-            - macOS: ✓ Works fine
         """
-        import platform
-        import subprocess
-
-        # ═══════════════════════════════════════════════════════════════════════════
-        # WINDOWS ARM64 SKIP EXPLANATION
-        # ═══════════════════════════════════════════════════════════════════════════
-        # Amplifier's bundle preparation tries to install `tool-mcp` module which
-        # depends on `cryptography` via the dependency chain:
-        #   tool-mcp → mcp → pyjwt[crypto] → cryptography
-        #
-        # On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
-        # to compile from source. The build fails with:
-        #   "Unsupported platform: win_arm64"
-        #
-        # This causes Amplifier's bundle prep to hang for ~30 seconds attempting
-        # the build, which exhausts the Copilot SDK's internal ping() timeout
-        # (also 30s), resulting in TimeoutError during client initialization.
-        #
-        # This is NOT a provider bug - it's a platform limitation. The raw SDK
-        # works perfectly on Windows ARM64 when tested in isolation.
-        #
-        # Windows x64 DOES work because cryptography has pre-built wheels for x64.
-        # ═══════════════════════════════════════════════════════════════════════════
-        if platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"):
-            pytest.skip(
-                "Skipping on Windows ARM64: Amplifier's tool-mcp module requires "
-                "cryptography which has no ARM64 wheel (needs Rust to build). "
-                "This test passes on Windows x64, Linux, and macOS."
-            )
-
         amplifier_bin = _find_amplifier_cli()
         if not amplifier_bin:
             pytest.skip(
