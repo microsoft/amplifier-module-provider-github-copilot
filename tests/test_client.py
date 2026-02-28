@@ -1101,9 +1101,10 @@ class TestRateLimitDetectionInClient:
             side_effect=Exception("Rate limit exceeded. Retry after 60 seconds")
         )
 
-        with patch(
-            "copilot.CopilotClient",
-            return_value=mock_copilot_client,
+        with patch.object(
+            CopilotClientWrapper,
+            "ensure_client",
+            new=AsyncMock(return_value=mock_copilot_client),
         ):
             with pytest.raises(CopilotRateLimitError) as exc_info:
                 async with wrapper.create_session("model"):
@@ -1121,9 +1122,10 @@ class TestRateLimitDetectionInClient:
             side_effect=Exception("Session creation failed")
         )
 
-        with patch(
-            "copilot.CopilotClient",
-            return_value=mock_copilot_client,
+        with patch.object(
+            CopilotClientWrapper,
+            "ensure_client",
+            new=AsyncMock(return_value=mock_copilot_client),
         ):
             with pytest.raises(CopilotSessionError):
                 async with wrapper.create_session("model"):
@@ -1148,9 +1150,10 @@ class TestRateLimitDetectionInClient:
         original = Exception("Too many requests")
         mock_copilot_client.create_session = AsyncMock(side_effect=original)
 
-        with patch(
-            "copilot.CopilotClient",
-            return_value=mock_copilot_client,
+        with patch.object(
+            CopilotClientWrapper,
+            "ensure_client",
+            new=AsyncMock(return_value=mock_copilot_client),
         ):
             with pytest.raises(CopilotRateLimitError) as exc_info:
                 async with wrapper.create_session("model"):
