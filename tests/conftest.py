@@ -407,3 +407,49 @@ def mock_client_class(monkeypatch):
         return mock_client, mock_import
 
     return _create_mock
+
+
+# =============================================================================
+# SDK Bundled Binary Mocking Utilities
+# =============================================================================
+
+
+@pytest.fixture
+def disable_sdk_bundled_binary():
+    """
+    Context manager fixture that makes SDK bundled binary discovery fail.
+
+    Use this fixture in tests that want to test the shutil.which fallback path
+    of _find_copilot_cli(). Without this, SDK 0.1.28+ bundles the binary and
+    the function finds it before checking shutil.which.
+
+    Usage:
+        def test_fallback_to_path(disable_sdk_bundled_binary):
+            with disable_sdk_bundled_binary():
+                # Now _find_copilot_cli will use shutil.which fallback
+                ...
+    """
+    from contextlib import contextmanager
+    from unittest.mock import Mock, patch
+
+    @contextmanager
+    def _disable():
+        # Create a mock copilot module with a __file__ that doesn't have binary
+        mock_copilot_mod = Mock()
+        mock_copilot_mod.__file__ = "/nonexistent/fake/copilot/__init__.py"
+
+        # Patch sys.modules so import copilot returns our mock
+        # AND patch Path.exists to return False for the bin path
+        with patch.dict("sys.modules", {"copilot": mock_copilot_mod}):
+            # Make the binary path check fail
+            original_exists = __import__("pathlib").Path.exists
+
+            def patched_exists(self):
+                if "copilot" in str(self) and "bin" in str(self):
+                    return False
+                return original_exists(self)
+
+            with patch("pathlib.Path.exists", patched_exists):
+                yield
+
+    return _disable

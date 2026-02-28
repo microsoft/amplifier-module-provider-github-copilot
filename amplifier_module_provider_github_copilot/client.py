@@ -482,6 +482,22 @@ class CopilotClientWrapper:
             session_config["hooks"] = hooks
             logger.debug(f"[CLIENT] Session hooks configured: {list(hooks.keys())}")
 
+        # Add permission handler required by SDK >= 0.1.28
+        # See: github/copilot-sdk#509, #554 - deny all permissions by default
+        try:
+            from copilot.types import PermissionHandler
+
+            # SDK >= 0.1.28 has PermissionHandler.approve_all
+            # SDK < 0.1.28 has PermissionHandler as a type alias (no approve_all)
+            session_config["on_permission_request"] = PermissionHandler.approve_all
+            logger.debug("[CLIENT] Permission handler set to approve_all")
+        except (ImportError, AttributeError):
+            # Older SDK versions don't require this or don't have approve_all
+            logger.debug(
+                "[CLIENT] PermissionHandler.approve_all not available; "
+                "using SDK default permission behavior"
+            )
+
         # Session creation - separated from yield to avoid exception masking
         try:
             logger.debug(

@@ -524,44 +524,73 @@ class TestSdkModelIdFormat:
     @pytest.mark.asyncio
     async def test_snapshot_expected_models_exist(self, live_provider):
         """
-        Snapshot test: Verify expected models still exist.
+        Snapshot test: Detect when SDK model availability changes.
 
-        This acts as an early warning if the SDK removes models.
-        Update this list when new models are added or old ones removed.
+        This test FAILS when models are added or removed, prompting
+        you to update the snapshot. This ensures we notice SDK changes.
+
+        To fix a failure: Update EXPECTED_MODELS and SNAPSHOT_SDK_VERSION
+        to match the current SDK.
         """
-        # Expected models as of 2026-02-08
-        # Update this list when SDK model availability changes
-        # NOTE: Do NOT include hidden models (e.g., claude-opus-4.6)
-        # that work when specified directly but are not returned by
-        # list_models(). See SDK-THINKING-MODELS-INVESTIGATION.md.
+        # ═══════════════════════════════════════════════════════════════════════
+        # MODEL SNAPSHOT — Update when SDK model list changes
+        # ═══════════════════════════════════════════════════════════════════════
+        SNAPSHOT_SDK_VERSION = "0.1.28"
         EXPECTED_MODELS = {
             # Claude models
+            "claude-haiku-4.5",
             "claude-opus-4.5",
+            "claude-opus-4.6",
+            "claude-opus-4.6-1m",
+            "claude-opus-4.6-fast",
+            "claude-sonnet-4",
             "claude-sonnet-4.5",
+            "claude-sonnet-4.6",
+            # Gemini models
+            "gemini-3-pro-preview",
             # GPT models
-            "gpt-5",
+            "gpt-4.1",
+            "gpt-5-mini",
             "gpt-5.1",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5.2",
+            "gpt-5.2-codex",
+            "gpt-5.3-codex",
         }
 
         models = await live_provider.list_models()
         model_ids = {m.id for m in models}
 
         missing = EXPECTED_MODELS - model_ids
+        added = model_ids - EXPECTED_MODELS
 
-        print(f"\nExpected models: {sorted(EXPECTED_MODELS)}")
-        print(f"SDK models: {sorted(model_ids)}")
+        print(f"\nSnapshot SDK version: {SNAPSHOT_SDK_VERSION}")
+        print(f"Expected models ({len(EXPECTED_MODELS)}): {sorted(EXPECTED_MODELS)}")
+        print(f"Current models ({len(model_ids)}): {sorted(model_ids)}")
 
-        if missing:
-            print(f"WARNING: Missing expected models: {missing}")
-
-        # Warn but don't fail - models come and go
-        # This test is informational
-        for expected in EXPECTED_MODELS:
-            if expected not in model_ids:
-                pytest.skip(
-                    f"Model '{expected}' no longer in SDK. "
-                    "Update EXPECTED_MODELS if this is permanent."
-                )
+        if missing or added:
+            diff_msg = (
+                f"\n{'=' * 60}\n"
+                f"MODEL SNAPSHOT MISMATCH\n"
+                f"{'=' * 60}\n"
+                f"Snapshot was taken against SDK {SNAPSHOT_SDK_VERSION}\n\n"
+            )
+            if missing:
+                diff_msg += "REMOVED models (in snapshot but not in SDK):\n"
+                for m in sorted(missing):
+                    diff_msg += f"  - {m}\n"
+            if added:
+                diff_msg += "ADDED models (in SDK but not in snapshot):\n"
+                for m in sorted(added):
+                    diff_msg += f"  + {m}\n"
+            diff_msg += (
+                f"\nTo fix: Update EXPECTED_MODELS and SNAPSHOT_SDK_VERSION "
+                f"in this test to match current SDK.\n"
+                f"{'=' * 60}"
+            )
+            pytest.fail(diff_msg)
 
     @pytest.mark.asyncio
     async def test_model_naming_utilities_work_with_live_sdk(self, live_provider):
