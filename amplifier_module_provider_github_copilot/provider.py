@@ -966,6 +966,9 @@ class CopilotSdkProvider:
                 self._error_count += 1
                 rate_limit_err = detect_rate_limit_error(str(e))
                 if rate_limit_err is not None:
+                    logger.info(
+                        f"[PROVIDER] Catch-all detected rate-limit in unexpected error: {e}"
+                    )
                     retryable = True
                     if (
                         rate_limit_err.retry_after

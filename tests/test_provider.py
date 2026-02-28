@@ -4139,6 +4139,26 @@ class TestErrorTranslation:
             assert exc_info.value.__cause__ is raw_err
 
     @pytest.mark.asyncio
+    async def test_catch_all_rate_limit_fail_fast_when_retry_after_exceeds_max_delay(
+        self, provider
+    ):
+        """Catch-all rate-limit with retry_after > max_delay -> retryable=False (fail-fast)."""
+        # max_delay defaults to 60.0; use retry_after=120 to exceed it
+        raw_err = RuntimeError("upstream returned 429 too many requests, retry after 120")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(raw_err),
+        ):
+            with pytest.raises(KernelRateLimitError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retry_after == 120.0
+            assert exc_info.value.retryable is False
+            assert exc_info.value.__cause__ is raw_err
+
+    @pytest.mark.asyncio
     async def test_catch_all_non_rate_limit_still_generic(self, provider):
         """Catch-all non-rate-limit RuntimeError -> KernelLLMError (not KernelRateLimitError)."""
         raw_err = RuntimeError("Something totally unexpected")
