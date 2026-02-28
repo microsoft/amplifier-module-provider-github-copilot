@@ -4124,6 +4124,7 @@ class TestErrorTranslation:
     @pytest.mark.asyncio
     async def test_catch_all_detects_rate_limit_in_unexpected_error(self, provider):
         """Catch-all detects rate-limit pattern in raw RuntimeError -> KernelRateLimitError."""
+        # retry_after=45 < max_delay=60 → retryable stays True
         raw_err = RuntimeError("upstream returned 429 too many requests, retry after 45")
 
         with patch.object(
@@ -4160,7 +4161,12 @@ class TestErrorTranslation:
 
     @pytest.mark.asyncio
     async def test_catch_all_non_rate_limit_still_generic(self, provider):
-        """Catch-all non-rate-limit RuntimeError -> KernelLLMError (not KernelRateLimitError)."""
+        """Catch-all non-rate-limit RuntimeError -> KernelLLMError (not KernelRateLimitError).
+
+        Intentionally overlaps with test_unexpected_error_translated (which also
+        uses a non-rate-limit RuntimeError) — the distinguishing value here is
+        the exact-type assertion confirming no false-positive KernelRateLimitError.
+        """
         raw_err = RuntimeError("Something totally unexpected")
 
         with patch.object(
