@@ -20,6 +20,8 @@ SFI Compliance:
 
 from __future__ import annotations
 
+import re
+
 
 class CopilotProviderError(Exception):
     """
@@ -218,3 +220,46 @@ class CopilotAbortError(CopilotProviderError):
     """
 
     pass
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit detection helper
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT_PATTERNS: tuple[str, ...] = (
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "too many requests",
+    "429",
+    "quota exceeded",
+    "throttl",
+)
+
+_RETRY_AFTER_RE: re.Pattern[str] = re.compile(
+    r"retry[\s_-]*after[\s:=]*(\d+(?:\.\d+)?)", re.IGNORECASE
+)
+
+
+def detect_rate_limit_error(error_message: str) -> CopilotRateLimitError | None:
+    """Examine *error_message* and return a ``CopilotRateLimitError`` if it
+    looks like a rate-limit error, or ``None`` otherwise.
+
+    The check is case-insensitive.  When a ``retry after <N>`` value is
+    found in the message the returned error's ``retry_after`` attribute is
+    populated; otherwise it is ``None``.
+    """
+    if not error_message:
+        return None
+
+    lower = error_message.lower()
+
+    if not any(pattern in lower for pattern in _RATE_LIMIT_PATTERNS):
+        return None
+
+    retry_after: float | None = None
+    match = _RETRY_AFTER_RE.search(error_message)
+    if match:
+        retry_after = float(match.group(1))
+
+    return CopilotRateLimitError(retry_after=retry_after, message=error_message)
