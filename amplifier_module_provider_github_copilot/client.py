@@ -493,7 +493,10 @@ class CopilotClientWrapper:
             logger.debug("[CLIENT] Permission handler set to approve_all")
         except (ImportError, AttributeError):
             # Older SDK versions don't require this or don't have approve_all
-            pass
+            logger.debug(
+                "[CLIENT] PermissionHandler.approve_all not available; "
+                "using SDK default permission behavior"
+            )
 
         # Session creation - separated from yield to avoid exception masking
         try:
