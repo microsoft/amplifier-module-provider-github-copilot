@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import OrderedDict
 from typing import Any
@@ -1009,6 +1010,74 @@ class CopilotSdkProvider:
         outer_start = time.time()
         response = await retry_with_backoff(_do_complete, self._retry_config, on_retry=_on_retry)
         elapsed_ms = int((time.time() - outer_start) * 1000)
+
+        # ── Fix 2: Defensive detection of fake tool calls ──────────────
+        # When the LLM writes tool calls as plain text instead of issuing
+        # structured tool_requests, the orchestrator would display fake
+        # results that were never actually executed.  Detect this and
+        # retry with a correction message (up to 2 times).
+        _FAKE_TOOL_CALL_RE = re.compile(
+            r"\[Tool Call:\s*\w+\("       # [Tool Call: name(
+            r"|Tool Result \(\w+\):"      # Tool Result (name):
+            r"|<tool_used\s+name="        # <tool_used name=  (XML format mimicked)
+        )
+        _MAX_FAKE_TC_RETRIES = 2
+
+        if request_tools and not response.tool_calls:
+            # Extract all text from content blocks
+            response_text = ""
+            for block in response.content or []:
+                if hasattr(block, "text"):
+                    response_text += block.text
+
+            fake_retry = 0
+            while (
+                _FAKE_TOOL_CALL_RE.search(response_text)
+                and fake_retry < _MAX_FAKE_TC_RETRIES
+            ):
+                fake_retry += 1
+                logger.warning(
+                    f"[PROVIDER] Detected fake tool call text in response "
+                    f"(retry {fake_retry}/{_MAX_FAKE_TC_RETRIES}). "
+                    f"Re-prompting LLM to use structured tool calls."
+                )
+                await self._emit_event(
+                    "provider:fake_tool_retry",
+                    {
+                        "provider": self.name,
+                        "model": model,
+                        "retry": fake_retry,
+                    },
+                )
+
+                # Append a correction hint to the messages and re-complete
+                correction_msg = {
+                    "role": "user",
+                    "content": (
+                        "IMPORTANT: You just wrote tool calls as plain text "
+                        "instead of invoking them. That text was discarded. "
+                        "You MUST use the structured tool calling mechanism "
+                        "provided by the system — do NOT write tool names, "
+                        "arguments, or results as text. Retry now using real "
+                        "tool calls."
+                    ),
+                }
+                messages.append(correction_msg)
+                prompt = convert_messages_to_prompt(messages)
+
+                response = await retry_with_backoff(
+                    _do_complete, self._retry_config, on_retry=_on_retry
+                )
+
+                # Re-check text
+                if response.tool_calls:
+                    break
+                response_text = ""
+                for block in response.content or []:
+                    if hasattr(block, "text"):
+                        response_text += block.text
+
+            elapsed_ms = int((time.time() - outer_start) * 1000)
 
         if self._debug:
             content_preview = self._truncate(str(response.content))
