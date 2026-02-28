@@ -15,6 +15,7 @@ from amplifier_module_provider_github_copilot.exceptions import (
     CopilotRateLimitError,
     CopilotSessionError,
     CopilotTimeoutError,
+    detect_rate_limit_error,
 )
 
 
@@ -182,3 +183,92 @@ class TestExceptionCatchPatterns:
             assert e.retry_after == 5.0
         except CopilotProviderError:
             pytest.fail("Should have been caught by specific exception")
+
+
+class TestRateLimitDetection:
+    """Tests for detect_rate_limit_error() helper function."""
+
+    def test_normal_error_returns_none(self):
+        """Non-rate-limit error messages should return None."""
+        result = detect_rate_limit_error("Connection refused")
+        assert result is None
+
+    def test_empty_string_returns_none(self):
+        """Empty string should return None."""
+        result = detect_rate_limit_error("")
+        assert result is None
+
+    def test_detects_rate_limit_phrase(self):
+        """Should detect 'rate limit' phrase."""
+        result = detect_rate_limit_error("You have exceeded the rate limit")
+        assert isinstance(result, CopilotRateLimitError)
+
+    def test_detects_too_many_requests(self):
+        """Should detect 'too many requests' phrase."""
+        result = detect_rate_limit_error("Error: too many requests")
+        assert isinstance(result, CopilotRateLimitError)
+
+    def test_detects_429_status_code(self):
+        """Should detect '429' status code."""
+        result = detect_rate_limit_error("HTTP 429 response")
+        assert isinstance(result, CopilotRateLimitError)
+
+    @pytest.mark.parametrize(
+        "msg",
+        ["Request throttled", "Throttling in effect", "throttle limit"],
+    )
+    def test_detects_throttle_variants(self, msg):
+        """Should detect 'throttl' variants (throttle, throttled, throttling)."""
+        result = detect_rate_limit_error(msg)
+        assert isinstance(result, CopilotRateLimitError)
+
+    def test_detects_quota_exceeded(self):
+        """Should detect 'quota exceeded' phrase."""
+        result = detect_rate_limit_error("API quota exceeded for project")
+        assert isinstance(result, CopilotRateLimitError)
+
+    def test_case_insensitivity(self):
+        """Detection should be case-insensitive."""
+        result = detect_rate_limit_error("RATE LIMIT exceeded")
+        assert isinstance(result, CopilotRateLimitError)
+
+    def test_extracts_retry_after_integer(self):
+        """Should extract integer retry_after seconds."""
+        result = detect_rate_limit_error("Rate limited. Retry after 30 seconds")
+        assert isinstance(result, CopilotRateLimitError)
+        assert result.retry_after == 30.0
+
+    def test_extracts_retry_after_float(self):
+        """Should extract float retry_after seconds."""
+        result = detect_rate_limit_error("Rate limited. retry-after: 2.5")
+        assert isinstance(result, CopilotRateLimitError)
+        assert result.retry_after == 2.5
+
+    def test_retry_after_none_when_absent(self):
+        """retry_after should be None when no retry info in message."""
+        result = detect_rate_limit_error("rate limit exceeded")
+        assert isinstance(result, CopilotRateLimitError)
+        assert result.retry_after is None
+
+    def test_preserves_original_message(self):
+        """Error message should contain the original message text."""
+        original = "rate limit exceeded, please slow down"
+        result = detect_rate_limit_error(original)
+        assert isinstance(result, CopilotRateLimitError)
+        assert original in str(result)
+
+    def test_extracts_retry_after_equals_syntax(self):
+        """Should extract retry_after from 'Retry_After=60' syntax."""
+        result = detect_rate_limit_error("rate_limit exceeded. Retry_After=60")
+        assert isinstance(result, CopilotRateLimitError)
+        assert result.retry_after == 60.0
+
+    def test_no_false_positive_on_limit_alone(self):
+        """Should NOT match 'limit' alone without 'rate'."""
+        result = detect_rate_limit_error("You have reached the limit")
+        assert result is None
+
+    def test_no_false_positive_on_rate_alone(self):
+        """Should NOT match 'rate' alone without 'limit'."""
+        result = detect_rate_limit_error("The rate of requests is high")
+        assert result is None

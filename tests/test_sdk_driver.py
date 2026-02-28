@@ -28,7 +28,10 @@ from copilot.generated.session_events import SessionEventType
 from amplifier_module_provider_github_copilot._constants import (
     SDK_MAX_TURNS_HARD_LIMIT,
 )
-from amplifier_module_provider_github_copilot.exceptions import CopilotSdkLoopError
+from amplifier_module_provider_github_copilot.exceptions import (
+    CopilotRateLimitError,
+    CopilotSdkLoopError,
+)
 from amplifier_module_provider_github_copilot.sdk_driver import (
     CapturedToolCall,
     CircuitBreaker,
@@ -1255,3 +1258,71 @@ class TestSdkEventHandlerSessionIdleCapture:
 
         assert handler._idle_event.is_set()
         assert handler._capture_event.is_set()
+
+
+class TestSessionErrorRateLimitDetection:
+    """Tests for rate-limit detection in SESSION_ERROR handler."""
+
+    def test_rate_limit_session_error_stores_copilot_rate_limit_error(self):
+        """SESSION_ERROR with rate-limit message stores CopilotRateLimitError with retry_after=60.0."""
+        handler = SdkEventHandler(max_turns=5)
+
+        data = Mock()
+        data.message = "Rate limit exceeded. retry after 60"
+        handler.on_event(_make_mock_event(SessionEventType.SESSION_ERROR, data))
+
+        assert isinstance(handler._error_event, CopilotRateLimitError)
+        assert handler._error_event.retry_after == 60.0
+
+    def test_non_rate_limit_session_error_stores_generic_exception(self):
+        """SESSION_ERROR without rate-limit message stores generic Exception."""
+        handler = SdkEventHandler(max_turns=5)
+
+        data = Mock()
+        data.message = "Internal server error"
+        handler.on_event(_make_mock_event(SessionEventType.SESSION_ERROR, data))
+
+        assert isinstance(handler._error_event, Exception)
+        assert not isinstance(handler._error_event, CopilotRateLimitError)
+        assert "Internal server error" in str(handler._error_event)
+
+    def test_rate_limit_session_error_unblocks_idle_and_capture(self):
+        """Rate-limit SESSION_ERROR still unblocks idle and capture events."""
+        handler = SdkEventHandler(max_turns=5)
+
+        assert not handler._idle_event.is_set()
+        assert not handler._capture_event.is_set()
+
+        data = Mock()
+        data.message = "Rate limit exceeded"
+        handler.on_event(_make_mock_event(SessionEventType.SESSION_ERROR, data))
+
+        assert handler._idle_event.is_set()
+        assert handler._capture_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_wait_raises_copilot_rate_limit_error(self):
+        """wait_for_capture_or_idle raises CopilotRateLimitError for rate-limit SESSION_ERROR."""
+        handler = SdkEventHandler(max_turns=5)
+
+        async def fire_rate_limit_error():
+            await asyncio.sleep(0.01)
+            data = Mock()
+            data.message = "Rate limit exceeded"
+            handler.on_event(_make_mock_event(SessionEventType.SESSION_ERROR, data))
+
+        asyncio.create_task(fire_rate_limit_error())
+
+        with pytest.raises(CopilotRateLimitError):
+            await handler.wait_for_capture_or_idle(timeout=2.0)
+
+    def test_rate_limit_session_error_extracts_retry_after(self):
+        """SESSION_ERROR with retry-after header extracts retry_after=15.5."""
+        handler = SdkEventHandler(max_turns=5)
+
+        data = Mock()
+        data.message = "Too many requests. Retry-After: 15.5"
+        handler.on_event(_make_mock_event(SessionEventType.SESSION_ERROR, data))
+
+        assert isinstance(handler._error_event, CopilotRateLimitError)
+        assert handler._error_event.retry_after == 15.5
