@@ -77,7 +77,7 @@ class TestConvertMessagesToPrompt:
             }
         ]
         result = convert_messages_to_prompt(messages)
-        assert "Tool Result (read_file): file contents here" in result
+        assert '<tool_result name="read_file">file contents here</tool_result>' in result
 
     def test_assistant_with_tool_calls(self):
         """Should include tool call information in assistant message."""
@@ -98,7 +98,7 @@ class TestConvertMessagesToPrompt:
 
         assert "Assistant:" in result
         assert "Let me check that." in result
-        assert "[Tool Call: read_file" in result
+        assert '<tool_used name="read_file">' in result
 
     def test_list_content_blocks(self):
         """Should handle OpenAI-style list content blocks."""
@@ -286,7 +286,7 @@ class TestEdgeCases:
         ]
         result = convert_messages_to_prompt(messages)
 
-        assert "[Tool Call: search" in result
+        assert '<tool_used name="search">' in result
         # Arguments should be parsed and re-serialized
         assert "python" in result
 
@@ -308,7 +308,7 @@ class TestEdgeCases:
         result = convert_messages_to_prompt(messages)
 
         # Should not crash, include the tool call somehow
-        assert "[Tool Call: custom" in result
+        assert '<tool_used name="custom">' in result
 
     def test_assistant_with_tool_calls_no_content(self):
         """Should handle assistant message with tool calls but no text."""
@@ -328,7 +328,7 @@ class TestEdgeCases:
         result = convert_messages_to_prompt(messages)
 
         assert "Assistant:" in result
-        assert "[Tool Call: read_file" in result
+        assert '<tool_used name="read_file">' in result
 
     def test_unknown_role_message(self):
         """Should handle unknown message roles gracefully."""
@@ -381,7 +381,7 @@ class TestEdgeCases:
         ]
         result = convert_messages_to_prompt(messages)
 
-        assert "Tool Result" in result
+        assert "<tool_result" in result
         assert "result content" in result
 
     def test_tool_call_with_function_format(self):
@@ -403,7 +403,7 @@ class TestEdgeCases:
         ]
         result = convert_messages_to_prompt(messages)
 
-        assert "[Tool Call: get_weather" in result
+        assert '<tool_used name="get_weather">' in result
         assert "Seattle" in result
 
 
@@ -553,7 +553,7 @@ class TestFunctionRoleHandling:
         result = convert_messages_to_prompt(messages)
 
         # Should be formatted as tool result for consistency
-        assert "Tool Result (get_weather):" in result
+        assert '<tool_result name="get_weather">' in result
         assert "72 degrees, sunny" in result
 
     def test_function_message_no_name_fallback(self):
@@ -562,7 +562,7 @@ class TestFunctionRoleHandling:
         result = convert_messages_to_prompt(messages)
 
         # Should use 'function' as fallback name
-        assert "Tool Result (function):" in result
+        assert '<tool_result name="function">' in result
         assert "result content" in result
 
     def test_mixed_tool_and_function_roles(self):
@@ -574,8 +574,8 @@ class TestFunctionRoleHandling:
         result = convert_messages_to_prompt(messages)
 
         # Both should appear as Tool Results
-        assert "Tool Result (read_file): file A contents" in result
-        assert "Tool Result (write_file): file B written" in result
+        assert '<tool_result name="read_file">file A contents</tool_result>' in result
+        assert '<tool_result name="write_file">file B written</tool_result>' in result
 
 
 class TestAllSixRolesIntegration:
@@ -612,10 +612,10 @@ class TestAllSixRolesIntegration:
 
         # Assistant with tool call
         assert "Assistant:" in result
-        assert "[Tool Call: get_time" in result
+        assert '<tool_used name="get_time">' in result
 
         # Tool result
-        assert "Tool Result (get_time): 10:30 AM" in result
+        assert '<tool_result name="get_time">10:30 AM</tool_result>' in result
 
         # Function as legacy tool result
-        assert "Tool Result (legacy_func): legacy result" in result
+        assert '<tool_result name="legacy_func">legacy result</tool_result>' in result

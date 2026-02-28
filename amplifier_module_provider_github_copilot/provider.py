@@ -1012,11 +1012,15 @@ class CopilotSdkProvider:
         elapsed_ms = int((time.time() - outer_start) * 1000)
 
         # ── Fix 2: Defensive detection of fake tool calls ──────────────
-        # When the LLM writes "[Tool Call: ...]" as plain text instead of
-        # issuing structured tool_requests, the orchestrator would display
-        # fake results that were never actually executed.  Detect this and
+        # When the LLM writes tool calls as plain text instead of issuing
+        # structured tool_requests, the orchestrator would display fake
+        # results that were never actually executed.  Detect this and
         # retry with a correction message (up to 2 times).
-        _FAKE_TOOL_CALL_RE = re.compile(r"\[Tool Call:")
+        _FAKE_TOOL_CALL_RE = re.compile(
+            r"\[Tool Call:\s*\w+\("       # [Tool Call: name(
+            r"|Tool Result \(\w+\):"      # Tool Result (name):
+            r"|<tool_used\s+name="        # <tool_used name=  (XML format mimicked)
+        )
         _MAX_FAKE_TC_RETRIES = 2
 
         if request_tools and not response.tool_calls:
@@ -1050,10 +1054,12 @@ class CopilotSdkProvider:
                 correction_msg = {
                     "role": "user",
                     "content": (
-                        "You wrote tool calls as plain text instead of using "
-                        "the actual tool calling mechanism. Do NOT write "
-                        "'[Tool Call: ...]' as text. Use the structured tool "
-                        "calling API to invoke tools."
+                        "IMPORTANT: You just wrote tool calls as plain text "
+                        "instead of invoking them. That text was discarded. "
+                        "You MUST use the structured tool calling mechanism "
+                        "provided by the system — do NOT write tool names, "
+                        "arguments, or results as text. Retry now using real "
+                        "tool calls."
                     ),
                 }
                 messages.append(correction_msg)

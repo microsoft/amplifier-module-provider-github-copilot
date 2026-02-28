@@ -113,7 +113,9 @@ def convert_messages_to_prompt(messages: list[dict[str, Any]]) -> str:
                         )
 
             if tool_calls:
-                # Include tool call information
+                # Include tool call history using XML tags that are clearly marked as
+                # past actions. Do NOT use [Tool Call: ...] format — the model mimics it
+                # and writes fake tool calls as text instead of using structured calling.
                 tool_parts = []
                 for tc in tool_calls:
                     tool_name = tc.get("name", tc.get("function", {}).get("name", "unknown"))
@@ -123,7 +125,9 @@ def convert_messages_to_prompt(messages: list[dict[str, Any]]) -> str:
                             tool_args = json.loads(tool_args)
                         except json.JSONDecodeError:
                             pass
-                    tool_parts.append(f"[Tool Call: {tool_name}({json.dumps(tool_args)})]")
+                    tool_parts.append(
+                        f"<tool_used name=\"{tool_name}\">{json.dumps(tool_args)}</tool_used>"
+                    )
                 if assistant_text:
                     parts.append(f"Assistant: {assistant_text}\n" + "\n".join(tool_parts))
                 else:
@@ -133,12 +137,12 @@ def convert_messages_to_prompt(messages: list[dict[str, Any]]) -> str:
         elif role == "tool":
             # Tool results from Amplifier's tool execution
             tool_name = msg.get("tool_name", msg.get("name", "tool"))
-            parts.append(f"Tool Result ({tool_name}): {content}")
+            parts.append(f"<tool_result name=\"{tool_name}\">{content}</tool_result>")
         elif role == "function":
             # Legacy function role (deprecated by OpenAI in favor of 'tool')
             # Handle as alias for tool result for backward compatibility
             func_name = msg.get("name", "function")
-            parts.append(f"Tool Result ({func_name}): {content}")
+            parts.append(f"<tool_result name=\"{func_name}\">{content}</tool_result>")
         else:
             # Unknown role, treat as user
             logger.warning(f"[CONVERTER] Unknown message role: {role}")
@@ -175,17 +179,20 @@ def _extract_content(msg: dict[str, Any]) -> str:
                 text_parts.append(block)
             elif isinstance(block, dict):
                 block_type = block.get("type", "")
-                if block_type in ("tool_call", "tool_use"):
-                    # Skip tool call blocks — they are not text content
+                if block_type in ("tool_call", "tool_use", "tool_result"):
+                    # Skip tool call/result blocks — they are not text content
                     # and must not leak into the serialized prompt
                     continue
                 if block_type == "text":
                     text_parts.append(block.get("text", ""))
                 elif block_type == "image_url":
                     text_parts.append("[Image]")
+                elif block_type == "thinking":
+                    continue  # thinking blocks are not user-visible text
                 else:
-                    # Unknown block type
-                    text_parts.append(str(block.get("text", block.get("content", ""))))
+                    text_val = block.get("text", block.get("content", ""))
+                    if text_val:
+                        text_parts.append(str(text_val))
         return "\n".join(text_parts)
 
     # Fallback
