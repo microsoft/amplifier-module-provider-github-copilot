@@ -4121,6 +4121,41 @@ class TestErrorTranslation:
 
             assert provider._error_count == 1
 
+    @pytest.mark.asyncio
+    async def test_catch_all_detects_rate_limit_in_unexpected_error(self, provider):
+        """Catch-all detects rate-limit pattern in raw RuntimeError -> KernelRateLimitError."""
+        raw_err = RuntimeError("upstream returned 429 too many requests, retry after 45")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(raw_err),
+        ):
+            with pytest.raises(KernelRateLimitError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            assert exc_info.value.retry_after == 45.0
+            assert exc_info.value.retryable is True
+            assert exc_info.value.__cause__ is raw_err
+
+    @pytest.mark.asyncio
+    async def test_catch_all_non_rate_limit_still_generic(self, provider):
+        """Catch-all non-rate-limit RuntimeError -> KernelLLMError (not KernelRateLimitError)."""
+        raw_err = RuntimeError("Something totally unexpected")
+
+        with patch.object(
+            CopilotClientWrapper,
+            "create_session",
+            self._make_raising_create_session(raw_err),
+        ):
+            with pytest.raises(KernelLLMError) as exc_info:
+                await provider.complete(self._make_mock_request())
+
+            # Must be KernelLLMError, NOT KernelRateLimitError
+            assert type(exc_info.value) is KernelLLMError
+            assert exc_info.value.retryable is True
+            assert exc_info.value.__cause__ is raw_err
+
 
 class TestRetryIntegration:
     """Tests for retry_with_backoff integration in complete()."""

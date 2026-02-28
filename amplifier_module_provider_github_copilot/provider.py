@@ -95,6 +95,7 @@ from .exceptions import (
     CopilotSdkLoopError,
     CopilotSessionError,
     CopilotTimeoutError,
+    detect_rate_limit_error,
 )
 from .model_cache import (
     CacheEntry,
@@ -963,6 +964,20 @@ class CopilotSdkProvider:
                 raise KernelLLMError(str(e), provider=self.name, retryable=True) from e
             except Exception as e:
                 self._error_count += 1
+                rate_limit_err = detect_rate_limit_error(str(e))
+                if rate_limit_err is not None:
+                    retryable = True
+                    if (
+                        rate_limit_err.retry_after
+                        and rate_limit_err.retry_after > self._retry_config.max_delay
+                    ):
+                        retryable = False
+                    raise KernelRateLimitError(
+                        str(e),
+                        provider=self.name,
+                        retry_after=rate_limit_err.retry_after,
+                        retryable=retryable,
+                    ) from e
                 raise KernelLLMError(
                     f"Unexpected error: {e}", provider=self.name, retryable=True
                 ) from e
