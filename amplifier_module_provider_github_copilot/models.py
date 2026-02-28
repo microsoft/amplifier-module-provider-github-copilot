@@ -28,6 +28,46 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Copilot cost tier mapping based on premium request multipliers.
+# Copilot doesn't charge per-token; cost_tier expresses relative expense.
+# Source: GitHub Copilot premium request multiplier documentation.
+# Key: substring pattern matched against model ID (lowercased).
+# Order matters: first match wins. More specific patterns come first.
+_COPILOT_COST_TIER_PATTERNS: list[tuple[str, str]] = [
+    # 30× — extreme (fast-mode premium variants)
+    ("opus-4.6-fast", "extreme"),
+    # 3× — high (Opus family)
+    ("-opus", "high"),
+    # 1× — medium (baseline premium models)
+    ("-sonnet", "medium"),
+    ("gpt-5.1", "medium"),
+    ("gpt-5.2", "medium"),
+    ("-codex", "medium"),
+    ("gemini-2.5-pro", "medium"),
+    # 0.25-0.33× — low (efficient models)
+    ("-haiku", "low"),
+    ("gemini-flash", "low"),
+    ("codex-mini", "low"),
+    ("grok", "low"),
+    # 0× — free (included models)
+    ("gpt-4.1", "free"),
+    ("gpt-4o", "free"),
+    ("gpt-5-mini", "free"),
+    ("raptor-mini", "free"),
+]
+
+# Default tier when no pattern matches
+_COPILOT_DEFAULT_COST_TIER = "medium"
+
+
+def _copilot_cost_tier(model_id: str) -> str:
+    """Determine the cost tier for a Copilot model based on its ID."""
+    mid = model_id.lower()
+    for pattern, tier in _COPILOT_COST_TIER_PATTERNS:
+        if pattern in mid:
+            return tier
+    return _COPILOT_DEFAULT_COST_TIER
+
 
 @dataclass(frozen=True)
 class CopilotModelInfo:
@@ -206,6 +246,8 @@ def to_amplifier_model_info(model: CopilotModelInfo) -> ModelInfo:
 
     logger.debug(f"[MODELS] {model.id}: capabilities={capabilities}")
 
+    cost_tier = _copilot_cost_tier(model.id)
+
     result = ModelInfo(
         id=model.id,
         display_name=model.name,
@@ -216,8 +258,14 @@ def to_amplifier_model_info(model: CopilotModelInfo) -> ModelInfo:
             "temperature": 0.7,
             "max_tokens": min(16384, model.max_output_tokens),
         },
+        # Copilot doesn't charge per-token; cost_tier is what matters for routing.
+        cost_per_input_token=None,
+        cost_per_output_token=None,
+        metadata={"cost_tier": cost_tier},
     )
-    logger.debug(f"[MODELS] {model.id}: type={type(result).__name__}, caps={result.capabilities}")
+    logger.debug(
+        f"[MODELS] {model.id}: type={type(result).__name__}, caps={result.capabilities}, cost_tier={cost_tier}"
+    )
     return result
 
 
