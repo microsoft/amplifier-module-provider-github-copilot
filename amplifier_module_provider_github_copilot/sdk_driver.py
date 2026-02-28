@@ -37,7 +37,7 @@ from ._constants import (
     SDK_MAX_TURNS_HARD_LIMIT,
     LoopExitMethod,
 )
-from .exceptions import CopilotSdkLoopError
+from .exceptions import CopilotSdkLoopError, detect_rate_limit_error
 
 logger = logging.getLogger(__name__)
 
@@ -540,7 +540,11 @@ class SdkEventHandler:
         elif event_type == SessionEventType.SESSION_ERROR:
             error_msg = getattr(data, "message", str(data))
             logger.error(f"[SDK_DRIVER] SESSION_ERROR: {error_msg}")
-            self._error_event = Exception(f"Session error: {error_msg}")
+            rate_limit_err = detect_rate_limit_error(error_msg)
+            if rate_limit_err is not None:
+                self._error_event = rate_limit_err
+            else:
+                self._error_event = Exception(f"Session error: {error_msg}")
             self._idle_event.set()
             self._capture_event.set()
 
