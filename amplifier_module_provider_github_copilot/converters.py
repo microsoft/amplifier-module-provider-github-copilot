@@ -93,6 +93,25 @@ def convert_messages_to_prompt(messages: list[dict[str, Any]]) -> str:
             assistant_text = content
             tool_calls = msg.get("tool_calls", [])
 
+            # If tool_calls key is missing/empty but content blocks contain
+            # tool_call/tool_use entries, extract them so conversation history
+            # is correctly serialized (prevents lost tool context on replay).
+            if not tool_calls and isinstance(msg.get("content"), list):
+                for block in msg["content"]:
+                    if isinstance(block, dict) and block.get("type") in (
+                        "tool_call",
+                        "tool_use",
+                    ):
+                        tool_calls.append(
+                            {
+                                "name": block.get("name", "unknown"),
+                                "arguments": block.get(
+                                    "input", block.get("arguments", {})
+                                ),
+                                "id": block.get("id", ""),
+                            }
+                        )
+
             if tool_calls:
                 # Include tool call information
                 tool_parts = []
@@ -155,9 +174,14 @@ def _extract_content(msg: dict[str, Any]) -> str:
             if isinstance(block, str):
                 text_parts.append(block)
             elif isinstance(block, dict):
-                if block.get("type") == "text":
+                block_type = block.get("type", "")
+                if block_type in ("tool_call", "tool_use"):
+                    # Skip tool call blocks — they are not text content
+                    # and must not leak into the serialized prompt
+                    continue
+                if block_type == "text":
                     text_parts.append(block.get("text", ""))
-                elif block.get("type") == "image_url":
+                elif block_type == "image_url":
                     text_parts.append("[Image]")
                 else:
                     # Unknown block type
