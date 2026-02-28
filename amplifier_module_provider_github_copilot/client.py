@@ -30,6 +30,7 @@ from .exceptions import (
     CopilotConnectionError,
     CopilotModelNotFoundError,
     CopilotProviderError,
+    CopilotRateLimitError,  # noqa: F401
     CopilotSessionError,
     CopilotTimeoutError,
     detect_rate_limit_error,
