@@ -184,6 +184,7 @@ class CopilotSdkProvider:
         """
         config = config or {}
         self._config = config
+        self.config = config  # Public access for orchestrator provider selection
         self._coordinator = coordinator
         self.coordinator = coordinator  # Also expose as public attribute
 
@@ -196,6 +197,8 @@ class CopilotSdkProvider:
         # Core configuration
         # Runtime model (from provider_preferences) > bundle default > code default
         self._model = config.get("model", config.get("default_model", get_default_model()))
+        self.default_model = self._model  # Public access for orchestrator/display
+        self.priority = config.get("priority", 100)  # For orchestrator provider selection
         # Dual timeout configuration (like OpenAI provider pattern)
         # - timeout: for regular models (default 5 min)
         # - thinking_timeout: for extended thinking models (default 30 min)
