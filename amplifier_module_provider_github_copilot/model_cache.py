@@ -65,6 +65,7 @@ BUNDLED_MODEL_LIMITS: dict[str, tuple[int, int]] = {
     "claude-opus-4.6-fast": (200000, 32000),
     "claude-sonnet-4": (216000, 88000),
     "claude-sonnet-4.5": (200000, 32000),
+    "claude-sonnet-4.6": (200000, 72000),
     # NOTE: SDK returns max_output=0 for gemini - likely SDK bug.
     # Using 65536 as max_output_tokens to keep budget positive.
     "gemini-3-pro-preview": (128000, 65536),
@@ -201,16 +202,12 @@ def load_cache() -> ModelCache | None:
 
         # Validate required fields
         if "models" not in data:
-            logger.warning(
-                "[MODEL_CACHE] Cache file missing 'models' key. "
-                "Treating as corrupted."
-            )
+            logger.warning("[MODEL_CACHE] Cache file missing 'models' key. Treating as corrupted.")
             return None
 
         if "format_version" not in data:
             logger.warning(
-                "[MODEL_CACHE] Cache file missing 'format_version'. "
-                "Treating as corrupted."
+                "[MODEL_CACHE] Cache file missing 'format_version'. Treating as corrupted."
             )
             return None
 
@@ -360,10 +357,7 @@ def write_cache(models: dict[str, CacheEntry], sdk_version: str) -> bool:
             temp_path.unlink(missing_ok=True)
             raise
 
-        logger.info(
-            f"[MODEL_CACHE] Wrote {len(models)} model(s) to cache "
-            f"(SDK v{sdk_version})"
-        )
+        logger.info(f"[MODEL_CACHE] Wrote {len(models)} model(s) to cache (SDK v{sdk_version})")
         return True
 
     except OSError as e:
