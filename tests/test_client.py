@@ -1160,3 +1160,21 @@ class TestRateLimitDetectionInClient:
                     pass
 
             assert exc_info.value.__cause__ is original
+
+
+class TestImportErrorMessagePackageName:
+    """The ImportError handler in ensure_client() must tell the user the correct package name."""
+
+    async def test_import_error_message_says_github_copilot_sdk(self):
+        """ensure_client() ImportError message must contain 'github-copilot-sdk', not 'copilot-sdk'."""
+        wrapper = CopilotClientWrapper(config={}, timeout=60.0)
+
+        with patch(
+            "copilot.CopilotClient",
+            side_effect=ImportError("No module named 'copilot'"),
+        ):
+            with pytest.raises(CopilotConnectionError, match="github-copilot-sdk") as exc_info:
+                await wrapper.ensure_client()
+
+        msg = str(exc_info.value)
+        assert "github-copilot-sdk" in msg  # the CORRECT form

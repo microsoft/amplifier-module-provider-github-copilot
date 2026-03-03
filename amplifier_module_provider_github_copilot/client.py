@@ -287,7 +287,7 @@ class CopilotClientWrapper:
                 raise
             except ImportError as e:
                 raise CopilotConnectionError(
-                    "Copilot SDK not installed. Install with: pip install copilot-sdk"
+                    "Copilot SDK not installed. Install with: pip install github-copilot-sdk"
                 ) from e
             except Exception as e:
                 # Clean up on any error
