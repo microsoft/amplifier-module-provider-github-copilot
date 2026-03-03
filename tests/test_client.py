@@ -1178,3 +1178,83 @@ class TestImportErrorMessagePackageName:
 
         msg = str(exc_info.value)
         assert "github-copilot-sdk" in msg  # the CORRECT form
+
+
+class TestEnsureClientExceptionPassthrough:
+    """CopilotAuthenticationError and CopilotConnectionError must pass through
+    ensure_client() without being re-wrapped by the generic except Exception handler."""
+
+    @pytest.fixture
+    def client_wrapper(self):
+        """Create a fresh CopilotClientWrapper for each test."""
+        return CopilotClientWrapper(config={}, timeout=60.0)
+
+    async def test_auth_error_passes_through_unchanged(self, client_wrapper, mock_copilot_client):
+        """When _verify_authentication raises CopilotAuthenticationError,
+        ensure_client must re-raise the EXACT same exception — not wrap it."""
+        # Make auth fail: get_auth_status returns isAuthenticated=False
+        auth_status = Mock()
+        auth_status.isAuthenticated = False
+        mock_copilot_client.get_auth_status = AsyncMock(return_value=auth_status)
+
+        with patch(
+            "copilot.CopilotClient",
+            return_value=mock_copilot_client,
+        ):
+            with pytest.raises(CopilotAuthenticationError) as exc_info:
+                await client_wrapper.ensure_client()
+
+        # The message must be EXACTLY what _verify_authentication produces —
+        # no "Copilot authentication failed: ..." wrapper around it.
+        msg = str(exc_info.value)
+        assert msg == (
+            "Not authenticated to GitHub Copilot. "
+            "Set GITHUB_TOKEN, run 'gh auth login', "
+            "or run 'amplifier init' to authenticate."
+        ), f"Message was double-wrapped: {msg!r}"
+
+        # The exception must NOT have a __cause__ (it's not a `raise X from e` chain).
+        # If the generic handler caught it, it would set __cause__ via `from e`.
+        assert exc_info.value.__cause__ is None, (
+            "Exception has a __cause__, which means it was re-raised with 'from e' "
+            "by the generic handler instead of passing through directly"
+        )
+
+    async def test_connection_error_passes_through_unchanged(
+        self, client_wrapper, mock_copilot_client
+    ):
+        """When CopilotConnectionError is raised inside the try block,
+        ensure_client must re-raise it unchanged — not wrap it in another CopilotConnectionError."""
+        original_error = CopilotConnectionError("original connection error message")
+
+        # Make client.start() raise CopilotConnectionError.
+        # We raise from start() rather than get_auth_status() because
+        # _verify_authentication() swallows generic exceptions (logs + ignores).
+        # CopilotConnectionError is NOT a CopilotAuthenticationError, so it
+        # would hit the generic except in _verify_authentication and get swallowed.
+        mock_copilot_client.start = AsyncMock(side_effect=original_error)
+
+        with patch(
+            "copilot.CopilotClient",
+            return_value=mock_copilot_client,
+        ):
+            with pytest.raises(CopilotConnectionError) as exc_info:
+                await client_wrapper.ensure_client()
+
+        # The exception must be the EXACT same object — not a new wrapper
+        assert exc_info.value is original_error, (
+            f"Expected the original CopilotConnectionError object, "
+            f"but got a different one with message: {str(exc_info.value)!r}"
+        )
+
+    async def test_generic_exception_still_gets_wrapped(self, client_wrapper, mock_copilot_client):
+        """Exceptions that are NOT CopilotAuthenticationError or CopilotConnectionError
+        must still be caught by the generic handler (existing behavior preserved)."""
+        mock_copilot_client.start = AsyncMock(side_effect=RuntimeError("unexpected kaboom"))
+
+        with patch(
+            "copilot.CopilotClient",
+            return_value=mock_copilot_client,
+        ):
+            with pytest.raises(CopilotConnectionError, match="unexpected kaboom"):
+                await client_wrapper.ensure_client()

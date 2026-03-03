@@ -289,6 +289,10 @@ class CopilotClientWrapper:
                 raise CopilotConnectionError(
                     "Copilot SDK not installed. Install with: pip install github-copilot-sdk"
                 ) from e
+            except CopilotAuthenticationError:
+                raise
+            except CopilotConnectionError:
+                raise
             except Exception as e:
                 # Clean up on any error
                 if client is not None and self._client is None:
