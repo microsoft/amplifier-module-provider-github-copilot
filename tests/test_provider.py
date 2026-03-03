@@ -4206,8 +4206,25 @@ class TestRetryIntegration:
         provider = CopilotSdkProvider(api_key=None, config={}, coordinator=mock_coordinator)
         assert hasattr(provider, "_retry_config")
         assert provider._retry_config.max_retries == 3
-        assert provider._retry_config.min_delay == 1.0
+        assert provider._retry_config.initial_delay == 1.0
         assert provider._retry_config.max_delay == 60.0
+
+    def test_retry_config_uses_rust_field_names(self, mock_coordinator):
+        """RetryConfig construction must use Rust field names without deprecation warnings."""
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", DeprecationWarning)
+            provider = CopilotSdkProvider(api_key=None, config={}, coordinator=mock_coordinator)  # noqa: F841
+        retry_warnings = [
+            w for w in caught
+            if issubclass(w.category, DeprecationWarning)
+            and "deprecated" in str(w.message).lower()
+            and ("min_delay" in str(w.message) or "jitter" in str(w.message))
+        ]
+        assert retry_warnings == [], (
+            f"RetryConfig should use Rust field names (initial_delay, bool jitter), "
+            f"got deprecation warnings: {[str(w.message) for w in retry_warnings]}"
+        )
 
     def test_retry_config_from_provider_config(self, mock_coordinator):
         """Retry config should be customizable via provider config."""
@@ -4217,13 +4234,22 @@ class TestRetryIntegration:
             "max_retries": 5,
             "retry_min_delay": 2.0,
             "retry_max_delay": 120.0,
-            "retry_jitter": 0.3,
+            "retry_jitter": True,
         }
         provider = CopilotSdkProvider(api_key=None, config=config, coordinator=mock_coordinator)
         assert provider._retry_config.max_retries == 5
-        assert provider._retry_config.min_delay == 2.0
+        assert provider._retry_config.initial_delay == 2.0
         assert provider._retry_config.max_delay == 120.0
-        assert provider._retry_config.jitter == 0.3
+        # jitter=bool(True) -> Rust maps to default jitter factor (0.2)
+        assert provider._retry_config.jitter == 0.2
+
+    def test_retry_config_jitter_disabled(self, mock_coordinator):
+        """Retry config jitter can be disabled via bool(False)."""
+        config = {
+            "retry_jitter": False,
+        }
+        provider = CopilotSdkProvider(api_key=None, config=config, coordinator=mock_coordinator)
+        assert provider._retry_config.jitter == 0.0
 
     @pytest.mark.asyncio
     async def test_no_retry_on_non_retryable(self, provider):

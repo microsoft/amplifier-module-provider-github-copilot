@@ -229,9 +229,9 @@ class CopilotSdkProvider:
         # because each Copilot retry creates a new SDK session + subprocess health check)
         self._retry_config = RetryConfig(
             max_retries=int(config.get("max_retries", 3)),
-            min_delay=float(config.get("retry_min_delay", 1.0)),
+            initial_delay=float(config.get("retry_min_delay", 1.0)),
             max_delay=float(config.get("retry_max_delay", 60.0)),
-            jitter=float(config.get("retry_jitter", 0.2)),
+            jitter=bool(config.get("retry_jitter", True)),
         )
 
         # Track tool call IDs that have been repaired with synthetic results.
