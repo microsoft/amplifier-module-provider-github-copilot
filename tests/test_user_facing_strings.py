@@ -14,7 +14,9 @@ See /memories/repo/tdd-gap-user-facing-strings.md for the full analysis.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -164,7 +166,7 @@ class TestLiveValidation:
     """
 
     @pytest.mark.skipif(
-        subprocess.run(["gh", "--version"], capture_output=True).returncode != 0,
+        shutil.which("gh") is None,
         reason="GitHub CLI (gh) not installed",
     )
     def test_gh_auth_command_exists(self) -> None:
@@ -186,11 +188,15 @@ class TestLiveValidation:
         assert "login" in result.stdout.lower(), "'login' subcommand not found in gh auth help"
 
     @pytest.mark.live
+    @pytest.mark.skipif(
+        not os.environ.get("RUN_LIVE_TESTS"),
+        reason="Requires RUN_LIVE_TESTS=1 (makes HTTP request to PyPI)",
+    )
     def test_sdk_package_exists_on_pypi(self) -> None:
         """Verify SDK_PACKAGE_NAME exists on PyPI.
 
         This test makes a real HTTP request to PyPI.
-        Mark with @pytest.mark.live to skip in offline environments.
+        Skipped by default; set RUN_LIVE_TESTS=1 to enable.
         """
         import urllib.error
         import urllib.request

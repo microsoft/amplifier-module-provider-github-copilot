@@ -414,8 +414,9 @@ async def run_scenario(model: str, turns: int, prompt: str, tag: str) -> dict[st
         messages.append({"role": "user", "content": prompt})
 
         # Check how many tool call patterns exist in the serialized prompt
+        # Note: convert_messages_to_prompt() uses <tool_used>/<tool_result> XML tags
         serialized_prompt = convert_messages_to_prompt(messages)
-        tc_text_count = len(re.findall(r"\[Tool Call:", serialized_prompt))
+        tc_text_count = len(re.findall(r"<tool_(?:used|result)\b", serialized_prompt))
 
         request = Mock()
         request.messages = messages
