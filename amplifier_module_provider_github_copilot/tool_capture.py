@@ -69,14 +69,13 @@ What this replaces:
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def _noop_tool_handler(args: Any) -> str:
+def _noop_tool_handler(args: Any) -> dict[str, str]:
     """
     No-op handler for SDK Tool objects.
 
@@ -89,9 +88,9 @@ def _noop_tool_handler(args: Any) -> str:
         args: Tool arguments (ignored)
 
     Returns:
-        JSON error message
+        ToolResult dict with textResultForLlm (SDK contract: ToolHandler -> ToolResult)
     """
-    return json.dumps({"error": "Tool execution denied by provider policy"})
+    return {"textResultForLlm": "error: Tool execution denied by provider policy"}
 
 
 def convert_tools_for_sdk(tool_specs: list[Any]) -> list[Any]:

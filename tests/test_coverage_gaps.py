@@ -107,6 +107,26 @@ class TestExtractContentUnknownBlockType:
         assert "Custom text" in result
         assert "[Image]" in result
 
+    def test_thinking_block_type_is_skipped(self):
+        """Thinking blocks should be skipped (not user-visible).
+
+        This covers line 196 (thinking block handling).
+        """
+        from amplifier_module_provider_github_copilot.converters import _extract_content
+
+        msg = {
+            "content": [
+                {"type": "text", "text": "Visible text"},
+                {"type": "thinking", "thinking": "Internal reasoning..."},
+                {"type": "text", "text": "More visible text"},
+            ]
+        }
+        result = _extract_content(msg)
+        # Thinking content should NOT appear in output
+        assert "Internal reasoning" not in result
+        assert "Visible text" in result
+        assert "More visible text" in result
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # converters.py — _extract_tool_request failure path (lines 332-334)
@@ -182,6 +202,21 @@ class TestFindDashVersionPairYearSkip:
         result = _find_dash_version_pair("claude-opus-4-5")
         assert result == ("4-5", "4.5")
 
+    def test_year_followed_by_two_digit_parts_skips_both(self):
+        """Date patterns like '2024-01-02' should trigger year-skip continue.
+
+        This covers line 322: the continue inside the year-skip check.
+        Pattern: model-2024-01-02 has [model, 2024, 01, 02]
+        At i=2 (a=01, b=02), we check if previous part (2024) is 4-digit year.
+        """
+        from amplifier_module_provider_github_copilot.model_naming import (
+            _find_dash_version_pair,
+        )
+
+        result = _find_dash_version_pair("gpt-2024-01-02")
+        # Should skip 01-02 because 2024 is a year
+        assert result is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # model_naming.py — validate_model_id_format with unparseable ID (line 357)
@@ -238,10 +273,14 @@ class TestCircuitBreakerTimeoutBeforeStart:
 
     def test_check_timeout_trips_after_start(self):
         """check_timeout should trip after timeout exceeds."""
+        import time
+
         from amplifier_module_provider_github_copilot.sdk_driver import CircuitBreaker
 
         cb = CircuitBreaker(max_turns=3, timeout_seconds=0.0)
         cb.start()
+        # Small delay to ensure elapsed > 0 on fast systems (Windows timing resolution)
+        time.sleep(0.001)
         # Timeout of 0 seconds should trip immediately
         result = cb.check_timeout()
         # Elapsed > 0 > timeout=0 → trips
@@ -264,8 +303,9 @@ class TestSdkEventHandlerWaitPaths:
 
         handler = SdkEventHandler(max_turns=3, first_turn_only=True)
 
-        # Set CB timeout_seconds to 0 so check_timeout() trips after any elapsed time
-        handler.circuit_breaker.timeout_seconds = 0.0
+        # Set CB timeout to negative value = "already expired"
+        # This guarantees elapsed (>=0) > timeout (-1.0) on any platform
+        handler.circuit_breaker.timeout_seconds = -1.0
 
         with pytest.raises(CopilotSdkLoopError, match="timeout"):
             await handler.wait_for_capture_or_idle(timeout=0.01)

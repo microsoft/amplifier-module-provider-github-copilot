@@ -573,7 +573,9 @@ class TestSdkSessionForensics:
 
         real_home = Path(os.path.expanduser("~"))
         session_state_dir = real_home / ".copilot" / "session-state"
-        logger.info(f"Looking for session state dir: {session_state_dir} (exists={session_state_dir.exists()})")
+        logger.info(
+            f"Looking for session state dir: {session_state_dir} (exists={session_state_dir.exists()})"
+        )
         if not session_state_dir.exists():
             pytest.skip(f"~/.copilot/session-state/ not found at {session_state_dir}")
 
@@ -645,14 +647,27 @@ class TestSdkSessionForensics:
 
 
 def _find_amplifier_cli() -> str | None:
-    """Find the amplifier CLI binary on PATH or in known locations."""
+    """Find the amplifier CLI binary on PATH or in known locations.
+
+    Uses os.path.expanduser('~') instead of Path.home() to get the real
+    home directory. This is critical for integration tests where Path.home()
+    may be monkeypatched for cache isolation, but we need the actual system
+    home to find installed CLI binaries.
+
+    Cross-platform: Works on Windows, Linux, macOS, and WSL.
+    """
     found = shutil.which("amplifier")
     if found:
         return found
-    # Check uv tool install location (WSL/Linux)
-    home_local = Path.home() / ".local" / "bin" / "amplifier"
+
+    # Get real home directory (immune to Path.home() monkeypatching)
+    real_home = Path(os.path.expanduser("~"))
+
+    # Check uv tool install location (WSL/Linux/macOS)
+    home_local = real_home / ".local" / "bin" / "amplifier"
     if home_local.exists():
         return str(home_local)
+
     # Check uv tool install location (Windows)
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA", "")
@@ -660,6 +675,7 @@ def _find_amplifier_cli() -> str | None:
             win_path = Path(appdata) / "uv" / "tools" / "amplifier" / "Scripts" / "amplifier.exe"
             if win_path.exists():
                 return str(win_path)
+
     return None
 
 

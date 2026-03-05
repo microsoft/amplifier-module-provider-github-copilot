@@ -49,7 +49,7 @@ class CopilotAuthenticationError(CopilotProviderError):
 
     Example:
         raise CopilotAuthenticationError(
-            "Copilot authentication required. Run 'copilot auth login'"
+            "Copilot authentication required. Set GITHUB_TOKEN or run 'gh auth login'."
         )
     """
 
@@ -231,10 +231,13 @@ _RATE_LIMIT_PATTERNS: tuple[str, ...] = (
     "rate_limit",
     "ratelimit",
     "too many requests",
-    "429",
     "quota exceeded",
     "throttl",
 )
+
+# P0-3 Fix: Use word boundary regex for "429" to avoid false positives
+# (e.g., "Error code 14290" should NOT trigger rate limit)
+_429_PATTERN: re.Pattern[str] = re.compile(r"\b429\b")
 
 _RETRY_AFTER_RE: re.Pattern[str] = re.compile(
     r"retry[\s_-]*after[\s:=]*(\d+(?:\.\d+)?)", re.IGNORECASE
@@ -254,7 +257,12 @@ def detect_rate_limit_error(error_message: str) -> CopilotRateLimitError | None:
 
     lower = error_message.lower()
 
-    if not any(pattern in lower for pattern in _RATE_LIMIT_PATTERNS):
+    # Check text patterns (case-insensitive)
+    text_match = any(pattern in lower for pattern in _RATE_LIMIT_PATTERNS)
+    # P0-3 Fix: Use word boundary regex for "429" to avoid false positives
+    regex_429_match = _429_PATTERN.search(error_message) is not None
+
+    if not (text_match or regex_429_match):
         return None
 
     retry_after: float | None = None
@@ -263,3 +271,52 @@ def detect_rate_limit_error(error_message: str) -> CopilotRateLimitError | None:
         retry_after = float(match.group(1))
 
     return CopilotRateLimitError(retry_after=retry_after, message=error_message)
+
+
+# ---------------------------------------------------------------------------
+# Content filter detection helper (P2-10)
+# ---------------------------------------------------------------------------
+
+_CONTENT_FILTER_PATTERNS: tuple[str, ...] = (
+    "content filtered",
+    "content_filtered",
+    "blocked by policy",
+    "safety filter",
+    "content policy",
+    "harmful content",
+    "inappropriate content",
+    "violates policy",
+    "content moderation",
+)
+
+
+class CopilotContentFilterError(CopilotProviderError):
+    """
+    Raised when content is blocked by safety/policy filters.
+
+    This indicates the request or response was blocked due to content
+    policy violations. This is NOT retryable - the user must modify
+    their request.
+
+    Example:
+        raise CopilotContentFilterError("Response blocked by content policy")
+    """
+
+    pass
+
+
+def detect_content_filter_error(error_message: str) -> CopilotContentFilterError | None:
+    """Examine *error_message* and return a ``CopilotContentFilterError`` if it
+    looks like a content filter error, or ``None`` otherwise.
+
+    The check is case-insensitive.
+    """
+    if not error_message:
+        return None
+
+    lower = error_message.lower()
+
+    if not any(pattern in lower for pattern in _CONTENT_FILTER_PATTERNS):
+        return None
+
+    return CopilotContentFilterError(error_message)

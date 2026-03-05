@@ -16,12 +16,14 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ._constants import (
+    AUTH_INSTRUCTIONS,
     CLIENT_HEALTH_CHECK_TIMEOUT,
     CLIENT_INIT_LOCK_TIMEOUT,
     DEFAULT_TIMEOUT,
+    SDK_INSTALL_COMMAND,
     SDK_TIMEOUT_BUFFER_SECONDS,
     VALID_REASONING_EFFORTS,
 )
@@ -35,6 +37,26 @@ from .exceptions import (
     CopilotTimeoutError,
     detect_rate_limit_error,
 )
+
+
+def _is_subprocess_dead_error(e: BaseException) -> bool:
+    """Check if an exception indicates the subprocess has died.
+
+    These errors are expected during Ctrl+C and should be logged at DEBUG,
+    not WARNING, to avoid alarming users with expected cleanup noise.
+
+    Args:
+        e: The exception to check
+
+    Returns:
+        True if this is a subprocess-death error (BrokenPipeError, ConnectionResetError)
+    """
+    if isinstance(e, (BrokenPipeError, ConnectionResetError)):
+        return True
+    # Check for wrapped pipe errors
+    if isinstance(e, OSError) and e.errno in (32, 104):  # EPIPE, ECONNRESET
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +199,11 @@ class CopilotClientWrapper:
             )
             return True
         except Exception as e:
-            logger.warning(f"[CLIENT] Health check failed: {type(e).__name__}: {e}")
+            # Subprocess-death errors are expected on Ctrl+C, log at DEBUG
+            if _is_subprocess_dead_error(e):
+                logger.debug(f"[CLIENT] Health check: subprocess terminated: {e}")
+            else:
+                logger.warning(f"[CLIENT] Health check failed: {type(e).__name__}: {e}")
             return False
 
     async def _reset_client(self) -> None:
@@ -247,24 +273,29 @@ class CopilotClientWrapper:
 
                 # Build client options from config
                 client_options = self._build_client_options()
-                logger.debug(f"[CLIENT] Client options: {client_options}")
+                _safe_opts = {
+                    k: ("***" if k == "github_token" else v) for k, v in client_options.items()
+                }
+                logger.debug(f"[CLIENT] Client options: {_safe_opts}")
 
                 # Ensure the bundled CLI binary is executable.
                 # uv strips execute bits when installing packages.
-                import stat
                 from pathlib import Path
 
                 import copilot as _copilot_mod
 
-                _cli_bin = Path(_copilot_mod.__file__).parent / "bin" / "copilot"
-                if _cli_bin.exists() and not os.access(_cli_bin, os.X_OK):
-                    _cli_bin.chmod(
-                        _cli_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                    )
-                    logger.info(f"[CLIENT] Fixed missing execute permission on {_cli_bin}")
+                from ._permissions import ensure_executable
+
+                if _copilot_mod.__file__ is not None:
+                    _cli_bin = Path(_copilot_mod.__file__).parent / "bin" / "copilot"
+                    if _cli_bin.exists():
+                        ensure_executable(_cli_bin)
 
                 logger.info("[CLIENT] Initializing Copilot client...")
-                client = CopilotClient(client_options)
+                # Cast to SDK's TypedDict - our dict matches the required shape
+                from copilot.types import CopilotClientOptions
+
+                client = CopilotClient(cast(CopilotClientOptions, client_options))
                 await client.start()
 
                 # Only assign to instance after successful start
@@ -287,15 +318,33 @@ class CopilotClientWrapper:
                 raise
             except ImportError as e:
                 raise CopilotConnectionError(
-                    "Copilot SDK not installed. Install with: pip install github-copilot-sdk"
+                    f"Copilot SDK not installed. Install with: {SDK_INSTALL_COMMAND}"
                 ) from e
             except CopilotAuthenticationError:
+                # P0-1 Fix: Clear state on auth failure to prevent stale client leak
+                self._client = None
+                self._started = False
+                if client is not None:
+                    try:
+                        await client.stop()
+                    except Exception:
+                        pass
                 raise
             except CopilotConnectionError:
+                # Same cleanup for connection errors
+                self._client = None
+                self._started = False
+                if client is not None:
+                    try:
+                        await client.stop()
+                    except Exception:
+                        pass
                 raise
             except Exception as e:
-                # Clean up on any error
-                if client is not None and self._client is None:
+                # Always reset instance state on any initialization error
+                self._client = None
+                self._started = False
+                if client is not None:
                     try:
                         await client.stop()
                     except Exception:
@@ -307,8 +356,7 @@ class CopilotClientWrapper:
                 # Heuristic detection - SDK doesn't expose typed auth exceptions
                 if "auth" in error_msg or "token" in error_msg or "login" in error_msg:
                     raise CopilotAuthenticationError(
-                        f"Copilot authentication failed: {e}. "
-                        "Run 'copilot auth login' to authenticate."
+                        f"Copilot authentication failed: {e}. {AUTH_INSTRUCTIONS}"
                     ) from e
                 raise CopilotConnectionError(
                     f"Failed to initialize Copilot client: {type(e).__name__}: {e}"
@@ -511,7 +559,10 @@ class CopilotClientWrapper:
                 f"streaming: {streaming}, reasoning: {reasoning_effort}, "
                 f"tools: {len(tools) if tools else 0}"
             )
-            session = await client.create_session(session_config)
+            # Cast to SDK's TypedDict - our dict matches the required shape
+            from copilot.types import SessionConfig
+
+            session = await client.create_session(cast(SessionConfig, session_config))
             logger.debug(f"[CLIENT] Session created: {session.session_id}")
         except Exception as e:
             error_msg = str(e).lower()
@@ -528,14 +579,15 @@ class CopilotClientWrapper:
             yield session
         finally:
             # Always destroy the session to clean up
-            try:
-                await session.destroy()
-                logger.debug(f"[CLIENT] Session destroyed: {session.session_id}")
-            except Exception as destroy_error:
-                # Log but don't raise - don't mask the original exception
-                logger.warning(
-                    f"[CLIENT] Error destroying session {session.session_id}: {destroy_error}"
-                )
+            if session is not None:
+                try:
+                    await session.destroy()
+                    logger.debug(f"[CLIENT] Session destroyed: {session.session_id}")
+                except Exception as destroy_error:
+                    # Log but don't raise - don't mask the original exception
+                    logger.warning(
+                        f"[CLIENT] Error destroying session {session.session_id}: {destroy_error}"
+                    )
 
     async def send_and_wait(
         self,
@@ -594,6 +646,14 @@ class CopilotClientWrapper:
             ) from e
         except CopilotTimeoutError:
             raise
+        except BrokenPipeError as e:
+            # Broken pipe is a transient connection issue - retryable
+            raise CopilotConnectionError(
+                "Connection broken: The connection was terminated unexpectedly."
+            ) from e
+        except OSError as e:
+            # Other OS-level errors (connection refused, network unreachable, etc.)
+            raise CopilotConnectionError(f"Connection error: {e}") from e
         except Exception as e:
             rate_limit_err = detect_rate_limit_error(str(e))
             if rate_limit_err is not None:

@@ -406,7 +406,9 @@ class TestStaleCacheWarning:
         from datetime import timedelta
 
         # Create cache that is 45 days old (stale threshold is 30)
-        stale_timestamp = (datetime.now(UTC) - timedelta(days=45)).isoformat().replace("+00:00", "Z")
+        stale_timestamp = (
+            (datetime.now(UTC) - timedelta(days=45)).isoformat().replace("+00:00", "Z")
+        )
         cache_data = {
             "format_version": 1,
             "cached_at": stale_timestamp,
@@ -423,6 +425,7 @@ class TestStaleCacheWarning:
         cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
 
         import logging
+
         with caplog.at_level(logging.INFO):
             CopilotSdkProvider(config={"model": "claude-sonnet-4.5"})
 
@@ -455,6 +458,7 @@ class TestStaleCacheWarning:
         cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
 
         import logging
+
         with caplog.at_level(logging.INFO):
             CopilotSdkProvider(config={"model": "claude-sonnet-4.5"})
 
@@ -483,7 +487,7 @@ class TestStaleCacheWarning:
 class TestCacheReplacementSemantics:
     """
     Tests that list_models() REPLACES cache, not merges.
-    
+
     These tests would have FAILED before the 2026-02-17 fix and caught
     the bug that caused "other-model" to pollute production cache.
     """
@@ -494,12 +498,12 @@ class TestCacheReplacementSemantics:
     ) -> None:
         """
         list_models() should clear stale entries from _model_info_cache.
-        
+
         Scenario:
         1. Provider loads old cache with "stale-model"
         2. SDK list_models() returns only "fresh-model"
         3. Assert: "stale-model" is GONE from _model_info_cache
-        
+
         This is THE test that would have caught the bug.
         """
         # Pre-populate disk cache with stale model
@@ -508,48 +512,45 @@ class TestCacheReplacementSemantics:
             {"stale-model": {"context_window": 100000, "max_output_tokens": 50000}},
             sdk_version="0.1.23",
         )
-        
+
         # Provider loads stale cache in __init__
         provider = CopilotSdkProvider(config={})
-        
+
         # Verify stale model loaded
         assert "stale-model" in provider._model_info_cache, (
             "Setup failed: stale-model should be loaded from disk cache"
         )
-        
+
         # Mock SDK returns ONLY fresh model (stale model removed from SDK)
         mock_fresh_model = MagicMock()
         mock_fresh_model.id = "fresh-model"
         mock_fresh_model.context_window = 200000
         mock_fresh_model.max_output_tokens = 32000
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = [mock_fresh_model]
-            
+
             # Fetch fresh models from SDK
             await provider.list_models()
-        
+
         # ✓ Fresh model exists
         assert "fresh-model" in provider._model_info_cache, (
             "Fresh model should be in cache after list_models()"
         )
-        
+
         # ✓ CRITICAL: Stale model is GONE (this assertion would have caught the bug)
         assert "stale-model" not in provider._model_info_cache, (
-            "Stale model should be REMOVED after list_models() - "
-            "cache should REPLACE not MERGE"
+            "Stale model should be REMOVED after list_models() - cache should REPLACE not MERGE"
         )
 
     @pytest.mark.asyncio
-    async def test_list_models_clears_stale_entries_from_disk_cache(
-        self, mock_home: Path
-    ) -> None:
+    async def test_list_models_clears_stale_entries_from_disk_cache(self, mock_home: Path) -> None:
         """
         Disk cache should match SDK exactly after list_models().
-        
+
         This verifies the on-disk cache file is also replaced, not merged.
         """
         # Pre-populate disk cache with stale model
@@ -561,35 +562,35 @@ class TestCacheReplacementSemantics:
             },
             sdk_version="0.1.23",
         )
-        
+
         provider = CopilotSdkProvider(config={})
-        
+
         # Mock SDK returns completely different model set
         mock_model_a = MagicMock()
         mock_model_a.id = "model-a"
         mock_model_a.context_window = 200000
         mock_model_a.max_output_tokens = 32000
-        
+
         mock_model_b = MagicMock()
         mock_model_b.id = "model-b"
         mock_model_b.context_window = 300000
         mock_model_b.max_output_tokens = 64000
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = [mock_model_a, mock_model_b]
             await provider.list_models()
-        
+
         # Verify disk cache matches SDK exactly
         cache_path = mock_home / ".amplifier" / "cache" / "github-copilot-models.json"
         data = json.loads(cache_path.read_text(encoding="utf-8"))
-        
+
         # ✓ Fresh models exist
         assert "model-a" in data["models"]
         assert "model-b" in data["models"]
-        
+
         # ✓ Stale models are GONE
         assert "stale-model-1" not in data["models"], (
             "stale-model-1 should be purged from disk cache"
@@ -602,7 +603,7 @@ class TestCacheReplacementSemantics:
     async def test_list_models_with_test_fixture_model(self, mock_home: Path) -> None:
         """
         Specifically test the "other-model" scenario that caused the bug.
-        
+
         This simulates the exact scenario where a test fixture model
         (like "other-model" from test_provider.py:3464) polluted cache.
         """
@@ -615,46 +616,44 @@ class TestCacheReplacementSemantics:
             },
             sdk_version="0.1.23",
         )
-        
+
         provider = CopilotSdkProvider(config={})
-        
+
         # Verify "other-model" was loaded (simulating pollution)
         assert "other-model" in provider._model_info_cache
-        
+
         # SDK returns real models (no "other-model")
         mock_opus = MagicMock()
         mock_opus.id = "claude-opus-4.5"
         mock_opus.context_window = 200000
         mock_opus.max_output_tokens = 32000
-        
+
         mock_sonnet = MagicMock()
         mock_sonnet.id = "claude-sonnet-4.5"
         mock_sonnet.context_window = 200000
         mock_sonnet.max_output_tokens = 32000
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = [mock_opus, mock_sonnet]
             await provider.list_models()
-        
+
         # ✓ "other-model" should be PURGED
         assert "other-model" not in provider._model_info_cache, (
             "Test fixture 'other-model' should be purged after list_models()"
         )
-        
+
         # ✓ Real models exist
         assert "claude-opus-4.5" in provider._model_info_cache
         assert "claude-sonnet-4.5" in provider._model_info_cache
 
     @pytest.mark.asyncio
-    async def test_cache_count_matches_sdk_after_list_models(
-        self, mock_home: Path
-    ) -> None:
+    async def test_cache_count_matches_sdk_after_list_models(self, mock_home: Path) -> None:
         """
         After list_models(), cache should have exactly N models where N = SDK count.
-        
+
         Simple count verification to catch merge vs replace issues.
         """
         # Pre-populate with 5 stale models
@@ -665,10 +664,10 @@ class TestCacheReplacementSemantics:
                 for i in range(5)
             },
         )
-        
+
         provider = CopilotSdkProvider(config={})
         assert len(provider._model_info_cache) == 5, "Should have 5 stale models initially"
-        
+
         # SDK returns only 2 models
         mock_models = []
         for name in ["model-x", "model-y"]:
@@ -677,14 +676,14 @@ class TestCacheReplacementSemantics:
             m.context_window = 200000
             m.max_output_tokens = 32000
             mock_models.append(m)
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = mock_models
             await provider.list_models()
-        
+
         # ✓ Cache should have EXACTLY 2 models (not 7 from merge)
         assert len(provider._model_info_cache) == 2, (
             f"Expected 2 models, got {len(provider._model_info_cache)}. "
@@ -697,7 +696,7 @@ class TestCacheReplacementSemantics:
     ) -> None:
         """
         New provider instance after list_models() should only see fresh models.
-        
+
         E2E scenario:
         1. Old cache with stale models
         2. Provider A calls list_models() → writes fresh cache
@@ -708,25 +707,25 @@ class TestCacheReplacementSemantics:
             mock_home,
             {"stale-model": {"context_window": 100000, "max_output_tokens": 50000}},
         )
-        
+
         # Provider A fetches and writes fresh cache
         mock_fresh = MagicMock()
         mock_fresh.id = "fresh-model"
         mock_fresh.context_window = 200000
         mock_fresh.max_output_tokens = 32000
-        
+
         provider_a = CopilotSdkProvider(config={})
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = [mock_fresh]
             await provider_a.list_models()
-        
+
         # Provider B loads from disk (fresh start)
         provider_b = CopilotSdkProvider(config={})
-        
+
         # ✓ Provider B should have ONLY fresh model
         assert "fresh-model" in provider_b._model_info_cache
         assert "stale-model" not in provider_b._model_info_cache, (
@@ -737,25 +736,23 @@ class TestCacheReplacementSemantics:
 class TestCacheConsistencyInvariants:
     """
     Invariant tests that verify cache consistency guarantees.
-    
+
     These tests encode properties that should ALWAYS hold, regardless
     of the sequence of operations. Principal-level test philosophy:
     test invariants, not just sequences.
     """
 
     @pytest.mark.asyncio
-    async def test_invariant_cache_keys_match_sdk_response(
-        self, mock_home: Path
-    ) -> None:
+    async def test_invariant_cache_keys_match_sdk_response(self, mock_home: Path) -> None:
         """
         INVARIANT: After list_models(), cache keys == SDK model IDs.
-        
+
         This is a set equality check that catches both:
         - Missing models (SDK has, cache doesn't)
         - Extra models (cache has, SDK doesn't)
         """
         provider = CopilotSdkProvider(config={})
-        
+
         # Create predictable SDK response
         sdk_model_ids = {"claude-opus-4.5", "gpt-5", "gemini-3-pro-preview"}
         mock_models = []
@@ -765,14 +762,14 @@ class TestCacheConsistencyInvariants:
             m.context_window = 200000
             m.max_output_tokens = 32000
             mock_models.append(m)
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = mock_models
             await provider.list_models()
-        
+
         # INVARIANT: Cache keys == SDK model IDs
         cache_keys = set(provider._model_info_cache.keys())
         assert cache_keys == sdk_model_ids, (
@@ -789,11 +786,11 @@ class TestCacheConsistencyInvariants:
     ) -> None:
         """
         INVARIANT: Disk cache model set == instance cache model set after list_models().
-        
+
         Ensures disk and memory are in sync.
         """
         provider = CopilotSdkProvider(config={})
-        
+
         mock_models = []
         for name in ["model-1", "model-2", "model-3"]:
             m = MagicMock()
@@ -801,69 +798,65 @@ class TestCacheConsistencyInvariants:
             m.context_window = 200000
             m.max_output_tokens = 32000
             mock_models.append(m)
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = mock_models
             await provider.list_models()
-        
+
         # Read disk cache
         cache_path = mock_home / ".amplifier" / "cache" / "github-copilot-models.json"
         disk_data = json.loads(cache_path.read_text(encoding="utf-8"))
         disk_keys = set(disk_data["models"].keys())
-        
+
         # Instance cache
         instance_keys = set(provider._model_info_cache.keys())
-        
+
         # INVARIANT: Disk == Instance
         assert disk_keys == instance_keys, (
-            f"Disk and instance cache out of sync.\n"
-            f"Disk: {disk_keys}\n"
-            f"Instance: {instance_keys}"
+            f"Disk and instance cache out of sync.\nDisk: {disk_keys}\nInstance: {instance_keys}"
         )
 
     @pytest.mark.asyncio
     async def test_invariant_idempotent_list_models(self, mock_home: Path) -> None:
         """
         INVARIANT: Calling list_models() twice yields same result.
-        
+
         list_models() should be idempotent when SDK returns same data.
         """
         provider = CopilotSdkProvider(config={})
-        
+
         mock_model = MagicMock()
         mock_model.id = "consistent-model"
         mock_model.context_window = 200000
         mock_model.max_output_tokens = 32000
-        
+
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = [mock_model]
-            
+
             # Call twice
             await provider.list_models()
             cache_after_first = set(provider._model_info_cache.keys())
-            
+
             await provider.list_models()
             cache_after_second = set(provider._model_info_cache.keys())
-        
+
         # INVARIANT: Same result
         assert cache_after_first == cache_after_second == {"consistent-model"}
 
     @pytest.mark.asyncio
-    async def test_invariant_empty_sdk_response_clears_cache(
-        self, mock_home: Path
-    ) -> None:
+    async def test_invariant_empty_sdk_response_clears_cache(self, mock_home: Path) -> None:
         """
         INVARIANT: If SDK returns empty list, cache should be empty.
-        
+
         Edge case: SDK might return empty during outage. Cache should
         reflect reality, not hold stale data.
-        
+
         Note: In production, fetch_and_map_models raises CopilotProviderError
         for empty responses. This test verifies behavior IF empty slipped through.
         """
@@ -872,10 +865,10 @@ class TestCacheConsistencyInvariants:
             mock_home,
             {"old-model": {"context_window": 100000, "max_output_tokens": 50000}},
         )
-        
+
         provider = CopilotSdkProvider(config={})
         assert "old-model" in provider._model_info_cache
-        
+
         # Simulate SDK returning models that get filtered to empty
         # (In reality, fetch_and_map_models would raise, but we test internal behavior)
         with patch(
@@ -883,7 +876,7 @@ class TestCacheConsistencyInvariants:
             new_callable=AsyncMock,
         ) as mock_fetch:
             mock_fetch.return_value = []  # Empty
-            
+
             # This would normally raise, but we bypass to test clear() behavior
             try:
                 await provider.list_models()

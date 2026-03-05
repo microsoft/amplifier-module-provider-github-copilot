@@ -563,6 +563,130 @@ class TestDeveloperRoleHandling:
         assert "Part 2" in result
 
 
+class TestBug19ToolFieldExtraction:
+    """Tests for Bug #19: Tool field extraction in tool calls.
+
+    Bug #19: Tool calls from Amplifier transcripts use 'tool' field,
+    not 'name' or 'function'. The converter must check 'tool' first.
+
+    Reference: mydocs/releases/2026-02-18-v1.0.2-release-scope.md, Item #19
+    """
+
+    def test_tool_call_with_tool_field(self):
+        """Tool calls with 'tool' field should use it for the name."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Let me edit that file.",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "tool": "edit_file",  # Amplifier transcript format
+                        "arguments": {"file_path": "test.py"},
+                    }
+                ],
+            }
+        ]
+        result = convert_messages_to_prompt(messages)
+
+        # Uses XML format to prevent model from mimicking bracketed tool calls as text
+        assert '<tool_used name="edit_file">' in result
+        assert "unknown" not in result
+
+    def test_tool_call_with_none_tool_field(self):
+        """Tool calls with None 'tool' field should fall back to 'name'."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Reading file.",
+                "tool_calls": [
+                    {
+                        "id": "call_456",
+                        "tool": None,  # Explicit None
+                        "name": "read_file",
+                        "arguments": {"path": "file.py"},
+                    }
+                ],
+            }
+        ]
+        result = convert_messages_to_prompt(messages)
+
+        # Should fall back to 'name' field, uses XML format
+        assert '<tool_used name="read_file">' in result
+        # Note: "unknown" should not appear since name is present
+
+    def test_tool_call_with_empty_tool_field(self):
+        """Tool calls with empty 'tool' field should fall back to 'name'."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "tool_calls": [
+                    {
+                        "id": "call_789",
+                        "tool": "",  # Empty string
+                        "name": "grep",
+                        "arguments": {"pattern": "TODO"},
+                    }
+                ],
+            }
+        ]
+        result = convert_messages_to_prompt(messages)
+
+        # Should fall back to 'name' when 'tool' is empty, uses XML format
+        assert '<tool_used name="grep">' in result
+
+    def test_tool_call_all_fields_missing(self):
+        """Tool calls with no name fields should show 'unknown'."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Doing something.",
+                "tool_calls": [
+                    {
+                        "id": "call_xyz",
+                        # No 'tool', 'name', or 'function' field
+                        "arguments": {"data": "value"},
+                    }
+                ],
+            }
+        ]
+        result = convert_messages_to_prompt(messages)
+
+        # Should fall back to 'unknown', uses XML format
+        assert '<tool_used name="unknown">' in result
+
+    def test_real_sdk_transcript_format(self):
+        """Regression test using EXACT format from real SDK transcript.
+
+        Evidence: investigations/2026-02-19-session-resume-bugs/session/tool_patterns.json
+        The actual SDK uses this exact structure:
+            {"id": "toolu_01TdpuwcAW5iXsdKdJNKaKNj", "tool": "read_file", "arguments": {...}}
+        """
+        # Exact data from real session transcript
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Let me read that file.",
+                "tool_calls": [
+                    {
+                        "id": "toolu_01TdpuwcAW5iXsdKdJNKaKNj",
+                        "tool": "read_file",
+                        "arguments": {
+                            "file_path": "/mnt/e/amplifier-public-github-cli-sdk-provider/.github/copilot-instructions.md",
+                            "limit": 50,
+                        },
+                    }
+                ],
+            }
+        ]
+        result = convert_messages_to_prompt(messages)
+
+        # Must extract "read_file" from "tool" field, uses XML format
+        assert '<tool_used name="read_file">' in result
+        assert "unknown" not in result.lower()
+
+
 class TestFunctionRoleHandling:
     """Tests for function role message handling.
 

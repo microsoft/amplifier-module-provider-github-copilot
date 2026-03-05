@@ -23,6 +23,7 @@ appsettings.*.json
 # Dependencies, build, test, and other generated files
 node_modules
 .venv
+.venv-win
 venv
 env
 __pycache__

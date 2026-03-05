@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -129,9 +131,7 @@ class TestGetCachePath:
 class TestWriteCache:
     """Tests for write_cache()"""
 
-    def test_write_creates_cache_directory_if_missing(
-        self, mock_home: Path
-    ) -> None:
+    def test_write_creates_cache_directory_if_missing(self, mock_home: Path) -> None:
         """Should create ~/.amplifier/cache/ if it doesn't exist"""
         cache_dir = mock_home / ".amplifier" / "cache"
         assert not cache_dir.exists()
@@ -332,17 +332,19 @@ class TestLoadCache:
         cache_path = mock_home / ".amplifier" / "cache" / "github-copilot-models.json"
         cache_path.parent.mkdir(parents=True)
         cache_path.write_text(
-            json.dumps({
-                "format_version": 1,
-                "cached_at": "2026-02-16T10:00:00Z",
-                "sdk_version": "0.1.24",
-                "models": {
-                    "valid-model": {"context_window": 100000, "max_output_tokens": 10000},
-                    "invalid-context": {"context_window": -1, "max_output_tokens": 10000},
-                    "invalid-output": {"context_window": 100000, "max_output_tokens": 0},
-                    "missing-field": {"context_window": 100000},
-                },
-            }),
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": "2026-02-16T10:00:00Z",
+                    "sdk_version": "0.1.24",
+                    "models": {
+                        "valid-model": {"context_window": 100000, "max_output_tokens": 10000},
+                        "invalid-context": {"context_window": -1, "max_output_tokens": 10000},
+                        "invalid-output": {"context_window": 100000, "max_output_tokens": 0},
+                        "missing-field": {"context_window": 100000},
+                    },
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -557,9 +559,7 @@ class TestCacheEdgeCases:
 class TestCacheLogging:
     """Tests for proper logging output"""
 
-    def test_load_logs_model_count(
-        self, mock_home: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_load_logs_model_count(self, mock_home: Path, caplog: pytest.LogCaptureFixture) -> None:
         """Cache load should log number of models loaded"""
         setup_cache_file(
             mock_home,
@@ -839,9 +839,7 @@ class TestCachePathNegative:
             or "could not" in caplog.text.lower()
         )
 
-    def test_load_when_home_raises_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_load_when_home_raises_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """load_cache returns None if home directory cannot be determined"""
 
         def raise_runtime_error():
@@ -855,9 +853,7 @@ class TestCachePathNegative:
         result = load_cache()
         assert result is None
 
-    def test_readonly_home_directory(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_readonly_home_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Write should fail gracefully if .amplifier cannot be created"""
         # Create a read-only directory structure
         mock_home = tmp_path / "readonly_home"
@@ -885,9 +881,7 @@ class TestCachePathNegative:
             # Restore permissions for cleanup
             mock_home.chmod(original_mode)
 
-    def test_symlink_home_directory(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_home_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Cache should work when home is a symlink (common on Linux)"""
         # Create actual home and symlink
         actual_home = tmp_path / "actual_home"
@@ -965,7 +959,8 @@ class TestCachePathNegative:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Very long paths should be handled (Windows MAX_PATH is 260)"""
-        # Create a moderately long path (not exceeding limits)
+        # Create a moderately long path (not exceeding limits on Unix)
+        # On Windows, this WILL exceed MAX_PATH (260) and should gracefully fail
         long_name = "a" * 50
         mock_home = tmp_path / long_name / long_name / long_name
         mock_home.mkdir(parents=True)
@@ -978,10 +973,17 @@ class TestCachePathNegative:
         models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
 
         result = write_cache(models, sdk_version="0.1.24")
-        assert result is True
 
-        loaded = load_cache()
-        assert loaded is not None
+        import sys
+
+        if sys.platform == "win32":
+            # Windows: path exceeds MAX_PATH (260), should return False (graceful failure)
+            assert result is False, "Windows should fail gracefully on long paths"
+        else:
+            # Unix: longer paths are supported
+            assert result is True
+            loaded = load_cache()
+            assert loaded is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1088,9 +1090,7 @@ class TestBug2IsFileCheck:
     Fix: Use is_file() instead of exists().
     """
 
-    def test_load_cache_when_path_is_directory(
-        self, mock_home: Path
-    ) -> None:
+    def test_load_cache_when_path_is_directory(self, mock_home: Path) -> None:
         """load_cache should return None if cache path is a directory."""
         cache_path = mock_home / ".amplifier" / "cache" / "github-copilot-models.json"
         # Create as directory instead of file
@@ -1100,9 +1100,7 @@ class TestBug2IsFileCheck:
 
         assert result is None, "load_cache should handle directory at cache path"
 
-    def test_load_cache_when_path_is_symlink_to_directory(
-        self, mock_home: Path
-    ) -> None:
+    def test_load_cache_when_path_is_symlink_to_directory(self, mock_home: Path) -> None:
         """load_cache should return None if cache path is symlink to directory."""
         cache_dir = mock_home / ".amplifier" / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1121,9 +1119,7 @@ class TestBug2IsFileCheck:
 
         assert result is None, "load_cache should handle symlink to directory"
 
-    def test_load_cache_when_path_is_symlink_to_file(
-        self, mock_home: Path
-    ) -> None:
+    def test_load_cache_when_path_is_symlink_to_file(self, mock_home: Path) -> None:
         """load_cache should work when cache path is symlink to valid file."""
         cache_dir = mock_home / ".amplifier" / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1208,3 +1204,420 @@ class TestBug5StalenessWarning:
             is_cache_stale(cache)
 
         assert "amplifier init" in caplog.text.lower() or "stale" in caplog.text.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Category: Write Cache Error Handling
+# Covers: model_cache.py lines 405-420 (atomic write failures)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestWriteCacheAtomicFailures:
+    """Tests for atomic write failure handling in write_cache().
+
+    These tests cover the exception paths during atomic file writes.
+    Note: Some internal error paths (os.write, os.fsync) cannot be tested
+    because os is imported locally inside write_cache, not at module level.
+
+    Cross-platform: Tests simulate failures that can occur on Windows, macOS, and Linux.
+    """
+
+    def test_write_handles_get_cache_path_oserror(
+        self, mock_home: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should handle OSError from get_cache_path gracefully."""
+        models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
+
+        with patch(
+            "amplifier_module_provider_github_copilot.model_cache.get_cache_path",
+            side_effect=OSError("Home directory not accessible"),
+        ):
+            with caplog.at_level(logging.WARNING):
+                result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is False
+        assert "Failed to write cache file" in caplog.text
+
+    def test_write_handles_get_cache_path_runtime_error(
+        self, mock_home: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should handle RuntimeError from get_cache_path gracefully."""
+        models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
+
+        with patch(
+            "amplifier_module_provider_github_copilot.model_cache.get_cache_path",
+            side_effect=RuntimeError("Could not determine home directory"),
+        ):
+            with caplog.at_level(logging.WARNING):
+                result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is False
+        assert "Failed to write cache file" in caplog.text
+
+    def test_write_handles_mkdir_permission_error(
+        self, mock_home: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should handle permission error during mkdir gracefully."""
+        models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
+
+        # Remove the cache dir if it exists
+        cache_dir = mock_home / ".amplifier" / "cache"
+        if cache_dir.exists():
+            import shutil
+
+            shutil.rmtree(cache_dir)
+
+        with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
+            with caplog.at_level(logging.WARNING):
+                result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is False
+
+    def test_write_handles_tempfile_creation_failure(
+        self, mock_home: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should handle failure to create temp file gracefully."""
+        models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
+
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("tempfile.mkstemp", side_effect=OSError("Cannot create temp file")):
+            with caplog.at_level(logging.WARNING):
+                result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is False
+
+    def test_write_handles_unexpected_exception(
+        self, mock_home: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should handle unexpected exceptions gracefully."""
+        models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
+
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Cause an unexpected exception during JSON serialization
+        with patch("json.dumps", side_effect=ValueError("Circular reference detected")):
+            with caplog.at_level(logging.WARNING):
+                result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is False
+        assert "Unexpected error" in caplog.text or "error" in caplog.text.lower()
+
+
+class TestWriteCacheWindowsSpecific:
+    """Windows-specific write cache tests.
+
+    Windows has unique file handling behaviors:
+    - Cannot delete/replace open files
+    - Different path separators
+    - Case-insensitive paths
+    """
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
+    def test_write_succeeds_with_windows_paths(self, mock_home: Path) -> None:
+        """Should handle Windows path separators correctly."""
+        models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
+
+        result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is True
+        cache_path = mock_home / ".amplifier" / "cache" / "github-copilot-models.json"
+        assert cache_path.exists()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
+    def test_atomic_replace_works_on_windows(self, mock_home: Path) -> None:
+        """Path.replace should work on Windows (unlike os.rename to existing file)."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        # Create existing file
+        cache_path.write_text('{"old": "data"}', encoding="utf-8")
+
+        models = {"new-model": CacheEntry(context_window=100000, max_output_tokens=10000)}
+        result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is True
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "new-model" in data["models"]
+
+
+class TestWriteCacheUnixSpecific:
+    """Unix-specific (macOS/Linux) write cache tests.
+
+    Unix systems have different behaviors:
+    - Atomic rename semantics
+    - Permission bits
+    - Symlink handling
+    """
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only test")
+    def test_write_succeeds_on_unix(self, mock_home: Path) -> None:
+        """Should write cache successfully on Unix."""
+        models = {"test": CacheEntry(context_window=100000, max_output_tokens=10000)}
+
+        result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is True
+        cache_path = mock_home / ".amplifier" / "cache" / "github-copilot-models.json"
+        assert cache_path.exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only test")
+    def test_atomic_rename_semantics_unix(self, mock_home: Path) -> None:
+        """Atomic replace should work via POSIX rename semantics."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        # Create existing file
+        cache_path.write_text('{"old": "data"}', encoding="utf-8")
+        _original_inode = cache_path.stat().st_ino
+
+        models = {"new-model": CacheEntry(context_window=100000, max_output_tokens=10000)}
+        result = write_cache(models, sdk_version="0.1.24")
+
+        assert result is True
+        # File should be replaced (different inode on most filesystems)
+        # Note: This may not change on all filesystems
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "new-model" in data["models"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Category: Edge Cases for 100% Coverage
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestIsCacheStaleEdgeCases:
+    """Additional edge case tests for is_cache_stale()."""
+
+    def test_naive_datetime_handled(self, mock_home: Path) -> None:
+        """Cache with naive datetime (no tzinfo) should be handled."""
+        from datetime import datetime
+
+        # Create cache with naive datetime (no tzinfo)
+        naive_cached_at = datetime(2024, 1, 1, 12, 0, 0)  # No timezone
+        assert naive_cached_at.tzinfo is None
+
+        cache = ModelCache(
+            format_version=1,
+            cached_at=naive_cached_at,
+            sdk_version="0.1.24",
+            models={},
+        )
+
+        # Should not crash and should handle the naive datetime
+        result = is_cache_stale(cache, days=30)
+
+        # 2024-01-01 is definitely stale compared to now
+        assert result is True
+
+    def test_cache_with_timezone_aware_datetime(self, mock_home: Path) -> None:
+        """Cache with timezone-aware datetime should work normally."""
+        cache = ModelCache(
+            format_version=1,
+            cached_at=datetime.now(UTC),  # Timezone-aware
+            sdk_version="0.1.24",
+            models={},
+        )
+
+        result = is_cache_stale(cache, days=30)
+
+        # Fresh cache should not be stale
+        assert result is False
+
+
+class TestLoadCacheValidationEdgeCases:
+    """Tests for model entry validation in load_cache()."""
+
+    def test_invalid_model_entry_not_dict(self, mock_home: Path) -> None:
+        """Non-dict model entry should be skipped."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        # Model entry is a string, not a dict
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": "2024-01-01T00:00:00Z",
+                    "sdk_version": "0.1.24",
+                    "models": {
+                        "valid-model": {"context_window": 100000, "max_output_tokens": 10000},
+                        "invalid-model": "not a dict",  # Invalid!
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        cache = load_cache()
+
+        assert cache is not None
+        assert "valid-model" in cache.models
+        assert "invalid-model" not in cache.models  # Skipped
+
+    def test_invalid_context_window_zero(self, mock_home: Path) -> None:
+        """Model with context_window=0 should be skipped."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": "2024-01-01T00:00:00Z",
+                    "sdk_version": "0.1.24",
+                    "models": {
+                        "valid-model": {"context_window": 100000, "max_output_tokens": 10000},
+                        "zero-context": {
+                            "context_window": 0,
+                            "max_output_tokens": 10000,
+                        },  # Invalid!
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        cache = load_cache()
+
+        assert cache is not None
+        assert "valid-model" in cache.models
+        assert "zero-context" not in cache.models  # Skipped
+
+    def test_invalid_context_window_negative(self, mock_home: Path) -> None:
+        """Model with negative context_window should be skipped."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": "2024-01-01T00:00:00Z",
+                    "sdk_version": "0.1.24",
+                    "models": {
+                        "valid-model": {"context_window": 100000, "max_output_tokens": 10000},
+                        "negative-context": {"context_window": -100, "max_output_tokens": 10000},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        cache = load_cache()
+
+        assert cache is not None
+        assert "valid-model" in cache.models
+        assert "negative-context" not in cache.models
+
+    def test_invalid_context_window_string(self, mock_home: Path) -> None:
+        """Model with string context_window should be skipped."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": "2024-01-01T00:00:00Z",
+                    "sdk_version": "0.1.24",
+                    "models": {
+                        "valid-model": {"context_window": 100000, "max_output_tokens": 10000},
+                        "string-context": {"context_window": "100000", "max_output_tokens": 10000},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        cache = load_cache()
+
+        assert cache is not None
+        assert "valid-model" in cache.models
+        assert "string-context" not in cache.models
+
+    def test_invalid_max_output_tokens_zero(self, mock_home: Path) -> None:
+        """Model with max_output_tokens=0 should be skipped."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": "2024-01-01T00:00:00Z",
+                    "sdk_version": "0.1.24",
+                    "models": {
+                        "valid-model": {"context_window": 100000, "max_output_tokens": 10000},
+                        "zero-output": {"context_window": 100000, "max_output_tokens": 0},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        cache = load_cache()
+
+        assert cache is not None
+        assert "valid-model" in cache.models
+        assert "zero-output" not in cache.models
+
+    def test_cached_at_invalid_format(
+        self, mock_home: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Invalid cached_at format should use current time."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": "not-a-valid-date",  # Invalid!
+                    "sdk_version": "0.1.24",
+                    "models": {"model": {"context_window": 100000, "max_output_tokens": 10000}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            cache = load_cache()
+
+        assert cache is not None
+        # Should still load with fallback datetime
+
+    def test_cached_at_not_string(self, mock_home: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Non-string cached_at causes exception - cache returns None."""
+        cache_dir = mock_home / ".amplifier" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / "github-copilot-models.json"
+
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "cached_at": 12345,  # Integer, not string - causes exception
+                    "sdk_version": "0.1.24",
+                    "models": {"model": {"context_window": 100000, "max_output_tokens": 10000}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            cache = load_cache()
+
+        # Integer cached_at causes parsing exception - returns None
+        assert cache is None
+        assert "Unexpected error" in caplog.text
