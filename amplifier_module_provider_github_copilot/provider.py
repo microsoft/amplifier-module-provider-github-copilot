@@ -69,12 +69,11 @@ from amplifier_core.llm_errors import (
 from amplifier_core.llm_errors import (
     RateLimitError as KernelRateLimitError,
 )
-from amplifier_core.utils import truncate_values
+from amplifier_core.utils import redact_secrets
 from amplifier_core.utils.retry import RetryConfig, retry_with_backoff
 
 from ._constants import (
     COPILOT_BUILTIN_TOOL_NAMES,
-    DEFAULT_DEBUG_TRUNCATE_LENGTH,
     DEFAULT_THINKING_TIMEOUT,
     DEFAULT_TIMEOUT,
     MAX_REPAIRED_TOOL_IDS,
@@ -205,11 +204,7 @@ class CopilotSdkProvider:
         # - thinking_timeout: for extended thinking models (default 30 min)
         self._timeout = float(config.get("timeout", DEFAULT_TIMEOUT))
         self._thinking_timeout = float(config.get("thinking_timeout", DEFAULT_THINKING_TIMEOUT))
-        self._debug = bool(config.get("debug", False))
-        self._raw_debug = bool(config.get("raw_debug", False))
-        self._debug_truncate_length = int(
-            config.get("debug_truncate_length", DEFAULT_DEBUG_TRUNCATE_LENGTH)
-        )
+        self._raw = bool(config.get("raw", False))
 
         # Streaming configuration (default: enabled like Anthropic provider)
         self._use_streaming = bool(config.get("use_streaming", True))
@@ -688,11 +683,10 @@ class CopilotSdkProvider:
             f"streaming: {use_streaming}, thinking: {extended_thinking_enabled}"
         )
 
-        if self._debug:
-            logger.debug(
-                f"[PROVIDER] extended_thinking_enabled={extended_thinking_enabled}, "
-                f"reasoning_effort={reasoning_effort}"
-            )
+        logger.debug(
+            f"[PROVIDER] extended_thinking_enabled={extended_thinking_enabled}, "
+            f"reasoning_effort={reasoning_effort}"
+        )
 
         # Extract system message (handled separately in Copilot)
         system_message = extract_system_message(messages)
@@ -700,10 +694,6 @@ class CopilotSdkProvider:
         # Convert Amplifier messages to prompt format
         # NOTE: Messages are already compacted by Amplifier if needed
         prompt = convert_messages_to_prompt(messages)
-
-        if self._debug:
-            truncated = self._truncate(prompt)
-            logger.debug(f"[PROVIDER] Prompt ({len(prompt)} chars): {truncated}")
 
         # TIMEOUT SELECTION: Based on REQUEST INTENT, not capability detection
         #
@@ -818,31 +808,7 @@ class CopilotSdkProvider:
         if deny_hooks:
             request_summary["deny_hooks"] = True
 
-        await self._emit_event("llm:request", request_summary)
-
-        if self._debug:
-            debug_payload: dict[str, Any] = {
-                "prompt": prompt,
-                "system_message": system_message,
-            }
-            if request_tools:
-                debug_payload["tools"] = [
-                    {
-                        "name": getattr(t, "name", str(t)),
-                        "description": getattr(t, "description", ""),
-                    }
-                    for t in (sdk_tools or [])
-                ]
-            await self._emit_event(
-                "llm:request:debug",
-                {
-                    "lvl": "DEBUG",
-                    "provider": self.name,
-                    "request": self._truncate_values(debug_payload),
-                },
-            )
-
-        if self._debug and self._raw_debug:
+        if self._raw:
             raw_payload: dict[str, Any] = {
                 "prompt": prompt,
                 "system_message": system_message,
@@ -859,14 +825,9 @@ class CopilotSdkProvider:
                     }
                     for t in (sdk_tools or [])
                 ]
-            await self._emit_event(
-                "llm:request:raw",
-                {
-                    "lvl": "DEBUG",
-                    "provider": self.name,
-                    "params": raw_payload,
-                },
-            )
+            request_summary["raw"] = redact_secrets(raw_payload)
+
+        await self._emit_event("llm:request", request_summary)
 
         # ── Start timing ───────────────────────────────────────────────
         # Inner function for retry_with_backoff wrapping
@@ -1020,10 +981,10 @@ class CopilotSdkProvider:
         # results that were never actually executed.  Detect this and
         # retry with a correction message (up to 2 times).
         _FAKE_TOOL_CALL_RE = re.compile(
-            r"\[Tool Call:\s*\w+\("       # [Tool Call: name(
-            r"|Tool Result \(\w+\):"      # Tool Result (name):
-            r"|<tool_used\s+name="        # <tool_used name=  (XML format mimicked)
-            r"|<tool_result\s+name="      # <tool_result name= (XML-style tool result)
+            r"\[Tool Call:\s*\w+\("  # [Tool Call: name(
+            r"|Tool Result \(\w+\):"  # Tool Result (name):
+            r"|<tool_used\s+name="  # <tool_used name=  (XML format mimicked)
+            r"|<tool_result\s+name="  # <tool_result name= (XML-style tool result)
         )
         _MAX_FAKE_TC_RETRIES = 2
 
@@ -1035,10 +996,7 @@ class CopilotSdkProvider:
                     response_text += block.text
 
             fake_retry = 0
-            while (
-                _FAKE_TOOL_CALL_RE.search(response_text)
-                and fake_retry < _MAX_FAKE_TC_RETRIES
-            ):
+            while _FAKE_TOOL_CALL_RE.search(response_text) and fake_retry < _MAX_FAKE_TC_RETRIES:
                 fake_retry += 1
                 logger.warning(
                     f"[PROVIDER] Detected fake tool call text in response "
@@ -1084,13 +1042,6 @@ class CopilotSdkProvider:
 
             elapsed_ms = int((time.time() - outer_start) * 1000)
 
-        if self._debug:
-            content_preview = self._truncate(str(response.content))
-            logger.debug(f"[PROVIDER] Response content: {content_preview}")
-            if response.tool_calls:
-                tc_count = len(response.tool_calls) if response.tool_calls else 0
-                logger.debug(f"[PROVIDER] Tool calls: {tc_count}")
-
         # Emit llm:response events (after API call, outside retry loop)
         response_tool_calls = len(response.tool_calls) if response.tool_calls else 0
         response_event: dict[str, Any] = {
@@ -1108,30 +1059,8 @@ class CopilotSdkProvider:
             "streaming": use_streaming,
             "duration_ms": elapsed_ms,
         }
-        await self._emit_event("llm:response", response_event)
 
-        if self._debug:
-            response_debug = {
-                "content": [str(block) for block in (response.content or [])],
-                "tool_calls": [
-                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                    for tc in (response.tool_calls or [])
-                ],
-                "usage": response_event["usage"],
-                "finish_reason": response_event["finish_reason"],
-            }
-            await self._emit_event(
-                "llm:response:debug",
-                {
-                    "lvl": "DEBUG",
-                    "provider": self.name,
-                    "response": self._truncate_values(response_debug),
-                    "status": "ok",
-                    "duration_ms": elapsed_ms,
-                },
-            )
-
-        if self._debug and self._raw_debug:
+        if self._raw:
             raw_response_data = {
                 "content": [str(block) for block in (response.content or [])],
                 "tool_calls": [
@@ -1145,14 +1074,9 @@ class CopilotSdkProvider:
                 },
                 "finish_reason": response_event["finish_reason"],
             }
-            await self._emit_event(
-                "llm:response:raw",
-                {
-                    "lvl": "DEBUG",
-                    "provider": self.name,
-                    "response": raw_response_data,
-                },
-            )
+            response_event["raw"] = redact_secrets(raw_response_data)
+
+        await self._emit_event("llm:response", response_event)
 
         return response
 
@@ -1377,11 +1301,9 @@ class CopilotSdkProvider:
             task.add_done_callback(self._handle_task_exception)
         except RuntimeError:
             # No running loop - skip emission
-            if self._debug:
-                logger.debug("[PROVIDER] No running event loop for streaming emission")
+            logger.debug("[PROVIDER] No running event loop for streaming emission")
         except Exception as e:
-            if self._debug:
-                logger.debug(f"[PROVIDER] Failed to emit streaming content: {e}")
+            logger.debug(f"[PROVIDER] Failed to emit streaming content: {e}")
 
     async def _emit_content_async(
         self,
@@ -1397,8 +1319,7 @@ class CopilotSdkProvider:
                 },
             )
         except Exception as e:
-            if self._debug:
-                logger.debug(f"[PROVIDER] Content emit failed: {e}")
+            logger.debug(f"[PROVIDER] Content emit failed: {e}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Provider Protocol: Method 5 - parse_tool_calls()
@@ -1575,37 +1496,6 @@ class CopilotSdkProvider:
             # Convert Pydantic Message objects to dicts
             return [msg.model_dump() if hasattr(msg, "model_dump") else msg for msg in messages]
         return []
-
-    def _truncate(self, text: str) -> str:
-        """
-        Truncate text for debug logging.
-
-        Args:
-            text: Text to truncate
-
-        Returns:
-            Truncated text with ellipsis if needed
-        """
-        if len(text) <= self._debug_truncate_length:
-            return text
-        return text[: self._debug_truncate_length] + "..."
-
-    def _truncate_values(self, obj: Any, max_length: int | None = None) -> Any:
-        """
-        Recursively truncate string values in nested structures.
-
-        Delegates to shared utility from amplifier_core.utils.
-
-        Args:
-            obj: Object to truncate (dict, list, or primitive)
-            max_length: Max string length (defaults to debug_truncate_length)
-
-        Returns:
-            Deep copy with long strings truncated
-        """
-        if max_length is None:
-            max_length = self._debug_truncate_length
-        return truncate_values(obj, max_length)
 
     async def _repair_missing_tool_results(
         self, messages: list[dict[str, Any]]
@@ -1810,5 +1700,4 @@ class CopilotSdkProvider:
             return
         exc = task.exception()
         if exc is not None:
-            if self._debug:
-                logger.debug(f"[PROVIDER] Background task failed: {type(exc).__name__}: {exc}")
+            logger.debug(f"[PROVIDER] Background task failed: {type(exc).__name__}: {exc}")

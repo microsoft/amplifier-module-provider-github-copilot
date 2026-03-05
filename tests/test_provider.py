@@ -370,7 +370,7 @@ class TestProviderConfiguration:
         assert provider._model == "claude-opus-4.5"
         assert provider._timeout == DEFAULT_TIMEOUT
         assert provider._thinking_timeout == DEFAULT_THINKING_TIMEOUT
-        assert provider._debug is False
+        assert provider._raw is False
 
     def test_custom_configuration(self, mock_coordinator):
         """Provider should use custom configuration."""
@@ -378,9 +378,7 @@ class TestProviderConfiguration:
             "model": "claude-sonnet-4",
             "timeout": 60.0,
             "thinking_timeout": 900.0,
-            "debug": True,
-            "raw_debug": True,
-            "debug_truncate_length": 200,
+            "raw": True,
         }
         provider = CopilotSdkProvider(
             api_key=None,
@@ -391,18 +389,16 @@ class TestProviderConfiguration:
         assert provider._model == "claude-sonnet-4"
         assert provider._timeout == 60.0
         assert provider._thinking_timeout == 900.0
-        assert provider._debug is True
-        assert provider._raw_debug is True
-        assert provider._debug_truncate_length == 200
+        assert provider._raw is True
 
-    def test_raw_debug_defaults_to_false(self, mock_coordinator):
-        """raw_debug should default to False."""
+    def test_raw_defaults_to_false(self, mock_coordinator):
+        """raw should default to False."""
         provider = CopilotSdkProvider(
             api_key=None,
             config={},
             coordinator=mock_coordinator,
         )
-        assert provider._raw_debug is False
+        assert provider._raw is False
 
     def test_default_model_config_key(self, mock_coordinator):
         """default_model config key should set the model (Amplifier convention)."""
@@ -434,24 +430,14 @@ class TestProviderConfiguration:
         )
         assert provider._model == "claude-sonnet-4"
 
-    def test_truncate_values_delegates_to_core(self, mock_coordinator):
-        """_truncate_values should recursively truncate long strings."""
+    def test_raw_flag_stored_on_provider(self, mock_coordinator):
+        """raw config flag should be stored as _raw attribute."""
         provider = CopilotSdkProvider(
             api_key=None,
-            config={"debug_truncate_length": 10},
+            config={"raw": True},
             coordinator=mock_coordinator,
         )
-
-        obj = {"short": "hi", "long": "x" * 50, "nested": {"deep": "y" * 50}}
-        result = provider._truncate_values(obj)
-
-        # Short strings should pass through unchanged
-        assert result["short"] == "hi"
-        # Long strings should be truncated (core appends "... (truncated N chars)")
-        assert len(result["long"]) < 50
-        assert "truncated" in result["long"] or result["long"].endswith("...")
-        # Nested structures should also be truncated
-        assert len(result["nested"]["deep"]) < 50
+        assert provider._raw is True
 
 
 class TestBuiltinToolConstants:
@@ -1165,13 +1151,13 @@ class TestProviderEventEmission:
         assert data["finish_reason"] == "end_turn"
 
     @pytest.mark.asyncio
-    async def test_complete_emits_debug_events_when_debug_enabled(
+    async def test_complete_emits_raw_field_when_raw_enabled(
         self, mock_coordinator, sample_messages
     ):
-        """complete() should emit llm:request:debug and llm:response:debug when debug=True."""
+        """complete() should include `raw` field in llm:request and llm:response when raw=True."""
         provider = CopilotSdkProvider(
             api_key=None,
-            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": True},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "raw": True},
             coordinator=mock_coordinator,
         )
 
@@ -1206,17 +1192,18 @@ class TestProviderEventEmission:
                         model="gpt-4",
                     )
 
+        # Verify base events are emitted
         emitted_events = [call[0][0] for call in mock_coordinator.hooks.emit.call_args_list]
-        assert "llm:request:debug" in emitted_events
-        assert "llm:response:debug" in emitted_events
+        assert "llm:request" in emitted_events
+        assert "llm:response" in emitted_events
 
-        # Verify debug events have lvl field
-        debug_calls = [
+        # Verify llm:request has `raw` field
+        request_calls = [
             call
             for call in mock_coordinator.hooks.emit.call_args_list
-            if call[0][0] == "llm:request:debug"
+            if call[0][0] == "llm:request"
         ]
-        assert debug_calls[0][0][1]["lvl"] == "DEBUG"
+        assert "raw" in request_calls[0][0][1]
 
     @pytest.mark.asyncio
     async def test_complete_skips_debug_events_when_debug_disabled(
@@ -1267,18 +1254,14 @@ class TestProviderEventEmission:
         assert "llm:response:raw" not in emitted_events
 
     @pytest.mark.asyncio
-    async def test_complete_emits_raw_events_only_when_both_flags_set(
-        self, mock_coordinator, sample_messages
-    ):
-        """complete() should emit raw events only when BOTH debug AND raw_debug are True."""
-        # debug=True, raw_debug=True → raw events should appear
+    async def test_complete_no_tiered_events_emitted(self, mock_coordinator, sample_messages):
+        """complete() should never emit :debug or :raw tiered events (verbosity collapse)."""
         provider = CopilotSdkProvider(
             api_key=None,
             config={
                 "model": "claude-opus-4.5",
                 "use_streaming": False,
-                "debug": True,
-                "raw_debug": True,
+                "raw": True,
             },
             coordinator=mock_coordinator,
         )
@@ -1315,8 +1298,10 @@ class TestProviderEventEmission:
                     )
 
         emitted_events = [call[0][0] for call in mock_coordinator.hooks.emit.call_args_list]
-        assert "llm:request:raw" in emitted_events
-        assert "llm:response:raw" in emitted_events
+        assert "llm:request:raw" not in emitted_events
+        assert "llm:response:raw" not in emitted_events
+        assert "llm:request:debug" not in emitted_events
+        assert "llm:response:debug" not in emitted_events
 
     @pytest.mark.asyncio
     async def test_no_llm_complete_event(self, mock_coordinator, sample_messages):
@@ -3624,29 +3609,28 @@ class TestCompleteStreamOverride:
 
 
 class TestCompleteDebugToolPayload:
-    """Tests for debug tool logging in complete() (lines 770, 796)."""
+    """Tests for raw tool payload in complete() when raw=True."""
 
     @pytest.fixture
-    def debug_provider(self, mock_coordinator):
+    def raw_provider(self, mock_coordinator):
         return CopilotSdkProvider(
             api_key=None,
             config={
                 "default_model": "claude-opus-4.5",
                 "timeout": 60.0,
-                "debug": True,
-                "raw_debug": True,
+                "raw": True,
                 "use_streaming": False,  # Use non-streaming for simpler test
             },
             coordinator=mock_coordinator,
         )
 
     @pytest.mark.asyncio
-    async def test_debug_logs_tool_definitions(
+    async def test_raw_includes_tool_definitions(
         self,
-        debug_provider,
+        raw_provider,
         mock_copilot_client,
     ):
-        """Debug mode should log tool definitions when tools are present."""
+        """raw=True should include tool definitions in the llm:request raw field."""
         request = Mock()
         request.messages = [{"role": "user", "content": "Read file."}]
         request.stream = None
@@ -3659,7 +3643,7 @@ class TestCompleteDebugToolPayload:
         request.tools = [tool]
 
         mock_session = AsyncMock()
-        mock_session.session_id = "debug-test"
+        mock_session.session_id = "raw-test"
         mock_session.destroy = AsyncMock()
 
         @asynccontextmanager
@@ -3673,26 +3657,37 @@ class TestCompleteDebugToolPayload:
             usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
 
+        # Patch convert_tools_for_sdk to avoid requiring the copilot SDK
+        fake_tool = Mock()
+        fake_tool.name = "read_file"
+        fake_tool.description = "Read a file"
+
         with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
             with patch.object(
-                debug_provider,
+                raw_provider,
                 "_complete_streaming",
                 new_callable=AsyncMock,
                 return_value=mock_response,
             ):
-                response = await debug_provider.complete(request)
+                with patch(
+                    "amplifier_module_provider_github_copilot.provider.convert_tools_for_sdk",
+                    return_value=[fake_tool],
+                ):
+                    response = await raw_provider.complete(request)
 
-                assert response is not None
-                # Debug events should have been emitted
-                emit_calls = debug_provider._coordinator.hooks.emit.call_args_list
-                event_names = [c[0][0] for c in emit_calls]
-                assert "llm:request:debug" in event_names
-                assert "llm:request:raw" in event_names
+        assert response is not None
+        # Base event with raw field should have been emitted
+        emit_calls = raw_provider._coordinator.hooks.emit.call_args_list
+        event_names = [c[0][0] for c in emit_calls]
+        assert "llm:request" in event_names
+        assert "llm:request:debug" not in event_names
+        assert "llm:request:raw" not in event_names
 
-                # Verify tools appear in debug payload
-                debug_call = next(c for c in emit_calls if c[0][0] == "llm:request:debug")
-                debug_data = debug_call[0][1]
-                assert "tools" in debug_data["request"]
+        # Verify tools appear in the raw field of the base event
+        request_call = next(c for c in emit_calls if c[0][0] == "llm:request")
+        request_data = request_call[0][1]
+        assert "raw" in request_data
+        assert "tools" in request_data["raw"]
 
 
 class TestExtractMessagesWithPydantic:
@@ -4212,11 +4207,13 @@ class TestRetryIntegration:
     def test_retry_config_uses_rust_field_names(self, mock_coordinator):
         """RetryConfig construction must use Rust field names without deprecation warnings."""
         import warnings
+
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", DeprecationWarning)
             provider = CopilotSdkProvider(api_key=None, config={}, coordinator=mock_coordinator)  # noqa: F841
         retry_warnings = [
-            w for w in caught
+            w
+            for w in caught
             if issubclass(w.category, DeprecationWarning)
             and "deprecated" in str(w.message).lower()
             and ("min_delay" in str(w.message) or "jitter" in str(w.message))
