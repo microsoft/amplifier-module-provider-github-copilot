@@ -18,6 +18,7 @@ WHY THIS MATTERS:
 
 from __future__ import annotations
 
+from amplifier_module_provider_github_copilot.model_cache import BUNDLED_MODEL_LIMITS
 from amplifier_module_provider_github_copilot.model_naming import (
     KNOWN_THINKING_PATTERNS,
     ModelIdPattern,
@@ -483,6 +484,8 @@ class TestRealWorldScenarios:
         "gpt-5.1-codex-mini",
         "gpt-5.2",
         "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "gpt-5.4",
     ]
 
     LIVE_OTHER_MODELS = [
@@ -528,3 +531,15 @@ class TestRealWorldScenarios:
             assert actual == expected_thinking, (
                 f"{model_id}: pattern expected={expected_thinking}, got {actual}"
             )
+
+
+class TestBundledModelLimitsGpt54:
+    """Tests that gpt-5.4 is in BUNDLED_MODEL_LIMITS with correct values."""
+
+    def test_gpt_5_4_in_bundled_limits(self) -> None:
+        """gpt-5.4 must be present in BUNDLED_MODEL_LIMITS."""
+        assert "gpt-5.4" in BUNDLED_MODEL_LIMITS
+
+    def test_gpt_5_4_values(self) -> None:
+        """gpt-5.4 must have (272000, 128000) limits."""
+        assert BUNDLED_MODEL_LIMITS.get("gpt-5.4") == (272000, 128000)
