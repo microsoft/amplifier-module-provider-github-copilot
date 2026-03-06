@@ -333,7 +333,7 @@ class TestUsesDashForVersion:
     anti-pattern (checked live 2026-02-07).
     """
 
-    # ── Live SDK model IDs (captured 2026-02-07) ──
+    # ── Live SDK model IDs (captured 2026-02-07; gpt-5.4 added as future-proofing) ──
     # Every single one must return False (none use dash-for-version).
     LIVE_SDK_MODEL_IDS = [
         "claude-sonnet-4.5",
@@ -350,6 +350,7 @@ class TestUsesDashForVersion:
         "gpt-5",
         "gpt-5.1-codex-mini",
         "gpt-5-mini",
+        "gpt-5.4",
         "gpt-4.1",
     ]
 
@@ -483,6 +484,8 @@ class TestRealWorldScenarios:
         "gpt-5.1-codex-mini",
         "gpt-5.2",
         "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "gpt-5.4",
     ]
 
     LIVE_OTHER_MODELS = [

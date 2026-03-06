@@ -79,6 +79,7 @@ BUNDLED_MODEL_LIMITS: dict[str, tuple[int, int]] = {
     "gpt-5.2": (264000, 136000),
     "gpt-5.2-codex": (400000, 128000),
     "gpt-5.3-codex": (400000, 128000),
+    "gpt-5.4": (272000, 128000),
 }
 
 
