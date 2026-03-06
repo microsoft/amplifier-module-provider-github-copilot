@@ -118,7 +118,14 @@ def convert_messages_to_prompt(messages: list[dict[str, Any]]) -> str:
                 # and writes fake tool calls as text instead of using structured calling.
                 tool_parts = []
                 for tc in tool_calls:
-                    tool_name = tc.get("name", tc.get("function", {}).get("name", "unknown"))
+                    # Bug #19 fix: Check "tool" field first (Amplifier transcript format),
+                    # then "name", then "function.name" for legacy compatibility
+                    tool_name = (
+                        tc.get("tool")  # Amplifier transcript format
+                        or tc.get("name")  # Standard format
+                        or tc.get("function", {}).get("name")  # OpenAI legacy format
+                        or "unknown"
+                    )
                     tool_args = tc.get("arguments", tc.get("function", {}).get("arguments", {}))
                     if isinstance(tool_args, str):
                         try:

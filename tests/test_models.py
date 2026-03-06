@@ -426,3 +426,48 @@ class TestCapabilityInferenceRegression:
         assert "reasoning" in result.capabilities, (
             "OpenAI model with SDK reasoning_effort=True should have 'reasoning' capability"
         )
+
+
+class TestFastModelCapability:
+    """Tests for fast model capability detection.
+
+    Models with -haiku, -mini, or -flash patterns should get the 'fast' capability.
+    """
+
+    @pytest.mark.parametrize(
+        "model_id,expected_fast",
+        [
+            ("claude-3-5-haiku-latest", True),
+            ("gpt-4o-mini", True),
+            ("gemini-2.0-flash-latest", True),
+            ("claude-opus-4.5", False),
+            ("gpt-4o", False),
+            ("gemini-3-pro", False),
+        ],
+    )
+    def test_fast_capability_based_on_model_name(self, model_id, expected_fast):
+        """Fast capability should be added based on model name patterns."""
+        raw_model = Mock()
+        raw_model.id = model_id
+        raw_model.name = f"Test {model_id}"
+        raw_model.provider = None
+        raw_model.vendor = None
+        raw_model.capabilities = Mock()
+        raw_model.capabilities.supports = Mock()
+        raw_model.capabilities.supports.vision = False
+        raw_model.capabilities.supports.reasoning_effort = False
+        raw_model.capabilities.limits = Mock()
+        raw_model.capabilities.limits.max_context_window_tokens = 128000
+        raw_model.capabilities.limits.max_prompt_tokens = 100000
+        raw_model.supported_reasoning_efforts = None
+        raw_model.default_reasoning_effort = None
+
+        internal = copilot_model_to_internal(raw_model)
+        result = to_amplifier_model_info(internal)
+
+        if expected_fast:
+            assert "fast" in result.capabilities, f"Model {model_id} should have 'fast' capability"
+        else:
+            assert "fast" not in result.capabilities, (
+                f"Model {model_id} should NOT have 'fast' capability"
+            )

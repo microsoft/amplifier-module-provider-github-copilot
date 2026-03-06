@@ -129,12 +129,15 @@ COPILOT_BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
         # File operations
         "view",  # Read/view file contents
         "edit",  # Edit/create/modify files (THE file writing tool)
+        "str_replace_editor",  # 2026-03-05 tools.list API: Actual editor tool name
         "grep",  # Search text patterns in files
         "glob",  # Find files matching glob patterns
         # Shell execution — Linux/macOS
         "bash",  # Execute bash commands
         "read_bash",  # Read-only bash commands
         "write_bash",  # Write bash commands
+        "list_bash",  # 2026-03-05 tools.list API: Lists all active Bash sessions
+        "stop_bash",  # 2026-03-05 tools.list API: Stops a running Bash command
         # Shell execution — Windows
         "powershell",  # Execute PowerShell commands
         "read_powershell",  # Read-only PowerShell commands
@@ -155,6 +158,7 @@ COPILOT_BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
         # Evidence: ST04 session, binary analysis, Gemini live test
         # ─────────────────────────────────────────────────────────────────────────
         "create",  # File ops: ST04 session - "Tool 'create' not found"
+        "create_file",  # File ops: 2026-03-05 SDK e2e test forensic analysis
         "shell",  # Shell: 2026-02-09 archaeology
         "report_progress",  # Think: 2026-02-09 archaeology (CLI session UI)
         "update_todo",  # Think: 2026-02-09 archaeology
@@ -236,12 +240,15 @@ BUILTIN_TO_AMPLIFIER_CAPABILITY: dict[str, frozenset[str]] = {
     # File operation overlaps
     "view": frozenset({"read_file"}),
     "edit": frozenset({"write_file", "edit_file"}),
+    "str_replace_editor": frozenset({"write_file", "edit_file", "read_file"}),  # tools.list
     "grep": frozenset({"grep"}),
     "glob": frozenset({"glob"}),
     # Shell overlaps
     "bash": frozenset({"bash"}),
     "read_bash": frozenset({"bash"}),
     "write_bash": frozenset({"bash"}),
+    "list_bash": frozenset({"bash"}),  # 2026-03-05 tools.list
+    "stop_bash": frozenset({"bash"}),  # 2026-03-05 tools.list
     "powershell": frozenset({"bash"}),  # Amplifier uses "bash" on all platforms
     "read_powershell": frozenset({"bash"}),
     "write_powershell": frozenset({"bash"}),
@@ -258,6 +265,7 @@ BUILTIN_TO_AMPLIFIER_CAPABILITY: dict[str, frozenset[str]] = {
     # Additional built-ins (Bug GHCP-BUILTIN-TOOLS-001, 2026-02-17)
     # ─────────────────────────────────────────────────────────────────────────
     "create": frozenset({"write_file"}),  # Maps to write_file (same as edit)
+    "create_file": frozenset({"write_file"}),  # Maps to write_file (SDK alias for create)
     "shell": frozenset({"bash"}),  # Maps to bash
     "update_todo": frozenset({"todo"}),  # Maps to todo
     "skill": frozenset({"load_skill"}),  # Maps to load_skill
@@ -268,3 +276,37 @@ BUILTIN_TO_AMPLIFIER_CAPABILITY: dict[str, frozenset[str]] = {
     "fetch_copilot_cli_documentation": frozenset(),  # CLI-specific, no equivalent
     "task_complete": frozenset({"todo"}),  # Task completion: maps to todo
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# USER-FACING MESSAGE CONSTANTS
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These constants are used in error messages shown to users. They are defined
+# here to ensure:
+#   1. Single source of truth (no duplicated/inconsistent strings)
+#   2. Testability (we can validate these against reality)
+#   3. Easy updates when commands/packages change
+#
+# TDD Gap Fixed: Prior to v1.0.2, error messages had hardcoded strings that
+# were never validated against actual PyPI package names or CLI commands.
+# See /memories/repo/tdd-gap-user-facing-strings.md for the full analysis.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# The official PyPI package name for the Copilot SDK
+# Verified: https://pypi.org/project/github-copilot-sdk/
+SDK_PACKAGE_NAME = "github-copilot-sdk"
+
+# Installation command for the SDK
+SDK_INSTALL_COMMAND = f"pip install {SDK_PACKAGE_NAME}"
+
+# Authentication command (GitHub CLI - works with SDK's GH_TOKEN env var detection)
+# Note: The SDK also supports `copilot auth login` but that requires the Copilot CLI
+# to be installed separately and in PATH - which users may not have. The GitHub CLI
+# (`gh`) is more widely available and its auth token is automatically detected.
+AUTH_COMMAND = "gh auth login"
+
+# Environment variable for authentication (highest priority in SDK)
+AUTH_ENV_VAR = "GITHUB_TOKEN"
+
+# User-friendly auth instructions
+AUTH_INSTRUCTIONS = f"Set {AUTH_ENV_VAR} or run '{AUTH_COMMAND}'."

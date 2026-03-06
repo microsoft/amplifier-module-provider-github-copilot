@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "1.0.1"
+version = "1.0.2"
 description = "Amplifier provider module for GitHub Copilot CLI SDK"
 readme = "README.md"
 license = {text = "MIT"}
@@ -70,7 +70,21 @@ select = ["E", "F", "W", "I", "UP", "B", "C4"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"  # Fixes pytest-asyncio 0.24+ deprecation
 testpaths = ["tests"]
+markers = [
+    "live: tests that require network access or live credentials (opt-in via RUN_LIVE_TESTS=1)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:copilot.*:",  # SDK deprecations
+    "ignore::DeprecationWarning:pydantic.*:",  # Pydantic internal deprecations
+]
+
+# Logging with millisecond timestamps for precise timing analysis
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s.%(msecs)03d | %(levelname)-5s | %(name)s | %(message)s"
+log_cli_date_format = "%H:%M:%S"
 
 # =============================================================================
 # Coverage Configuration

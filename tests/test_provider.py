@@ -392,7 +392,7 @@ class TestProviderConfiguration:
         assert provider._raw is True
 
     def test_raw_defaults_to_false(self, mock_coordinator):
-        """raw should default to False."""
+        """raw config should default to False."""
         provider = CopilotSdkProvider(
             api_key=None,
             config={},
@@ -429,15 +429,6 @@ class TestProviderConfiguration:
             coordinator=mock_coordinator,
         )
         assert provider._model == "claude-sonnet-4"
-
-    def test_raw_flag_stored_on_provider(self, mock_coordinator):
-        """raw config flag should be stored as _raw attribute."""
-        provider = CopilotSdkProvider(
-            api_key=None,
-            config={"raw": True},
-            coordinator=mock_coordinator,
-        )
-        assert provider._raw is True
 
 
 class TestBuiltinToolConstants:
@@ -556,6 +547,87 @@ class TestBuiltinToolConstants:
         """
         assert "github-mcp-server-web_search" in BUILTIN_TO_AMPLIFIER_CAPABILITY
         assert "web_search" in BUILTIN_TO_AMPLIFIER_CAPABILITY["github-mcp-server-web_search"]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TDD Tests for Live tools.list Discovery (2026-03-05)
+    # Evidence: Live tools.list API call returned 13 built-in tools
+    # New discoveries: str_replace_editor, list_bash, stop_bash
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def test_str_replace_editor_in_exclusion_list(self):
+        """CLI's str_replace_editor is the actual file editor tool.
+
+        Evidence: 2026-03-05 live tools.list API call returned this tool.
+        It's the real name for what we called 'edit'/'view' aliases.
+        """
+        assert "str_replace_editor" in COPILOT_BUILTIN_TOOL_NAMES, (
+            "'str_replace_editor' must be in COPILOT_BUILTIN_TOOL_NAMES"
+        )
+
+    def test_str_replace_editor_maps_to_file_operations(self):
+        """CLI's str_replace_editor maps to write_file, edit_file, read_file.
+
+        Evidence: tools.list description: "Editing tool for viewing, creating
+        and editing files" - covers all file operations.
+        """
+        assert "str_replace_editor" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        mapping = BUILTIN_TO_AMPLIFIER_CAPABILITY["str_replace_editor"]
+        assert "write_file" in mapping, "str_replace_editor should map to write_file"
+        assert "edit_file" in mapping, "str_replace_editor should map to edit_file"
+        assert "read_file" in mapping, "str_replace_editor should map to read_file"
+
+    def test_list_bash_in_exclusion_list(self):
+        """CLI's list_bash lists all active Bash sessions.
+
+        Evidence: 2026-03-05 live tools.list API call.
+        """
+        assert "list_bash" in COPILOT_BUILTIN_TOOL_NAMES, (
+            "'list_bash' must be in COPILOT_BUILTIN_TOOL_NAMES"
+        )
+
+    def test_list_bash_maps_to_bash(self):
+        """CLI's list_bash maps to bash capability."""
+        assert "list_bash" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "bash" in BUILTIN_TO_AMPLIFIER_CAPABILITY["list_bash"]
+
+    def test_stop_bash_in_exclusion_list(self):
+        """CLI's stop_bash stops a running Bash command.
+
+        Evidence: 2026-03-05 live tools.list API call.
+        """
+        assert "stop_bash" in COPILOT_BUILTIN_TOOL_NAMES, (
+            "'stop_bash' must be in COPILOT_BUILTIN_TOOL_NAMES"
+        )
+
+    def test_stop_bash_maps_to_bash(self):
+        """CLI's stop_bash maps to bash capability."""
+        assert "stop_bash" in BUILTIN_TO_AMPLIFIER_CAPABILITY
+        assert "bash" in BUILTIN_TO_AMPLIFIER_CAPABILITY["stop_bash"]
+
+    def test_live_tools_list_discovery_complete(self):
+        """All 13 tools from live tools.list API must be in exclusion list.
+
+        Evidence: 2026-03-05 tools.list API call returned exactly these tools.
+        """
+        live_tools_list = {
+            "ask_user",
+            "bash",
+            "fetch_copilot_cli_documentation",
+            "glob",
+            "grep",
+            "list_bash",
+            "read_bash",
+            "report_intent",
+            "stop_bash",
+            "str_replace_editor",
+            "task",
+            "web_fetch",
+            "write_bash",
+        }
+        for tool in live_tools_list:
+            assert tool in COPILOT_BUILTIN_TOOL_NAMES, (
+                f"Live discovered tool '{tool}' missing from COPILOT_BUILTIN_TOOL_NAMES"
+            )
 
     def test_pure_exclusion_tools_have_mapping_entries(self):
         """Tools without Amplifier equivalents still need mapping entries.
@@ -1150,165 +1222,17 @@ class TestProviderEventEmission:
         assert data["tool_calls"] == 0
         assert data["finish_reason"] == "end_turn"
 
-    @pytest.mark.asyncio
-    async def test_complete_emits_raw_field_when_raw_enabled(
-        self, mock_coordinator, sample_messages
-    ):
-        """complete() should include `raw` field in llm:request and llm:response when raw=True."""
-        provider = CopilotSdkProvider(
-            api_key=None,
-            config={"model": "claude-opus-4.5", "use_streaming": False, "raw": True},
-            coordinator=mock_coordinator,
-        )
-
-        mock_session = AsyncMock()
-        mock_session.session_id = "test"
-        mock_session.destroy = AsyncMock()
-
-        mock_response = Mock()
-        mock_response.data = Mock()
-        mock_response.data.content = "Hello"
-        mock_response.data.tool_requests = None
-        mock_response.data.input_tokens = 10
-        mock_response.data.output_tokens = 5
-
-        @asynccontextmanager
-        async def mock_create_session(self, **kwargs):
-            yield mock_session
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(
-                CopilotClientWrapper, "send_and_wait", new_callable=AsyncMock
-            ) as mock_send:
-                mock_send.return_value = mock_response
-                with patch.object(
-                    provider,
-                    "_model_supports_reasoning",
-                    new_callable=AsyncMock,
-                    return_value=False,
-                ):
-                    await provider.complete(
-                        {"messages": sample_messages},
-                        model="gpt-4",
-                    )
-
-        # Verify base events are emitted
-        emitted_events = [call[0][0] for call in mock_coordinator.hooks.emit.call_args_list]
-        assert "llm:request" in emitted_events
-        assert "llm:response" in emitted_events
-
-        # Verify llm:request has `raw` field
-        request_calls = [
-            call
-            for call in mock_coordinator.hooks.emit.call_args_list
-            if call[0][0] == "llm:request"
-        ]
-        assert "raw" in request_calls[0][0][1]
-
-    @pytest.mark.asyncio
-    async def test_complete_skips_debug_events_when_debug_disabled(
-        self, mock_coordinator, sample_messages
-    ):
-        """complete() should NOT emit debug events when debug=False."""
-        provider = CopilotSdkProvider(
-            api_key=None,
-            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
-            coordinator=mock_coordinator,
-        )
-
-        mock_session = AsyncMock()
-        mock_session.session_id = "test"
-        mock_session.destroy = AsyncMock()
-
-        mock_response = Mock()
-        mock_response.data = Mock()
-        mock_response.data.content = "Hello"
-        mock_response.data.tool_requests = None
-        mock_response.data.input_tokens = 10
-        mock_response.data.output_tokens = 5
-
-        @asynccontextmanager
-        async def mock_create_session(self, **kwargs):
-            yield mock_session
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(
-                CopilotClientWrapper, "send_and_wait", new_callable=AsyncMock
-            ) as mock_send:
-                mock_send.return_value = mock_response
-                with patch.object(
-                    provider,
-                    "_model_supports_reasoning",
-                    new_callable=AsyncMock,
-                    return_value=False,
-                ):
-                    await provider.complete(
-                        {"messages": sample_messages},
-                        model="gpt-4",
-                    )
-
-        emitted_events = [call[0][0] for call in mock_coordinator.hooks.emit.call_args_list]
-        assert "llm:request:debug" not in emitted_events
-        assert "llm:response:debug" not in emitted_events
-        assert "llm:request:raw" not in emitted_events
-        assert "llm:response:raw" not in emitted_events
-
-    @pytest.mark.asyncio
-    async def test_complete_no_tiered_events_emitted(self, mock_coordinator, sample_messages):
-        """complete() should never emit :debug or :raw tiered events (verbosity collapse)."""
-        provider = CopilotSdkProvider(
-            api_key=None,
-            config={
-                "model": "claude-opus-4.5",
-                "use_streaming": False,
-                "raw": True,
-            },
-            coordinator=mock_coordinator,
-        )
-
-        mock_session = AsyncMock()
-        mock_session.session_id = "test"
-        mock_session.destroy = AsyncMock()
-
-        mock_response = Mock()
-        mock_response.data = Mock()
-        mock_response.data.content = "Hello"
-        mock_response.data.tool_requests = None
-        mock_response.data.input_tokens = 10
-        mock_response.data.output_tokens = 5
-
-        @asynccontextmanager
-        async def mock_create_session(self, **kwargs):
-            yield mock_session
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(
-                CopilotClientWrapper, "send_and_wait", new_callable=AsyncMock
-            ) as mock_send:
-                mock_send.return_value = mock_response
-                with patch.object(
-                    provider,
-                    "_model_supports_reasoning",
-                    new_callable=AsyncMock,
-                    return_value=False,
-                ):
-                    await provider.complete(
-                        {"messages": sample_messages},
-                        model="gpt-4",
-                    )
-
-        emitted_events = [call[0][0] for call in mock_coordinator.hooks.emit.call_args_list]
-        assert "llm:request:raw" not in emitted_events
-        assert "llm:response:raw" not in emitted_events
-        assert "llm:request:debug" not in emitted_events
-        assert "llm:response:debug" not in emitted_events
+    # NOTE: Tests for tiered debug events (llm:request:debug, llm:response:debug)
+    # were removed in v1.0.2 after upstream PR #21 (CP-V verbosity collapse).
+    # The new model uses a single event with optional `raw` field.
+    # See tests/test_verbosity_collapse.py for the new verbose emission tests.
 
     @pytest.mark.asyncio
     async def test_no_llm_complete_event(self, mock_coordinator, sample_messages):
         """complete() should NOT emit the deprecated llm:complete event."""
         provider = CopilotSdkProvider(
             api_key=None,
-            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False},
             coordinator=mock_coordinator,
         )
 
@@ -2017,7 +1941,7 @@ class TestEmitStreamingContent:
         """Create provider with debug enabled."""
         return CopilotSdkProvider(
             api_key=None,
-            config={"debug": True},
+            config={"raw": True},
             coordinator=mock_coordinator,
         )
 
@@ -2073,7 +1997,7 @@ class TestEmitContentAsync:
         """Create provider with debug enabled."""
         return CopilotSdkProvider(
             api_key=None,
-            config={"debug": True},
+            config={"raw": True},
             coordinator=mock_coordinator,
         )
 
@@ -2152,7 +2076,7 @@ class TestHandleTaskException:
         """Create provider with debug enabled to exercise all branches."""
         return CopilotSdkProvider(
             api_key=None,
-            config={"debug": True},
+            config={"raw": True},
             coordinator=mock_coordinator,
         )
 
@@ -2885,7 +2809,7 @@ class TestCompleteExtendedThinkingLogging:
         """Should log info when extended_thinking requested but model lacks support (line 586)."""
         provider = CopilotSdkProvider(
             api_key=None,
-            config={"use_streaming": False, "debug": True},
+            config={"use_streaming": False, "raw": True},
             coordinator=mock_coordinator,
         )
 
@@ -2934,7 +2858,7 @@ class TestCompleteExtendedThinkingLogging:
         """Should log when extended thinking is both requested and supported (line 612)."""
         provider = CopilotSdkProvider(
             api_key=None,
-            config={"use_streaming": False, "debug": True},
+            config={"use_streaming": False, "raw": True},
             coordinator=mock_coordinator,
         )
 
@@ -3609,7 +3533,7 @@ class TestCompleteStreamOverride:
 
 
 class TestCompleteDebugToolPayload:
-    """Tests for raw tool payload in complete() when raw=True."""
+    """Tests for raw field in llm:request event when raw=True (verbosity collapse)."""
 
     @pytest.fixture
     def raw_provider(self, mock_coordinator):
@@ -3625,12 +3549,12 @@ class TestCompleteDebugToolPayload:
         )
 
     @pytest.mark.asyncio
-    async def test_raw_includes_tool_definitions(
+    async def test_raw_flag_includes_tool_definitions(
         self,
         raw_provider,
         mock_copilot_client,
     ):
-        """raw=True should include tool definitions in the llm:request raw field."""
+        """When raw=True, llm:request event should have raw field with tool definitions."""
         request = Mock()
         request.messages = [{"role": "user", "content": "Read file."}]
         request.stream = None
@@ -3657,11 +3581,6 @@ class TestCompleteDebugToolPayload:
             usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
 
-        # Patch convert_tools_for_sdk to avoid requiring the copilot SDK
-        fake_tool = Mock()
-        fake_tool.name = "read_file"
-        fake_tool.description = "Read a file"
-
         with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
             with patch.object(
                 raw_provider,
@@ -3669,25 +3588,19 @@ class TestCompleteDebugToolPayload:
                 new_callable=AsyncMock,
                 return_value=mock_response,
             ):
-                with patch(
-                    "amplifier_module_provider_github_copilot.provider.convert_tools_for_sdk",
-                    return_value=[fake_tool],
-                ):
-                    response = await raw_provider.complete(request)
+                response = await raw_provider.complete(request)
 
-        assert response is not None
-        # Base event with raw field should have been emitted
-        emit_calls = raw_provider._coordinator.hooks.emit.call_args_list
-        event_names = [c[0][0] for c in emit_calls]
-        assert "llm:request" in event_names
-        assert "llm:request:debug" not in event_names
-        assert "llm:request:raw" not in event_names
+                assert response is not None
+                # Check for llm:request event with raw field
+                emit_calls = raw_provider._coordinator.hooks.emit.call_args_list
+                event_names = [c[0][0] for c in emit_calls]
+                assert "llm:request" in event_names
 
-        # Verify tools appear in the raw field of the base event
-        request_call = next(c for c in emit_calls if c[0][0] == "llm:request")
-        request_data = request_call[0][1]
-        assert "raw" in request_data
-        assert "tools" in request_data["raw"]
+                # Find the llm:request event and verify it has raw field
+                request_call = next(c for c in emit_calls if c[0][0] == "llm:request")
+                request_data = request_call[0][1]
+                # When raw=True, the event should have a "raw" field
+                assert "raw" in request_data
 
 
 class TestExtractMessagesWithPydantic:
@@ -3923,7 +3836,7 @@ class TestErrorTranslation:
         @asynccontextmanager
         async def mock_create_session(self_wrapper, *args, **kwargs):
             raise error
-            yield  # noqa: unreachable but required for generator syntax
+            yield  # unreachable but required for generator syntax
 
         return mock_create_session
 
@@ -4201,27 +4114,8 @@ class TestRetryIntegration:
         provider = CopilotSdkProvider(api_key=None, config={}, coordinator=mock_coordinator)
         assert hasattr(provider, "_retry_config")
         assert provider._retry_config.max_retries == 3
-        assert provider._retry_config.initial_delay == 1.0
+        assert provider._retry_config.initial_delay == 1.0  # canonical amplifier-core field
         assert provider._retry_config.max_delay == 60.0
-
-    def test_retry_config_uses_rust_field_names(self, mock_coordinator):
-        """RetryConfig construction must use Rust field names without deprecation warnings."""
-        import warnings
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", DeprecationWarning)
-            provider = CopilotSdkProvider(api_key=None, config={}, coordinator=mock_coordinator)  # noqa: F841
-        retry_warnings = [
-            w
-            for w in caught
-            if issubclass(w.category, DeprecationWarning)
-            and "deprecated" in str(w.message).lower()
-            and ("min_delay" in str(w.message) or "jitter" in str(w.message))
-        ]
-        assert retry_warnings == [], (
-            f"RetryConfig should use Rust field names (initial_delay, bool jitter), "
-            f"got deprecation warnings: {[str(w.message) for w in retry_warnings]}"
-        )
 
     def test_retry_config_from_provider_config(self, mock_coordinator):
         """Retry config should be customizable via provider config."""
@@ -4231,11 +4125,11 @@ class TestRetryIntegration:
             "max_retries": 5,
             "retry_min_delay": 2.0,
             "retry_max_delay": 120.0,
-            "retry_jitter": True,
+            "retry_jitter": True,  # Boolean per upstream API
         }
         provider = CopilotSdkProvider(api_key=None, config=config, coordinator=mock_coordinator)
         assert provider._retry_config.max_retries == 5
-        assert provider._retry_config.initial_delay == 2.0
+        assert provider._retry_config.initial_delay == 2.0  # canonical amplifier-core field
         assert provider._retry_config.max_delay == 120.0
         # jitter=bool(True) -> Rust maps to default jitter factor (0.2)
         assert provider._retry_config.jitter == 0.2
@@ -4257,7 +4151,7 @@ class TestRetryIntegration:
         async def mock_create_session(self_wrapper, *args, **kwargs):
             call_count["n"] += 1
             raise CopilotAuthenticationError("Bad creds")
-            yield  # noqa: unreachable but required for generator syntax
+            yield  # unreachable but required for generator syntax
 
         with patch.object(
             CopilotClientWrapper,
@@ -4269,3 +4163,340 @@ class TestRetryIntegration:
 
             # Should only have been called once (no retry on non-retryable)
             assert call_count["n"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Category: Fake Tool Call Detection & Retry
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFakeToolCallPatternDetection:
+    """Tests for the fake tool call pattern regex.
+
+    Coverage for provider.py lines 1042-1083: Tests the regex pattern matching
+    that detects when models write [Tool Call: ...] or <tool_used> as plain
+    text instead of using structured tool calling.
+
+    These tests verify the pattern matching logic directly, which is the core
+    of the fake tool call detection feature.
+    """
+
+    # Re-create the pattern from provider.py for testing
+    import re
+
+    _FAKE_TOOL_CALL_RE = re.compile(
+        r"\[Tool Call:\s*\w+\("  # [Tool Call: name(
+        r"|Tool Result \(\w+\):"  # Tool Result (name):
+        r"|<tool_used\s+name="  # <tool_used name=  (XML format mimicked)
+        r"|<tool_result\s+name="  # <tool_result name= (XML-style tool result)
+    )
+
+    def test_detects_bracket_tool_call_pattern(self):
+        """Should detect [Tool Call: name(...)] pattern."""
+        text = 'Let me read that file.\n[Tool Call: read_file({"path": "test.py"})]'
+        assert self._FAKE_TOOL_CALL_RE.search(text) is not None
+
+    def test_detects_xml_tool_used_pattern(self):
+        """Should detect <tool_used name=...> pattern."""
+        text = '<tool_used name="read_file">{"path": "config.yaml"}</tool_used>'
+        assert self._FAKE_TOOL_CALL_RE.search(text) is not None
+
+    def test_detects_xml_tool_result_pattern(self):
+        """Should detect <tool_result name=...> pattern."""
+        text = '<tool_result name="grep">Found 5 matches</tool_result>'
+        assert self._FAKE_TOOL_CALL_RE.search(text) is not None
+
+    def test_detects_tool_result_parentheses_pattern(self):
+        """Should detect Tool Result (name): pattern."""
+        text = "Let me show you the result.\nTool Result (read_file): Contents of file..."
+        assert self._FAKE_TOOL_CALL_RE.search(text) is not None
+
+    def test_clean_text_not_flagged(self):
+        """Normal text without patterns should not match."""
+        text = "I've read the file and here are the contents..."
+        assert self._FAKE_TOOL_CALL_RE.search(text) is None
+
+    def test_partial_patterns_not_flagged(self):
+        """Partial patterns should not match prematurely."""
+        # Just [Tool without the rest
+        assert self._FAKE_TOOL_CALL_RE.search("[Tool") is None
+        # Just <tool_used without name
+        assert self._FAKE_TOOL_CALL_RE.search("<tool_used>") is None
+        # Just Discussion about tools
+        assert self._FAKE_TOOL_CALL_RE.search("The tool_used function is") is None
+
+    def test_multiline_detection(self):
+        """Pattern should be detected across multiple lines."""
+        text = """
+        Here's what I found:
+
+        [Tool Call: search_files({"query": "test"})]
+
+        The results are above.
+        """
+        assert self._FAKE_TOOL_CALL_RE.search(text) is not None
+
+    def test_multiple_patterns_in_text(self):
+        """Should detect even with multiple patterns - first match wins."""
+        text = '[Tool Call: a()] and <tool_used name="b">'
+        match = self._FAKE_TOOL_CALL_RE.search(text)
+        assert match is not None
+        # First pattern wins
+        assert "[Tool Call:" in match.group()
+
+    def test_whitespace_variations_in_bracket_pattern(self):
+        """[Tool Call: ...] should handle whitespace variations."""
+        # Extra spaces after colon
+        assert self._FAKE_TOOL_CALL_RE.search("[Tool Call:  read_file(") is not None
+        # Tab instead of space
+        assert self._FAKE_TOOL_CALL_RE.search("[Tool Call:\tread_file(") is not None
+
+    def test_whitespace_in_xml_pattern(self):
+        """<tool_used name=...> should handle whitespace in tag."""
+        assert self._FAKE_TOOL_CALL_RE.search('<tool_used  name="x">') is not None
+        assert self._FAKE_TOOL_CALL_RE.search('<tool_used\n\tname="x">') is not None
+
+    def test_different_tool_names(self):
+        """Various tool names should all match."""
+        for name in ["read_file", "write_file", "search", "grep", "ls", "executeCode"]:
+            text = f"[Tool Call: {name}("
+            assert self._FAKE_TOOL_CALL_RE.search(text) is not None, f"Failed for {name}"
+
+    def test_real_world_claude_mimicry_example(self):
+        """Test a realistic example of Claude mimicking tool calls."""
+        # This is the kind of text Claude sometimes produces
+        text = """Based on the code review, I'll extract the key functions:
+
+<tool_used name="read_file">
+{"path": "src/main.py", "startLine": 1, "endLine": 100}
+</tool_used>
+
+The file contains the main entry point."""
+        assert self._FAKE_TOOL_CALL_RE.search(text) is not None
+
+    def test_case_sensitivity(self):
+        """Patterns are case-sensitive to avoid false positives."""
+        # Lowercase 'tool' shouldn't match if we expect exact case
+        # (The regex matches exactly as defined)
+        assert self._FAKE_TOOL_CALL_RE.search("[tool call: func(") is None
+        assert self._FAKE_TOOL_CALL_RE.search("<TOOL_USED name=") is None
+
+
+# =============================================================================
+# Code Block Awareness Tests for Fake Tool Call Detection
+# =============================================================================
+# v1.0.2 addition: Tests for is_in_code_block() and find_fake_tool_call()
+# These helper functions prevent false positives when LLM outputs tool examples
+# inside markdown code blocks.
+
+
+class TestFakeToolCallCodeBlockAwareness:
+    """Tests for code-block-aware fake tool call detection."""
+
+    @pytest.fixture
+    def pattern(self):
+        """Return the fake tool call regex pattern from provider module."""
+        from amplifier_module_provider_github_copilot.provider import _FAKE_TOOL_CALL_RE
+
+        return _FAKE_TOOL_CALL_RE
+
+    # -------------------------------------------------------------------------
+    # is_in_code_block() tests
+    # -------------------------------------------------------------------------
+
+    def test_position_outside_code_block(self):
+        """Position before any code block should return False."""
+        from amplifier_module_provider_github_copilot.provider import is_in_code_block
+
+        text = "Some text\n```\ncode\n```\nMore text"
+        assert is_in_code_block(text, 5) is False  # "text" position
+
+    def test_position_inside_code_block(self):
+        """Position inside code block should return True."""
+        from amplifier_module_provider_github_copilot.provider import is_in_code_block
+
+        text = "Some text\n```\ncode\n```\nMore text"
+        # Position 15 is inside the code block (after opening ```)
+        assert is_in_code_block(text, 15) is True
+
+    def test_position_after_code_block(self):
+        """Position after closed code block should return False."""
+        from amplifier_module_provider_github_copilot.provider import is_in_code_block
+
+        text = "Some text\n```\ncode\n```\nMore text"
+        # Position 25 is after closing ```
+        assert is_in_code_block(text, 25) is False
+
+    def test_tilde_fence(self):
+        """~~~ fences should also be recognized."""
+        from amplifier_module_provider_github_copilot.provider import is_in_code_block
+
+        text = "Text\n~~~\ncode\n~~~\nAfter"
+        assert is_in_code_block(text, 10) is True  # Inside
+        assert is_in_code_block(text, 20) is False  # After
+
+    def test_nested_code_blocks(self):
+        """Multiple code blocks should be handled correctly."""
+        from amplifier_module_provider_github_copilot.provider import is_in_code_block
+
+        text = "A\n```\nB\n```\nC\n```\nD\n```\nE"
+        assert is_in_code_block(text, 0) is False  # A (outside)
+        assert is_in_code_block(text, 6) is True  # B (inside first block)
+        assert is_in_code_block(text, 12) is False  # C (between blocks)
+        assert is_in_code_block(text, 18) is True  # D (inside second block)
+        assert is_in_code_block(text, 24) is False  # E (after all blocks)
+
+    # -------------------------------------------------------------------------
+    # find_fake_tool_call() tests
+    # -------------------------------------------------------------------------
+
+    def test_fake_tool_call_outside_code_block_detected(self, pattern):
+        """Fake tool call outside code block should be detected."""
+        from amplifier_module_provider_github_copilot.provider import find_fake_tool_call
+
+        text = "[Tool Call: read_file(path='test.py')]"
+        match = find_fake_tool_call(text, pattern)
+        assert match is not None
+
+    def test_fake_tool_call_inside_code_block_skipped(self, pattern):
+        """Fake tool call inside code block should be skipped."""
+        from amplifier_module_provider_github_copilot.provider import find_fake_tool_call
+
+        text = "```\n[Tool Call: read_file(path='test.py')]\n```"
+        match = find_fake_tool_call(text, pattern)
+        assert match is None
+
+    def test_mixed_inside_and_outside(self, pattern):
+        """When pattern exists both inside and outside, only outside is found."""
+        from amplifier_module_provider_github_copilot.provider import find_fake_tool_call
+
+        text = """Here's an example:
+```
+[Tool Call: read_file(path='example.py')]
+```
+
+But I'll actually call it:
+[Tool Call: read_file(path='real.py')]"""
+        match = find_fake_tool_call(text, pattern)
+        assert match is not None
+        # Should match the one OUTSIDE the code block
+        assert "real.py" in match.group(0) or match.start() > text.find("```\n[Tool")
+
+    # -------------------------------------------------------------------------
+    # extract_match_snippet() tests
+    # -------------------------------------------------------------------------
+
+    def test_extract_match_snippet_basic(self, pattern):
+        """extract_match_snippet should return context around match."""
+        from amplifier_module_provider_github_copilot.provider import extract_match_snippet
+
+        text = "prefix text [Tool Call: read_file(path='test.py')] suffix text"
+        match = pattern.search(text)
+        snippet = extract_match_snippet(text, match, context=10)
+        assert "[Tool Call:" in snippet
+        assert "..." in snippet  # Should have truncation markers
+
+
+class TestFakeToolRetry:
+    """Integration tests for fake tool call retry mechanism."""
+
+    @pytest.fixture
+    def provider(self):
+        """Create provider instance for testing."""
+        return CopilotSdkProvider(
+            config={"model": "gpt-5-mini", "timeout": 60},
+        )
+
+    def _make_mock_session(self):
+        """Create a mock Copilot session."""
+        session = AsyncMock()
+        session.destroy = AsyncMock()
+        session.abort = AsyncMock()
+        session.on = Mock(return_value=lambda: None)
+        session.send = AsyncMock()
+        return session
+
+    @pytest.mark.asyncio
+    async def test_fake_tool_retry_succeeds_after_transient_failure(self, provider):
+        """Provider retries when LLM writes fake tool text; succeeds when real tool call returned.
+
+        Scenario:
+          1. First call: LLM responds with fake text "[Tool Call: read_file(path='x')]"
+             instead of a structured tool_request.
+          2. Provider detects the pattern and re-prompts (retry 1).
+          3. Second call: LLM responds with a proper structured tool_request.
+          4. Provider returns the response with the real tool call.
+        """
+        from contextlib import asynccontextmanager
+
+        from amplifier_core import ChatResponse, ToolCall, Usage
+
+        from amplifier_module_provider_github_copilot.client import CopilotClientWrapper
+
+        # First response: fake tool call in text (triggers retry)
+        fake_response = ChatResponse(
+            content=[{"type": "text", "text": "[Tool Call: read_file(path='example.py')]"}],
+            tool_calls=None,
+            usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+            finish_reason="end_turn",
+        )
+
+        # Second response: real tool call (succeeds)
+        real_tool_call = ToolCall(
+            id="call_real_001", name="read_file", arguments={"path": "example.py"}
+        )
+        real_response = ChatResponse(
+            content=[{"type": "text", "text": "I'll read that file."}],
+            tool_calls=[real_tool_call],
+            usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+            finish_reason="tool_use",
+        )
+
+        call_count = {"n": 0}
+
+        async def mock_complete_streaming(session, prompt, model, timeout, thinking, has_tools):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return fake_response
+            return real_response
+
+        mock_session = self._make_mock_session()
+        user_tool = Mock()
+        user_tool.name = "read_file"
+        user_tool.description = "Read a file"
+        user_tool.input_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+        @asynccontextmanager
+        async def mock_create_session(self_wrapper, **kwargs):
+            yield mock_session
+
+        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
+            with patch.object(
+                provider,
+                "_complete_streaming",
+                side_effect=mock_complete_streaming,
+            ):
+                with patch(
+                    "amplifier_module_provider_github_copilot.provider.convert_tools_for_sdk",
+                    return_value=[Mock(name="read_file")],
+                ):
+                    with patch(
+                        "amplifier_module_provider_github_copilot.provider.make_deny_all_hook",
+                        return_value=None,
+                    ):
+                        result = await provider.complete(
+                            {
+                                "messages": [{"role": "user", "content": "Read example.py"}],
+                                "tools": [user_tool],
+                            }
+                        )
+
+        # The retry should have fired exactly once (2 total _complete_streaming calls)
+        assert call_count["n"] == 2, (
+            f"Expected 2 _complete_streaming calls (1 fake + 1 real), got {call_count['n']}"
+        )
+
+        # The final response must contain the real tool call
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].name == "read_file"

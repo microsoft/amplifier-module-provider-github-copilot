@@ -172,28 +172,27 @@ class TestMakeDenyAllHook:
 class TestNoopToolHandler:
     """Tests for _noop_tool_handler (line 94)."""
 
-    def test_returns_json_error_string(self):
-        """Handler should return a JSON string with an error message."""
-        import json
+    def test_returns_tool_result_dict(self):
+        """Handler should return a ToolResult dict with textResultForLlm.
 
+        SDK contract: ToolHandler = Callable[[dict], ToolResult]
+        ToolResult is a TypedDict with textResultForLlm key.
+        """
         from amplifier_module_provider_github_copilot.tool_capture import _noop_tool_handler
 
         result = _noop_tool_handler({"some": "args"})
 
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "error" in parsed
-        assert parsed["error"] == "Tool execution denied by provider policy"
+        assert isinstance(result, dict)
+        assert "textResultForLlm" in result
+        assert "denied" in result["textResultForLlm"].lower()
 
-    def test_returns_valid_json(self):
-        """Handler result should always be valid JSON."""
-        import json
-
+    def test_returns_dict_for_any_input(self):
+        """Handler result should always be a dict (ToolResult)."""
         from amplifier_module_provider_github_copilot.tool_capture import _noop_tool_handler
 
         result = _noop_tool_handler(None)
-        parsed = json.loads(result)
-        assert isinstance(parsed, dict)
+        assert isinstance(result, dict)
+        assert "textResultForLlm" in result
 
     def test_ignores_arguments(self):
         """Handler should return the same result regardless of args."""
@@ -298,8 +297,6 @@ class TestConvertToolsForSdkExtended:
 
     def test_produced_tools_use_noop_handler(self):
         """All produced SDK Tool objects should use _noop_tool_handler."""
-        import json
-
         from amplifier_module_provider_github_copilot.tool_capture import convert_tools_for_sdk
 
         tool_specs = [{"name": "test_tool", "description": "Test"}]
@@ -308,8 +305,10 @@ class TestConvertToolsForSdkExtended:
         assert len(result) == 1
         # Invoke the handler to verify it's the noop handler
         handler_result = result[0].handler({"arg": "val"})
-        parsed = json.loads(handler_result)
-        assert parsed["error"] == "Tool execution denied by provider policy"
+        # Handler returns ToolResult dict per SDK contract
+        assert isinstance(handler_result, dict)
+        assert "textResultForLlm" in handler_result
+        assert "denied" in handler_result["textResultForLlm"].lower()
 
     def test_mixed_object_and_dict_specs(self):
         """Should handle a mix of object specs, dict specs, and unknowns."""

@@ -111,6 +111,102 @@ from .tool_capture import convert_tools_for_sdk, make_deny_all_hook
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Fake Tool Call Detection Helpers (Code Block Awareness)
+# =============================================================================
+# These module-level helpers improve fake tool call detection by skipping
+# patterns that appear inside markdown code blocks (``` or ~~~).
+# Original pattern detection by @alzhang-git (PR #14), code block awareness added v1.0.2.
+
+# Regex for detecting fake tool call patterns (LLM writes tool calls as text)
+_FAKE_TOOL_CALL_RE = re.compile(
+    r"\[Tool Call:\s*\w+\("       # [Tool Call: name(
+    r"|Tool Result \(\w+\):"      # Tool Result (name):
+    r"|<tool_used\s+name="        # <tool_used name=  (XML format mimicked)
+    r"|<tool_result\s+name="      # <tool_result name= (XML-style tool result)
+)
+
+_MAX_FAKE_TC_RETRIES = 2
+
+
+def is_in_code_block(text: str, position: int) -> bool:
+    """Check if a position in text is inside a markdown code block.
+
+    Uses line-anchored fence counting (CommonMark spec):
+    - Fences must start at beginning of line (after optional whitespace)
+    - Supports both ``` and ~~~ fences
+    - Counts fences before position; odd count = inside block
+
+    Args:
+        text: The full text to analyze
+        position: Character position to check
+
+    Returns:
+        True if position is inside a code block, False otherwise
+    """
+    # Count fences that START lines before this position
+    text_before = text[:position]
+    lines = text_before.split("\n")
+
+    fence_count = 0
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fence_count += 1
+
+    # Odd count = inside a code block
+    return fence_count % 2 == 1
+
+
+def find_fake_tool_call(text: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
+    """Find a fake tool call pattern that is NOT inside a code block.
+
+    Iterates through all matches and returns the first one that's outside
+    any markdown code fence. Returns None if all matches are inside code blocks.
+
+    Args:
+        text: The full text to search
+        pattern: Compiled regex pattern for fake tool calls
+
+    Returns:
+        First match outside code blocks, or None if none found
+    """
+    for match in pattern.finditer(text):
+        if not is_in_code_block(text, match.start()):
+            return match
+        else:
+            # Log at DEBUG level when we skip a pattern inside code block
+            snippet = extract_match_snippet(text, match)
+            logger.debug(
+                f"[PROVIDER] Skipped fake tool call pattern inside code block: '{snippet}'"
+            )
+    return None
+
+
+def extract_match_snippet(text: str, match: re.Match[str], context: int = 40) -> str:
+    """Extract a snippet around a regex match for logging.
+
+    Args:
+        text: The full text
+        match: The regex match object
+        context: Characters of context on each side (default 40)
+
+    Returns:
+        Truncated snippet with ... markers if truncated
+    """
+    start = max(0, match.start() - context)
+    end = min(len(text), match.end() + context)
+
+    snippet = text[start:end]
+    # Replace newlines for single-line logging
+    snippet = snippet.replace("\n", "\\n")
+
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+
+    return f"{prefix}{snippet}{suffix}"
+
+
 class CopilotSdkProvider:
     """
     Amplifier provider that uses GitHub Copilot CLI SDK.
@@ -946,8 +1042,10 @@ class CopilotSdkProvider:
                         retry_after=rate_limit_err.retry_after,
                         retryable=retryable,
                     ) from e
+                # MemoryError, ValueError, TypeError indicate code bugs, not transient issues
+                non_retryable = isinstance(e, (MemoryError, ValueError, TypeError))
                 raise KernelLLMError(
-                    f"Unexpected error: {e}", provider=self.name, retryable=True
+                    f"Unexpected error: {e}", provider=self.name, retryable=not non_retryable
                 ) from e
 
             return result
@@ -980,13 +1078,8 @@ class CopilotSdkProvider:
         # structured tool_requests, the orchestrator would display fake
         # results that were never actually executed.  Detect this and
         # retry with a correction message (up to 2 times).
-        _FAKE_TOOL_CALL_RE = re.compile(
-            r"\[Tool Call:\s*\w+\("  # [Tool Call: name(
-            r"|Tool Result \(\w+\):"  # Tool Result (name):
-            r"|<tool_used\s+name="  # <tool_used name=  (XML format mimicked)
-            r"|<tool_result\s+name="  # <tool_result name= (XML-style tool result)
-        )
-        _MAX_FAKE_TC_RETRIES = 2
+        # NOTE: Uses module-level _FAKE_TOOL_CALL_RE and find_fake_tool_call()
+        # which is code-block-aware (v1.0.2 enhancement).
 
         if request_tools and not response.tool_calls:
             # Extract all text from content blocks
@@ -996,7 +1089,10 @@ class CopilotSdkProvider:
                     response_text += block.text
 
             fake_retry = 0
-            while _FAKE_TOOL_CALL_RE.search(response_text) and fake_retry < _MAX_FAKE_TC_RETRIES:
+            while (
+                find_fake_tool_call(response_text, _FAKE_TOOL_CALL_RE) is not None
+                and fake_retry < _MAX_FAKE_TC_RETRIES
+            ):
                 fake_retry += 1
                 logger.warning(
                     f"[PROVIDER] Detected fake tool call text in response "

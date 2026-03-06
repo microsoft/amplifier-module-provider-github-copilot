@@ -535,14 +535,14 @@ class TestSdkModelIdFormat:
         # ═══════════════════════════════════════════════════════════════════════
         # MODEL SNAPSHOT — Update when SDK model list changes
         # ═══════════════════════════════════════════════════════════════════════
-        SNAPSHOT_SDK_VERSION = "0.1.28"
+        SNAPSHOT_SDK_VERSION = "0.1.30"
         EXPECTED_MODELS = {
             # Claude models
             "claude-haiku-4.5",
             "claude-opus-4.5",
             "claude-opus-4.6",
             "claude-opus-4.6-1m",
-            "claude-opus-4.6-fast",
+            # claude-opus-4.6-fast removed in SDK v0.1.30
             "claude-sonnet-4",
             "claude-sonnet-4.5",
             "claude-sonnet-4.6",
