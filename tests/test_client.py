@@ -1271,11 +1271,10 @@ class TestEnsureClientExceptionPassthrough:
 
         # The message must be EXACTLY what _verify_authentication produces —
         # no "Copilot authentication failed: ..." wrapper around it.
+        # Uses AUTH_INSTRUCTIONS constant from _constants.py
         msg = str(exc_info.value)
         assert msg == (
-            "Not authenticated to GitHub Copilot. "
-            "Set GITHUB_TOKEN, run 'gh auth login', "
-            "or run 'amplifier init' to authenticate."
+            "Not authenticated to GitHub Copilot. Set GITHUB_TOKEN or run 'gh auth login'."
         ), f"Message was double-wrapped: {msg!r}"
 
         # The exception must NOT have a __cause__ (it's not a `raise X from e` chain).
