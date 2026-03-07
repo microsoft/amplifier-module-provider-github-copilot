@@ -26,7 +26,9 @@ dependencies = [
     # IMPORTANT: Before upgrading past 0.2.0, run SDK assumption tests:
     #   python -m pytest tests/sdk_assumptions/ -v
     # See tests/sdk_assumptions/README.md for the upgrade workflow.
-    "github-copilot-sdk>=0.1.0,<0.2.0",
+    #
+    # NOTE: v0.1.30+ required for overridesBuiltInTool field (used in tool_capture.py)
+    "github-copilot-sdk>=0.1.30,<0.2.0",
     # Note: amplifier-core is provided by Amplifier runtime when module is loaded
     # For standalone testing, install from: git+https://github.com/microsoft/amplifier-core
 ]

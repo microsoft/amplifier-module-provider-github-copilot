@@ -6,6 +6,7 @@
 # Usage:
 #   make install    - Install dev dependencies
 #   make test       - Run all tests
+#   make smoke      - Quick E2E smoke test (seconds, not minutes)
 #   make coverage   - Run tests with coverage report
 #   make lint       - Check code style
 #   make format     - Auto-format code
@@ -14,7 +15,7 @@
 #
 # =============================================================================
 
-.PHONY: install test coverage lint format check clean help sdk-assumptions
+.PHONY: install test smoke coverage lint format check clean help sdk-assumptions
 
 # Default Python - override with: make test PYTHON=python3.12
 PYTHON ?= python
@@ -50,6 +51,11 @@ test:
 # Run SDK assumption tests only (use when upgrading SDK)
 sdk-assumptions:
 	$(PYTHON) -m pytest tests/sdk_assumptions/ -v --tb=long
+
+# Quick smoke test - validates provider works E2E in seconds
+# Use after code changes, SDK upgrades, or to debug cross-platform issues
+smoke:
+	$(PYTHON) scripts/smoke_test.py --verbose
 
 # Run tests with coverage
 coverage:

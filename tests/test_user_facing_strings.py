@@ -105,7 +105,7 @@ class TestErrorMessagesUseConstants:
         client_path = (
             Path(__file__).parent.parent / "amplifier_module_provider_github_copilot" / "client.py"
         )
-        source = client_path.read_text()
+        source = client_path.read_text(encoding="utf-8")
 
         # Verify it uses the constant, not a hardcoded string
         assert "SDK_INSTALL_COMMAND" in source, (
@@ -136,7 +136,7 @@ class TestErrorMessagesUseConstants:
         client_path = (
             Path(__file__).parent.parent / "amplifier_module_provider_github_copilot" / "client.py"
         )
-        source = client_path.read_text()
+        source = client_path.read_text(encoding="utf-8")
 
         # Verify it uses the constant, not a hardcoded string
         assert "AUTH_INSTRUCTIONS" in source, (

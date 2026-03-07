@@ -4,10 +4,197 @@ Tests for tool_capture module (Deny + Destroy pattern).
 This module tests the tool bridge functions that enable external orchestration:
 - convert_tools_for_sdk: Convert Amplifier ToolSpec to SDK Tool objects
 - make_deny_all_hook: Create preToolUse hook that denies all tool execution
+
+CRITICAL: Tests for overrides_built_in_tool flag (SDK 0.1.30+)
+When registering tools that share names with SDK built-ins, the SDK requires
+setting overrides_built_in_tool=True. Without this, SDK rejects with:
+  "External tool 'glob' conflicts with a built-in tool of the same name."
+
+See: mydocs/releases/hotfix-2026-03-07-windows/HOTFIX-PROVIDER-GITHUB-COPILOT.md
 """
+
+import pytest
 
 from unittest.mock import Mock
 from unittest.mock import patch as unittest_mock_patch
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SDK 0.1.30+ OVERRIDE FLAG TESTS — HIGHEST PRIORITY
+# ═══════════════════════════════════════════════════════════════════════════════
+# These tests ensure that tools with built-in names have overrides_built_in_tool=True.
+# This is the fix for the "glob conflicts with built-in" error discovered 2026-03-07.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestOverridesBuiltInToolFlag:
+    """Tests for SDK 0.1.30+ overrides_built_in_tool flag.
+
+    CRITICAL: These tests are the heartbeat of our tool registration.
+    Without overrides_built_in_tool=True on conflicting tools, the SDK
+    rejects registration with a runtime error.
+
+    Background:
+    - SDK 0.1.30 (PR #636) introduced enforcement of overridesBuiltInTool
+    - Before: duplicate names caused "Tool names must be unique" error
+    - After: SDK allows overrides but REQUIRES explicit flag
+
+    Evidence: Incident 2026-03-07 Windows testing
+    """
+
+    # Amplifier tools that DIRECTLY conflict with SDK built-ins
+    AMPLIFIER_CONFLICTING_TOOLS = [
+        "glob",  # tool-filesystem exposes glob
+        "bash",  # tool-bash exposes bash
+        "grep",  # tool-search exposes grep
+        "web_fetch",  # tool-web exposes web_fetch
+        "web_search",  # tool-web exposes web_search
+    ]
+
+    @pytest.fixture
+    def builtin_tool_names(self):
+        """Load COPILOT_BUILTIN_TOOL_NAMES without full package import."""
+        # Direct import from _constants to avoid provider.py import chain
+        # which requires amplifier_core (not always available in test env)
+        import importlib.util
+        import os
+        
+        constants_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "amplifier_module_provider_github_copilot",
+            "_constants.py"
+        )
+        spec = importlib.util.spec_from_file_location("_constants", constants_path)
+        constants = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(constants)
+        return constants.COPILOT_BUILTIN_TOOL_NAMES
+
+    @pytest.mark.parametrize("tool_name", AMPLIFIER_CONFLICTING_TOOLS)
+    def test_amplifier_conflicting_tools_have_override_flag_true(self, tool_name: str):
+        """Amplifier tools that conflict with SDK built-ins MUST have override=True.
+
+        This is the exact scenario that caused the 2026-03-07 incident.
+        When Amplifier registers 'glob' (from tool-filesystem), the SDK must
+        see overrides_built_in_tool=True or it rejects with a runtime error.
+        """
+        from amplifier_module_provider_github_copilot.tool_capture import convert_tools_for_sdk
+
+        tool_spec = {"name": tool_name, "description": f"Amplifier {tool_name} tool"}
+        result = convert_tools_for_sdk([tool_spec])
+
+        assert len(result) == 1, f"Should produce exactly 1 tool for {tool_name}"
+        tool = result[0]
+        assert tool.name == tool_name
+        assert tool.overrides_built_in_tool is True, (
+            f"Tool '{tool_name}' MUST have overrides_built_in_tool=True. "
+            f"This tool conflicts with an SDK built-in and without the flag, "
+            f"SDK 0.1.30+ will reject it with: "
+            f"'External tool \"{tool_name}\" conflicts with a built-in tool.'"
+        )
+
+    def test_all_28_builtins_have_override_flag_when_registered(self, builtin_tool_names):
+        """ALL 28 known SDK built-ins should get override=True if registered.
+
+        This ensures future tools using any built-in name are covered.
+        The list is maintained in COPILOT_BUILTIN_TOOL_NAMES.
+        """
+        from amplifier_module_provider_github_copilot.tool_capture import convert_tools_for_sdk
+
+        # Create tool specs for ALL built-ins
+        tool_specs = [
+            {"name": name, "description": f"Test {name}"}
+            for name in sorted(builtin_tool_names)
+        ]
+
+        result = convert_tools_for_sdk(tool_specs)
+
+        assert len(result) == len(builtin_tool_names), (
+            f"Should produce {len(builtin_tool_names)} tools, got {len(result)}"
+        )
+
+        for tool in result:
+            assert tool.overrides_built_in_tool is True, (
+                f"Tool '{tool.name}' is in COPILOT_BUILTIN_TOOL_NAMES but "
+                f"does not have overrides_built_in_tool=True"
+            )
+
+    def test_non_builtin_tools_have_override_flag_false(self):
+        """Custom tools NOT in built-in list should have override=False.
+
+        Setting overrides_built_in_tool=True for custom tools is harmless
+        but indicates incorrect logic. We should only set it for conflicts.
+        """
+        from amplifier_module_provider_github_copilot.tool_capture import convert_tools_for_sdk
+
+        custom_tools = [
+            {"name": "delegate", "description": "Delegate to sub-agent"},
+            {"name": "read_file", "description": "Read file contents"},
+            {"name": "write_file", "description": "Write file contents"},
+            {"name": "custom_tool_xyz", "description": "Custom tool"},
+            {"name": "my_analyzer", "description": "Analysis tool"},
+        ]
+
+        result = convert_tools_for_sdk(custom_tools)
+
+        assert len(result) == 5
+        for tool in result:
+            assert tool.overrides_built_in_tool is False, (
+                f"Tool '{tool.name}' is NOT a built-in but has "
+                f"overrides_built_in_tool=True. This indicates the logic "
+                f"incorrectly identifies it as a built-in."
+            )
+
+    def test_mixed_builtin_and_custom_tools(self):
+        """Mix of built-in and custom tool names should have correct flags."""
+        from amplifier_module_provider_github_copilot.tool_capture import convert_tools_for_sdk
+
+        tool_specs = [
+            {"name": "glob", "description": "Built-in conflict"},
+            {"name": "delegate", "description": "Custom tool"},
+            {"name": "bash", "description": "Built-in conflict"},
+            {"name": "read_file", "description": "Custom tool"},
+            {"name": "grep", "description": "Built-in conflict"},
+        ]
+
+        result = convert_tools_for_sdk(tool_specs)
+
+        # Build a dict for easier assertion
+        override_flags = {t.name: t.overrides_built_in_tool for t in result}
+
+        assert override_flags["glob"] is True
+        assert override_flags["bash"] is True
+        assert override_flags["grep"] is True
+        assert override_flags["delegate"] is False
+        assert override_flags["read_file"] is False
+
+    def test_override_flag_with_object_style_spec(self):
+        """overrides_built_in_tool should work with Mock object specs too."""
+        from amplifier_module_provider_github_copilot.tool_capture import convert_tools_for_sdk
+
+        spec = Mock()
+        spec.name = "web_fetch"  # Built-in conflict
+        spec.description = "Fetch web content"
+        spec.parameters = {"type": "object"}
+
+        result = convert_tools_for_sdk([spec])
+
+        assert len(result) == 1
+        assert result[0].overrides_built_in_tool is True
+
+    def test_override_flag_logged_for_builtins(self):
+        """A debug log should be emitted when override flag is set."""
+        from amplifier_module_provider_github_copilot.tool_capture import convert_tools_for_sdk
+
+        with unittest_mock_patch(
+            "amplifier_module_provider_github_copilot.tool_capture.logger"
+        ) as mock_logger:
+            convert_tools_for_sdk([{"name": "glob", "description": "Test"}])
+
+        # Should have logged about the override
+        debug_calls = [str(c) for c in mock_logger.debug.call_args_list]
+        assert any("glob" in c and "overrides" in c.lower() for c in debug_calls), (
+            "Should log when a tool overrides a built-in"
+        )
 
 
 class TestConvertToolsForSdk:

@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -257,9 +256,11 @@ async def mount(
     cli_path = _find_copilot_cli(config)
 
     if not cli_path:
+        from ._platform import get_cli_binary_name
+
         logger.warning(
             "[MOUNT] Copilot SDK prerequisites not met - provider not mounted. "
-            "Ensure 'copilot' CLI is installed and authenticated."
+            f"Ensure '{get_cli_binary_name()}' CLI is installed and authenticated."
         )
         return None  # Graceful degradation
 
@@ -334,32 +335,19 @@ def _find_copilot_cli(config: dict[str, Any]) -> str | None:
 
     Returns:
         Resolved CLI path, or None if not found
+
+    Note:
+        Platform-specific binary naming (copilot vs copilot.exe) is handled
+        by the _platform module to ensure single source of truth.
     """
     try:
-        try:
-            from pathlib import Path
+        from ._platform import locate_cli_binary
 
-            import copilot as _copilot_mod  # type: ignore[import-untyped]
-
-            _mod_file = _copilot_mod.__file__
-            if _mod_file is None:
-                raise ImportError("copilot module has no __file__")
-            _cli_bin = Path(_mod_file).parent / "bin" / "copilot"
-            if _cli_bin.exists():
-                cli_path = str(_cli_bin)
-                _ensure_executable(cli_path)
-                logger.debug(f"[MOUNT] Found SDK bundled CLI at: {cli_path}")
-                return cli_path
-            else:
-                logger.debug("[MOUNT] SDK bundled CLI binary not found on disk")
-        except ImportError:
-            logger.debug("[MOUNT] copilot SDK not installed, trying PATH")
-
-        found = shutil.which("copilot") or shutil.which("copilot.exe")
-        if found:
-            _ensure_executable(found)
-            logger.debug(f"[MOUNT] Found Copilot CLI in PATH at: {found}")
-            return found
+        cli_path = locate_cli_binary()
+        if cli_path:
+            _ensure_executable(str(cli_path))
+            logger.debug(f"[MOUNT] Found Copilot CLI at: {cli_path}")
+            return str(cli_path)
 
         logger.debug("[MOUNT] Copilot CLI not found via SDK or PATH")
         return None

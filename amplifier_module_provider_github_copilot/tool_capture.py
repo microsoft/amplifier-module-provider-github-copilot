@@ -104,6 +104,10 @@ def convert_tools_for_sdk(tool_specs: list[Any]) -> list[Any]:
     Deduplicates by tool name (keeps first occurrence) since the
     Copilot API rejects duplicate tool names with a 400 error.
 
+    When a tool name conflicts with a SDK built-in (e.g., 'glob', 'grep'),
+    sets overrides_built_in_tool=True to allow the external tool to
+    override the built-in. This is required as of SDK 0.1.30+.
+
     Args:
         tool_specs: List of ToolSpec objects from ChatRequest.tools.
             Each has: name (str), description (str | None), parameters (dict).
@@ -112,6 +116,8 @@ def convert_tools_for_sdk(tool_specs: list[Any]) -> list[Any]:
         List of SDK Tool objects ready for session registration.
     """
     from copilot.types import Tool
+
+    from ._constants import COPILOT_BUILTIN_TOOL_NAMES
 
     sdk_tools: list[Tool] = []
     seen_names: set[str] = set()
@@ -139,12 +145,18 @@ def convert_tools_for_sdk(tool_specs: list[Any]) -> list[Any]:
             continue
         seen_names.add(name)
 
+        # Check if this tool overrides a built-in (SDK 0.1.30+ requirement)
+        overrides_builtin = name in COPILOT_BUILTIN_TOOL_NAMES
+        if overrides_builtin:
+            logger.debug(f"[TOOL_BRIDGE] Tool '{name}' overrides SDK built-in")
+
         sdk_tools.append(
             Tool(
                 name=name,
                 description=description,
                 handler=_noop_tool_handler,
                 parameters=parameters,
+                overrides_built_in_tool=overrides_builtin,
             )
         )
 

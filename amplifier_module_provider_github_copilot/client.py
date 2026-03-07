@@ -280,16 +280,13 @@ class CopilotClientWrapper:
 
                 # Ensure the bundled CLI binary is executable.
                 # uv strips execute bits when installing packages.
-                from pathlib import Path
-
-                import copilot as _copilot_mod
-
+                # Platform-specific binary naming handled by _platform module.
+                from ._platform import get_sdk_binary_path
                 from ._permissions import ensure_executable
 
-                if _copilot_mod.__file__ is not None:
-                    _cli_bin = Path(_copilot_mod.__file__).parent / "bin" / "copilot"
-                    if _cli_bin.exists():
-                        ensure_executable(_cli_bin)
+                sdk_binary = get_sdk_binary_path()
+                if sdk_binary:
+                    ensure_executable(sdk_binary)
 
                 logger.info("[CLIENT] Initializing Copilot client...")
                 # Cast to SDK's TypedDict - our dict matches the required shape
@@ -534,8 +531,28 @@ class CopilotClientWrapper:
             session_config["hooks"] = hooks
             logger.debug(f"[CLIENT] Session hooks configured: {list(hooks.keys())}")
 
-        # Add permission handler required by SDK >= 0.1.28
-        # See: github/copilot-sdk#509, #554 - deny all permissions by default
+        # ═══════════════════════════════════════════════════════════════════════
+        # SECURITY NOTE: Permission Handler Configuration
+        # ═══════════════════════════════════════════════════════════════════════
+        # The SDK requires a permission handler for tool execution requests.
+        # Currently using `approve_all` as Amplifier handles tool permissions
+        # at a higher layer via the Orchestrator's tool whitelist.
+        #
+        # TECH DEBT (Security Enhancement):
+        #   Future versions should implement a granular permission handler that:
+        #   1. Validates tool names against the registered tool schema
+        #   2. Applies rate limiting per tool category
+        #   3. Logs all permission decisions for audit
+        #
+        # Risk Assessment: MEDIUM
+        #   - Mitigated by Amplifier's tool filtering (only registered tools execute)
+        #   - SDK built-in tools are explicitly denied via make_deny_all_hook()
+        #   - No user-controlled input reaches tool execution without validation
+        #
+        # References:
+        #   - github/copilot-sdk#509: Permission handler API
+        #   - github/copilot-sdk#554: Default deny semantics
+        # ═══════════════════════════════════════════════════════════════════════
         try:
             from copilot.types import PermissionHandler
 
