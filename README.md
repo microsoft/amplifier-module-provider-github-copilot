@@ -114,13 +114,13 @@ amplifier run -p github-copilot -m claude-sonnet-4 "Explain this codebase"
 amplifier provider models github-copilot
 ```
 
-## Supported Models (17)
+## Supported Models (18)
 
-All 17 models available through your Copilot subscription are exposed at runtime:
+All 18 models available through your Copilot subscription are exposed at runtime:
 
 **Anthropic:** `claude-haiku-4.5`, `claude-opus-4.5`, `claude-opus-4.6`, `claude-opus-4.6-1m`, `claude-sonnet-4`, `claude-sonnet-4.5`, `claude-sonnet-4.6`
 
-**OpenAI:** `gpt-4.1`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`
+**OpenAI:** `gpt-4.1`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.4`
 
 **Google:** `gemini-3-pro-preview`
 
