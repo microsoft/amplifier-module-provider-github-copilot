@@ -10,7 +10,7 @@
 appsettings.*.json
 
 # Agent instructions (local only - not for repo)
-.github/copilot-instructions.md
+.github/
 
 # OS files
 **/.DS_Store
@@ -24,6 +24,7 @@ appsettings.*.json
 node_modules
 .venv
 .venv-win
+.venv-wsl
 venv
 env
 __pycache__

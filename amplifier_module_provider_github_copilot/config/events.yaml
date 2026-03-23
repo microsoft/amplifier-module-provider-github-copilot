@@ -1,0 +1,91 @@
+# Event Bridge Classification
+# Contract: contracts/event-vocabulary.md
+# SDK Reference: github-copilot-sdk SessionEventType enum
+version: "1.0"
+
+event_classifications:
+  bridge:
+    # Content events - map SDK dotted names to domain types
+    - sdk_type: assistant.message_delta
+      domain_type: CONTENT_DELTA
+      block_type: TEXT
+    - sdk_type: assistant.streaming_delta
+      domain_type: CONTENT_DELTA
+      block_type: TEXT
+    - sdk_type: assistant.reasoning_delta
+      domain_type: CONTENT_DELTA
+      block_type: THINKING
+    # Completion events
+    - sdk_type: tool.execution_complete
+      domain_type: TOOL_CALL
+    - sdk_type: tool_use_complete  # Legacy underscore alias
+      domain_type: TOOL_CALL
+    - sdk_type: assistant.turn_end
+      domain_type: TURN_COMPLETE
+    - sdk_type: assistant.message
+      domain_type: TURN_COMPLETE
+    - sdk_type: message_complete  # Legacy underscore alias
+      domain_type: TURN_COMPLETE
+    # Usage and status events
+    - sdk_type: assistant.usage
+      domain_type: USAGE_UPDATE
+    - sdk_type: usage_update  # Legacy underscore alias
+      domain_type: USAGE_UPDATE
+    - sdk_type: session.idle
+      domain_type: SESSION_IDLE
+    - sdk_type: session.error
+      domain_type: ERROR
+
+  consume:
+    - assistant.turn_start  # SDK v0.1.33 - turn lifecycle, consume internally
+    - assistant.reasoning  # SDK v0.1.33 - final reasoning summary, consume internally
+    - tool.execution_start
+    - tool_use_start  # Legacy underscore alias
+    - tool.execution_progress
+    - session.start
+    - session.shutdown
+    - session.usage_info
+    - system.notification  # SDK v0.1.33 - log internally, don't forward
+    - system_notification  # Legacy underscore alias
+
+  drop:
+    - tool.execution_partial_result
+    - tool.user_requested
+    - permission.*
+    - session.context_changed
+    - session.background_tasks_changed
+    - session.compaction_*
+    - session.truncation
+    - session.workspace_file_changed
+    - session.snapshot_rewind
+    - session.info
+    - session.warning
+    - session.title_changed
+    - session.plan_changed
+    - session.mode_changed
+    - session.model_change
+    - session.tools_updated
+    - session.handoff
+    - session.resume
+    - session.task_complete
+    - hook.*
+    - elicitation.*
+    - command.*
+    - subagent.*
+    - skill.*
+    - user.*
+    - external_tool.*
+    - exit_plan_mode.*
+    - user_input.*
+    - pending_messages.*
+    - abort
+    - unknown
+
+finish_reason_map:
+  end_turn: STOP
+  stop: STOP
+  tool_use: TOOL_USE
+  max_tokens: LENGTH
+  content_filter: CONTENT_FILTER
+  "": STOP  # SDK often sends empty/missing finish_reason for normal completion
+  _default: STOP  # Normal completion when SDK doesn't specify

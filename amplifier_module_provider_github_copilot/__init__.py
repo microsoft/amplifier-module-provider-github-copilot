@@ -1,388 +1,243 @@
-"""
-Amplifier Provider Module: GitHub Copilot CLI SDK
+"""GitHub Copilot Provider for Amplifier.
 
-This module provides access to Claude Opus 4.5 and other models
-through GitHub Copilot subscription via the Copilot CLI SDK.
+Three-Medium Architecture:
+- Python for mechanism (~300 lines)
+- YAML for policy (~200 lines)
+- Markdown for contracts (~400 lines)
 
-Pattern: Stateless Provider (Pattern A)
-- Each complete() creates ephemeral Copilot session
-- Amplifier maintains all state (history, compaction, agents)
-- Provider is a pure LLM bridge
-
-This preserves Amplifier's full potential:
-✅ FIC context compaction (handled by Context Manager)
-✅ Session persistence (handled by Amplifier's hooks)
-✅ Agent delegation (handled by Orchestrator)
-✅ Tool execution (handled by Orchestrator)
-
-Usage:
-    The module is loaded via Amplifier's module system:
-
-    ```yaml
-    # In amplifier.yaml
-    providers:
-      github-copilot:
-        model: claude-opus-4.5
-        # timeout: 3600        # 1 hour default (override if needed)
-        # thinking_timeout: 3600  # Same as regular (override if needed)
-        debug: false
-    ```
-
-    Or via CLI:
-    ```bash
-    amplifier chat --provider github-copilot
-    ```
-
-Prerequisites:
-    - Copilot CLI installed and in PATH
-    - Authenticated to GitHub (set GITHUB_TOKEN or run 'gh auth login')
+Contract: contracts/provider-protocol.md
 """
 
 from __future__ import annotations
 
 # Eager dependency check: ensure github-copilot-sdk is installed.
 # All SDK imports in this module are lazy (inside function bodies) so the module
-# would otherwise import successfully without the SDK.  That tricks Amplifier's
+# would otherwise import successfully without the SDK. That tricks Amplifier's
 # provider discovery into thinking the module is fully functional, which prevents
 # the automatic dependency-installation fallback from ever running.
 # Using importlib.metadata avoids importing the SDK itself at module load time.
+# Contract: sdk-boundary.md MUST:5
+#
+# TESTING: Set SKIP_SDK_CHECK=1 to allow test imports without SDK installed.
+# Tests use pytest.importorskip() and skip markers to handle SDK availability.
+import asyncio
+import os as _os
+import threading
 from importlib.metadata import PackageNotFoundError as _PkgNotFoundError
 from importlib.metadata import version as _pkg_version
 
-try:
-    _pkg_version("github-copilot-sdk")
-except _PkgNotFoundError as _e:
-    raise ImportError(
-        "Required dependency 'github-copilot-sdk' is not installed. "
-        "Install with:  pip install 'github-copilot-sdk>=0.1.32,<0.2.0'"
-    ) from _e
+if not _os.environ.get("SKIP_SDK_CHECK"):
+    try:
+        _pkg_version("github-copilot-sdk")
+    except _PkgNotFoundError as _e:
+        raise ImportError(
+            "Required dependency 'github-copilot-sdk' is not installed. "
+            "Install with:  pip install 'github-copilot-sdk>=0.1.32,<0.2.0'"
+        ) from _e
 
-import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from amplifier_core import ChatResponse, ToolCall
+from amplifier_core import ModelInfo, ModuleCoordinator, ProviderInfo
 
-from ._constants import DEFAULT_TIMEOUT
-from .client import AuthStatus, CopilotClientWrapper, SessionInfo, SessionListResult
-from .exceptions import (
-    CopilotAbortError,
-    CopilotAuthenticationError,
-    CopilotConnectionError,
-    CopilotModelNotFoundError,
-    CopilotProviderError,
-    CopilotRateLimitError,
-    CopilotSdkLoopError,
-    CopilotSessionError,
-    CopilotTimeoutError,
-)
-from .model_naming import (
-    KNOWN_THINKING_PATTERNS,
-    ModelIdPattern,
-    has_version_period,
-    is_thinking_model,
-    parse_model_id,
-    uses_dash_for_version,
-    validate_model_id_format,
-)
-from .provider import CopilotSdkProvider, ProviderInfo
-from .sdk_driver import (
-    CapturedToolCall,
-    CircuitBreaker,
-    LoopController,
-    SdkEventHandler,
-    ToolCaptureStrategy,
-)
+from .provider import GitHubCopilotProvider
+from .sdk_adapter.client import CopilotClientWrapper
 
-# Module exports
-__all__ = [
-    # Main exports
-    "mount",
-    "CopilotSdkProvider",
-    "ProviderInfo",
-    # SDK Driver components (for advanced usage and testing)
-    "SdkEventHandler",
-    "LoopController",
-    "ToolCaptureStrategy",
-    "CircuitBreaker",
-    "CapturedToolCall",
-    # Response types (re-exported from amplifier_core)
-    "ChatResponse",
-    "ToolCall",
-    # Client types
-    "AuthStatus",
-    "SessionInfo",
-    "SessionListResult",
-    # Model naming utilities (for validation and debugging)
-    "KNOWN_THINKING_PATTERNS",
-    "ModelIdPattern",
-    "has_version_period",
-    "is_thinking_model",
-    "parse_model_id",
-    "uses_dash_for_version",
-    "validate_model_id_format",
-    # Exceptions
-    "CopilotProviderError",
-    "CopilotAuthenticationError",
-    "CopilotConnectionError",
-    "CopilotRateLimitError",
-    "CopilotModelNotFoundError",
-    "CopilotSessionError",
-    "CopilotSdkLoopError",
-    "CopilotAbortError",
-    "CopilotTimeoutError",
-]
+__version__ = "2.0.0"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"
 
-logger = logging.getLogger(__name__)
+# Type alias for cleanup function
+CleanupFn = Callable[[], Awaitable[None]]
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
 # Process-Level Singleton State
-# ═══════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+# The Copilot SDK subprocess consumes ~500MB (Electron-based). Without a
+# process-level singleton, N sub-agents spawned by Amplifier's task tool
+# each create their own CopilotClientWrapper → N × ~500MB memory.
 #
-# Sub-agents spawned by the task tool run as async coroutines in the SAME
-# Python process and asyncio event loop as the parent session (kernel-guaranteed).
-# Each sub-agent gets its own fresh ModuleCoordinator — coordinators are not shared.
-#
-# This singleton ensures all mounts in a process share ONE CopilotClientWrapper
-# (one copilot CLI subprocess) regardless of how many sub-agents are spawned.
-# Without this, N sub-agents spawn N processes × ~500 MB each.
-#
-# Reference: docs/plans/2026-02-23-process-singleton-design.md
+# This singleton pattern ensures all providers share a single client.
 
 _shared_client: CopilotClientWrapper | None = None
 _shared_client_refcount: int = 0
 _shared_client_lock: asyncio.Lock | None = None
+_shared_client_lock_guard = threading.Lock()  # Guards lazy lock creation
+
+# Lock timeout in seconds - hardcoded mechanism, not YAML policy
+# 30s timeout prevents indefinite blocking from deadlock
+_LOCK_TIMEOUT_SECONDS: float = 30.0
 
 
 def _get_lock() -> asyncio.Lock:
-    """Return the singleton lock, creating it lazily on first call.
+    """Get or create the shared client lock (lazy initialization).
 
-    Lazy initialization avoids creating asyncio.Lock at import time,
-    which can fail if no event loop exists yet (common in test environments).
+    asyncio.Lock() requires an event loop; import-time creation
+    fails in test environments that don't have a loop yet.
+
+    Uses threading.Lock to prevent TOCTOU race where two coroutines
+    both see _shared_client_lock=None and create independent locks.
+
+    Returns:
+        The shared asyncio.Lock for singleton access.
+
     """
     global _shared_client_lock
     if _shared_client_lock is None:
-        _shared_client_lock = asyncio.Lock()
+        with _shared_client_lock_guard:
+            # Double-check after acquiring threading lock
+            if _shared_client_lock is None:
+                _shared_client_lock = asyncio.Lock()
     return _shared_client_lock
 
 
-async def _acquire_shared_client(
-    config: dict[str, Any],
-    timeout: float,
-) -> CopilotClientWrapper:
-    """Acquire the shared CopilotClientWrapper, creating it if this is the first mount.
+async def _acquire_shared_client() -> CopilotClientWrapper:
+    """Acquire a reference to the shared client, creating if needed.
 
-    Increments the reference count. Call _release_shared_client() in cleanup
-    to decrement. The subprocess is shut down when the count reaches zero.
+    Implements process-level singleton with refcounting.
 
-    If a second caller passes a different timeout than the first, a DEBUG warning
-    is logged and the existing client is returned unchanged — the second caller's
-    timeout is silently ignored. Sub-agents inherit bundle config from the parent,
-    so all callers typically pass the same values.
+    Returns:
+        The shared CopilotClientWrapper instance.
+
+    Raises:
+        TimeoutError: If lock cannot be acquired within 30 seconds.
+
     """
     global _shared_client, _shared_client_refcount
-    async with _get_lock():
-        if _shared_client is None:
-            logger.info("[MOUNT] Creating shared Copilot subprocess (first mount in process)")
-            _shared_client = CopilotClientWrapper(config=config, timeout=timeout)
-        else:
-            existing_timeout = getattr(_shared_client, "_timeout", timeout)
-            if existing_timeout != timeout:
-                logger.debug(
-                    f"[MOUNT] Ignoring timeout={timeout} for shared client "
-                    f"(already created with timeout={existing_timeout})"
-                )
-        _shared_client_refcount += 1
-        logger.debug(f"[MOUNT] Shared client refcount: {_shared_client_refcount}")
-        return _shared_client
+
+    lock = _get_lock()
+
+    # 30s lock timeout prevents deadlock
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=_LOCK_TIMEOUT_SECONDS)
+    except TimeoutError as e:
+        raise TimeoutError(
+            f"Failed to acquire shared client lock within {_LOCK_TIMEOUT_SECONDS}s"
+        ) from e
+
+    try:
+        # Check if existing client is healthy
+        if _shared_client is not None:
+            if _shared_client.is_healthy():
+                _shared_client_refcount += 1
+                return _shared_client
+            else:
+                # Unhealthy client - close and replace
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning("[SINGLETON] Existing client unhealthy, replacing...")
+                try:
+                    await _shared_client.close()
+                except Exception as close_err:
+                    logger.warning(f"[SINGLETON] Error closing unhealthy client: {close_err}")
+                _shared_client = None
+                _shared_client_refcount = 0
+
+        # Create new client - wrap in try/except to ensure clean state on failure
+        try:
+            new_client = CopilotClientWrapper()
+            _shared_client = new_client
+            _shared_client_refcount = 1
+            return new_client
+        except Exception:
+            # Ensure clean state on failure
+            _shared_client = None
+            _shared_client_refcount = 0
+            raise
+    finally:
+        lock.release()
 
 
 async def _release_shared_client() -> None:
-    """Release one reference to the shared client.
+    """Release a reference to the shared client, closing when count reaches 0.
 
-    When the count reaches zero, closes and destroys the shared subprocess.
-    Safe to call if already at zero (safety floor prevents negative counts).
-
-    NOTE: If the Python process is killed (SIGKILL/crash), the refcount
-    never reaches zero and close() is never called. This is acceptable —
-    the OS reclaims the copilot subprocess when the parent process exits.
-    There is no mitigation needed for this case.
+    Safe to call multiple times - refcount floors at 0.
     """
     global _shared_client, _shared_client_refcount
-    async with _get_lock():
-        _shared_client_refcount -= 1
-        logger.debug(f"[MOUNT] Shared client refcount after release: {_shared_client_refcount}")
-        if _shared_client_refcount <= 0:
-            if _shared_client is not None:
-                logger.info(
-                    "[MOUNT] Last mount cleaned up — shutting down shared Copilot subprocess"
-                )
-                await _shared_client.close()
-                _shared_client = None
-            _shared_client_refcount = 0  # safety floor: prevent negative counts
+
+    lock = _get_lock()
+
+    # Don't use timeout for release - always complete cleanup
+    async with lock:
+        if _shared_client_refcount > 0:
+            _shared_client_refcount -= 1
+
+            if _shared_client_refcount == 0 and _shared_client is not None:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.info("[SINGLETON] Last reference released, closing shared client...")
+                try:
+                    await _shared_client.close()
+                except Exception as close_err:
+                    logger.warning(f"[SINGLETON] Error closing shared client: {close_err}")
+                finally:
+                    _shared_client = None
 
 
 async def mount(
-    coordinator: Any,  # ModuleCoordinator
+    coordinator: ModuleCoordinator,
     config: dict[str, Any] | None = None,
-) -> Callable[[], Awaitable[None]] | None:
-    """
-    Mount the Copilot SDK provider.
+) -> CleanupFn | None:
+    """Mount the GitHub Copilot provider.
 
-    This is the entry point called by Amplifier's module loading system.
-    It validates prerequisites, creates the provider, and registers it
-    with the coordinator.
+    Contract: provider-protocol.md
+
+    Uses a process-level singleton for CopilotClientWrapper to prevent
+    O(N) memory consumption from N concurrent sub-agents.
 
     Args:
-        coordinator: Amplifier's ModuleCoordinator for registration
-        config: Provider configuration dict with optional keys:
-            - default_model: Default model ID (default: "claude-opus-4.5")
-            - model: Alias for default_model (backward compatibility)
-            - timeout: Request timeout in seconds (default: 3600 / 1 hour)
-            - thinking_timeout: Timeout for thinking models (default: 3600 / 1 hour)
-            - debug: Enable debug logging (default: False)
-            - cli_path: Path to Copilot CLI executable
+        coordinator: Amplifier kernel coordinator.
+        config: Optional provider configuration.
 
     Returns:
-        Cleanup function to unmount the provider, or None if
-        prerequisites are not met (graceful degradation)
+        Cleanup callable, or None. Returns None on failure (graceful degradation).
 
-    Example config:
-        ```python
-        {
-            "model": "claude-opus-4.5",
-            "timeout": 3600,
-            "thinking_timeout": 3600,
-            "debug": False,
-        }
-        ```
-
-    Graceful Degradation:
-        If the Copilot CLI is not installed or not authenticated,
-        the provider returns None instead of raising an error.
-        This allows Amplifier to continue with other providers.
     """
-    config = config or {}
-    logger.info("[MOUNT] Mounting CopilotSdkProvider...")
+    import logging
 
-    # Check prerequisites: find CLI path
-    cli_path = _find_copilot_cli(config)
+    logger = logging.getLogger(__name__)
 
-    if not cli_path:
-        from ._platform import get_cli_binary_name
-
-        logger.warning(
-            "[MOUNT] Copilot SDK prerequisites not met - provider not mounted. "
-            f"Ensure '{get_cli_binary_name()}' CLI is installed and authenticated."
-        )
-        return None  # Graceful degradation
-
-    # Set CLI path in config for provider to use
-    config["cli_path"] = cli_path
-
-    # Track whether this call acquired a shared client reference,
-    # so the error path only releases what this call actually acquired.
-    acquired_client: CopilotClientWrapper | None = None
+    shared_client: CopilotClientWrapper | None = None
+    try:
+        shared_client = await _acquire_shared_client()
+        logger.info("[MOUNT] Acquired shared client (singleton)")
+    except TimeoutError as e:
+        logger.error(f"[MOUNT] Failed to acquire shared client: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"[MOUNT] Error acquiring shared client: {e}")
+        return None
 
     try:
-        timeout = float(config.get("timeout", DEFAULT_TIMEOUT))
+        logger.info("[MOUNT] Creating GitHubCopilotProvider...")
+        provider = GitHubCopilotProvider(config, coordinator, client=shared_client)
+        logger.info(f"[MOUNT] Provider created: {provider.name}")
 
-        # Acquire (or reuse) the process-level shared client.
-        # All mounts in this Python process share one CopilotClientWrapper instance.
-        acquired_client = await _acquire_shared_client(config, timeout)
-
-        # Create provider, injecting the shared client
-        provider = CopilotSdkProvider(None, config, coordinator, client=acquired_client)
-
-        # Register with coordinator
+        logger.info("[MOUNT] Mounting to coordinator...")
         await coordinator.mount("providers", provider, name="github-copilot")
+        logger.info("[MOUNT] Provider mounted successfully")
 
-        logger.info("[MOUNT] CopilotSdkProvider mounted successfully")
-
-        # Return cleanup function — releases the shared reference, not the provider
         async def cleanup() -> None:
-            """Cleanup function called when unmounting."""
-            logger.info("[MOUNT] Unmounting CopilotSdkProvider...")
+            # Release our reference to the shared client.
+            # provider.close() is NOT called here because the shared
+            # client lifecycle is managed by the singleton, not the provider.
             await _release_shared_client()
-            logger.info("[MOUNT] CopilotSdkProvider unmounted")
 
         return cleanup
-
     except Exception as e:
-        logger.error(f"[MOUNT] Failed to mount CopilotSdkProvider: {e}")
-        # Only release if this call successfully acquired a reference before the failure
-        if acquired_client is not None:
-            await _release_shared_client()
+        # Release our reference if mount fails
+        await _release_shared_client()
+
+        # Graceful degradation: log error and return None instead of crashing
+        # This matches the production provider pattern
+        logger.error(f"[MOUNT] Failed to mount GitHubCopilotProvider: {type(e).__name__}: {e}")
+        import traceback
+
+        logger.error(f"[MOUNT] Traceback:\n{traceback.format_exc()}")
         return None
 
 
-def _ensure_executable(path: str) -> None:
-    """Ensure a binary has execute permission.
-
-    Some package managers (notably uv) don't preserve the execute bit on
-    bundled binaries.  Detect and fix this so subprocess.Popen won't fail
-    with PermissionError.
-
-    This is a thin wrapper around the shared ensure_executable utility.
-    """
-    from pathlib import Path
-
-    from ._permissions import ensure_executable
-
-    ensure_executable(Path(path))
-
-
-def _find_copilot_cli(config: dict[str, Any]) -> str | None:
-    """
-    Find the Copilot CLI executable path.
-
-    Resolution order:
-    1. SDK bundled binary (import copilot -> copilot/bin/copilot)
-    2. System PATH fallback (shutil.which)
-
-    The SDK bundles its own CLI binary which is version-matched,
-    avoiding potential version mismatches with separately installed CLIs.
-
-    Args:
-        config: Provider configuration (unused, kept for API compatibility)
-
-    Returns:
-        Resolved CLI path, or None if not found
-
-    Note:
-        Platform-specific binary naming (copilot vs copilot.exe) is handled
-        by the _platform module to ensure single source of truth.
-    """
-    try:
-        from ._platform import locate_cli_binary
-
-        cli_path = locate_cli_binary()
-        if cli_path:
-            _ensure_executable(str(cli_path))
-            logger.debug(f"[MOUNT] Found Copilot CLI at: {cli_path}")
-            return str(cli_path)
-
-        logger.debug("[MOUNT] Copilot CLI not found via SDK or PATH")
-        return None
-
-    except Exception as e:
-        logger.debug(f"[MOUNT] CLI path discovery failed: {e}")
-        return None
-
-
-# For direct module usage (testing)
-def get_provider_class() -> type[CopilotSdkProvider]:
-    """
-    Get the provider class for direct instantiation.
-
-    This is useful for testing or when not using Amplifier's
-    module system.
-
-    Returns:
-        CopilotSdkProvider class
-    """
-    return CopilotSdkProvider
+__all__ = ["mount", "GitHubCopilotProvider", "ProviderInfo", "ModelInfo"]

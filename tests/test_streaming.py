@@ -1,720 +1,577 @@
 """
-Tests for streaming functionality in CopilotSdkProvider.
+Tests for event translation / streaming module.
 
-These tests cover the event-based streaming logic, error handling,
-timeouts, and tool call parsing during streaming.
+Contract: event-vocabulary.md
+
+Type annotations for pyright strict mode compliance.
 """
 
-import asyncio
-from collections.abc import Callable
-from contextlib import asynccontextmanager
-from enum import Enum
+from __future__ import annotations
+
+import logging
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from amplifier_module_provider_github_copilot.client import CopilotClientWrapper
-from amplifier_module_provider_github_copilot.provider import CopilotSdkProvider
+
+class TestEventClassification:
+    """Tests for classify_event function."""
+
+    def test_text_delta_classified_as_bridge(self):
+        """text_delta is a BRIDGE event."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        result = classify_event("assistant.message_delta", config)
+        assert result == EventClassification.BRIDGE
+
+    def test_thinking_delta_classified_as_bridge(self):
+        """assistant.reasoning_delta is a BRIDGE event."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        result = classify_event("assistant.reasoning_delta", config)
+        assert result == EventClassification.BRIDGE
+
+    def test_tool_use_start_classified_as_consume(self):
+        """tool_use_start is a CONSUME event."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        result = classify_event("tool_use_start", config)
+        assert result == EventClassification.CONSUME
+
+    def test_heartbeat_classified_as_drop(self):
+        """heartbeat is a DROP event."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        result = classify_event("heartbeat", config)
+        assert result == EventClassification.DROP
+
+    def test_wildcard_pattern_tool_result(self):
+        """tool_result_* pattern matches tool_result_success."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        result = classify_event("tool_result_success", config)
+        assert result == EventClassification.DROP
+
+    def test_wildcard_pattern_debug(self):
+        """debug_* pattern matches debug_log."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        result = classify_event("debug_log", config)
+        assert result == EventClassification.DROP
+
+    def test_unknown_event_dropped_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Unknown events are dropped with warning."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        with caplog.at_level(logging.WARNING):
+            result = classify_event("completely_unknown_event_xyz", config)
+        assert result == EventClassification.DROP
+        assert "Unknown SDK event type" in caplog.text
 
 
-# Mock SessionEventType enum to match copilot SDK
-class MockSessionEventType(Enum):
-    """Mock of copilot.generated.session_events.SessionEventType."""
+class TestTranslateEvent:
+    """Tests for translate_event function."""
 
-    ASSISTANT_TURN_START = "assistant.turn_start"
-    ASSISTANT_TURN_END = "assistant.turn_end"
-    ASSISTANT_MESSAGE_DELTA = "assistant.message_delta"
-    ASSISTANT_MESSAGE = "assistant.message"
-    ASSISTANT_REASONING_DELTA = "assistant.reasoning_delta"
-    ASSISTANT_REASONING = "assistant.reasoning"
-    ASSISTANT_USAGE = "assistant.usage"
-    SESSION_IDLE = "session.idle"
-    SESSION_ERROR = "session.error"
+    def test_text_delta_bridges_to_content_delta(self):
+        """text_delta SDK event → CONTENT_DELTA domain event."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEventType,
+            load_event_config,
+            translate_event,
+        )
+
+        config = load_event_config()
+        sdk_event = {"type": "assistant.message_delta", "text": "Hello"}
+        result = translate_event(sdk_event, config)
+        assert result is not None
+        assert result.type == DomainEventType.CONTENT_DELTA
+        assert result.block_type == "TEXT"
+
+    def test_thinking_delta_has_thinking_block_type(self):
+        """assistant.reasoning_delta → CONTENT_DELTA with block_type=THINKING."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEventType,
+            load_event_config,
+            translate_event,
+        )
+
+        config = load_event_config()
+        sdk_event = {"type": "assistant.reasoning_delta", "text": "Let me think..."}
+        result = translate_event(sdk_event, config)
+        assert result is not None
+        assert result.type == DomainEventType.CONTENT_DELTA
+        assert result.block_type == "THINKING"
+
+    def test_tool_use_complete_bridges_to_tool_call(self):
+        """tool_use_complete → TOOL_CALL domain event."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEventType,
+            load_event_config,
+            translate_event,
+        )
+
+        config = load_event_config()
+        sdk_event = {"type": "tool_use_complete", "id": "tc1", "name": "read_file"}
+        result = translate_event(sdk_event, config)
+        assert result is not None
+        assert result.type == DomainEventType.TOOL_CALL
+
+    def test_consume_event_returns_none(self):
+        """CONSUME events return None."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            load_event_config,
+            translate_event,
+        )
+
+        config = load_event_config()
+        sdk_event = {"type": "tool_use_start", "id": "tc1"}
+        result = translate_event(sdk_event, config)
+        assert result is None
+
+    def test_drop_event_returns_none(self):
+        """DROP events return None."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            load_event_config,
+            translate_event,
+        )
+
+        config = load_event_config()
+        sdk_event = {"type": "heartbeat"}
+        result = translate_event(sdk_event, config)
+        assert result is None
+
+    def test_event_data_preserved(self):
+        """Event data is preserved in domain event."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            load_event_config,
+            translate_event,
+        )
+
+        config = load_event_config()
+        sdk_event = {"type": "assistant.message_delta", "text": "Hello world", "index": 0}
+        result = translate_event(sdk_event, config)
+        assert result is not None
+        assert result.data["text"] == "Hello world"
 
 
-class MockStreamingSession:
+class TestEventConfig:
+    """Tests for event config loading."""
+
+    def test_config_loads_successfully(self):
+        """Config file loads without errors."""
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        config = load_event_config()
+        assert config is not None
+
+    def test_config_has_bridge_mappings(self):
+        """Config contains bridge mappings."""
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        config = load_event_config()
+        assert len(config.bridge_mappings) > 0
+        assert "assistant.message_delta" in config.bridge_mappings
+
+    def test_config_has_consume_patterns(self):
+        """Config contains consume patterns."""
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        config = load_event_config()
+        assert len(config.consume_patterns) > 0
+
+    def test_config_has_drop_patterns(self):
+        """Config contains drop patterns."""
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        config = load_event_config()
+        assert len(config.drop_patterns) > 0
+
+
+class TestDomainEventType:
+    """Tests for DomainEventType enum."""
+
+    def test_all_domain_types_exist(self):
+        """All 6 domain event types exist."""
+        from amplifier_module_provider_github_copilot.streaming import DomainEventType
+
+        expected_types = [
+            "CONTENT_DELTA",
+            "TOOL_CALL",
+            "USAGE_UPDATE",
+            "TURN_COMPLETE",
+            "SESSION_IDLE",
+            "ERROR",
+        ]
+        for type_name in expected_types:
+            assert hasattr(DomainEventType, type_name)
+
+
+class TestStreamingAccumulator:
+    """Tests for StreamingAccumulator class."""
+
+    def test_accumulator_starts_empty(self):
+        """New accumulator has empty state."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        result = accumulator.get_result()
+        assert result.text_content == ""
+        assert result.thinking_content == ""
+        assert result.tool_calls == []
+        assert not result.is_complete
+
+    def test_content_delta_accumulates_text(self):
+        """CONTENT_DELTA events accumulate text."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Hello "},
+                block_type="TEXT",
+            )
+        )
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "world"},
+                block_type="TEXT",
+            )
+        )
+        result = accumulator.get_result()
+        assert result.text_content == "Hello world"
+
+    def test_thinking_delta_accumulates_separately(self):
+        """THINKING block_type accumulates to thinking_content."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Let me think"},
+                block_type="THINKING",
+            )
+        )
+        result = accumulator.get_result()
+        assert result.thinking_content == "Let me think"
+        assert result.text_content == ""
+
+    def test_tool_call_collected(self):
+        """TOOL_CALL events collected in list."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc1", "name": "read_file", "arguments": {"path": "x.py"}},
+            )
+        )
+        result = accumulator.get_result()
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0]["name"] == "read_file"
+
+    def test_usage_update_stored(self):
+        """USAGE_UPDATE event stored."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.USAGE_UPDATE,
+                data={"input_tokens": 100, "output_tokens": 50},
+            )
+        )
+        result = accumulator.get_result()
+        assert result.usage is not None
+        assert result.usage["input_tokens"] == 100
+
+    def test_turn_complete_marks_done(self):
+        """TURN_COMPLETE marks accumulator complete."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TURN_COMPLETE,
+                data={"finish_reason": "stop"},
+            )
+        )
+        result = accumulator.get_result()
+        assert result.is_complete
+        assert result.finish_reason == "stop"
+
+    def test_error_marks_complete_with_error(self):
+        """ERROR event marks complete with error data."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.ERROR,
+                data={"message": "Rate limit exceeded"},
+            )
+        )
+        result = accumulator.get_result()
+        assert result.is_complete
+        assert result.error is not None
+        assert "Rate limit" in result.error["message"]
+
+    def test_interleaved_content_handled(self):
+        """Interleaved text and thinking accumulate correctly."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "A"}, "TEXT"))
+        accumulator.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "T"}, "THINKING"))
+        accumulator.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "B"}, "TEXT"))
+        result = accumulator.get_result()
+        assert result.text_content == "AB"
+        assert result.thinking_content == "T"
+
+    def test_multiple_tool_calls_collected(self):
+        """Multiple TOOL_CALL events all collected."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc1", "name": "read_file"},
+            )
+        )
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc2", "name": "write_file"},
+            )
+        )
+        result = accumulator.get_result()
+        assert len(result.tool_calls) == 2
+
+    def test_is_complete_property(self):
+        """is_complete property reflects accumulator state."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        assert not accumulator.is_complete
+        accumulator.add(DomainEvent(type=DomainEventType.TURN_COMPLETE, data={}))
+        assert accumulator.is_complete
+
+    def test_content_delta_with_none_block_type_goes_to_text(self):
+        """CONTENT_DELTA with None block_type accumulates to text."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "No block type"},
+                block_type=None,
+            )
+        )
+        result = accumulator.get_result()
+        assert result.text_content == "No block type"
+
+
+class TestAccumulatedResponse:
+    """Tests for AccumulatedResponse dataclass."""
+
+    def test_accumulated_response_defaults(self):
+        """AccumulatedResponse has correct defaults."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            AccumulatedResponse,
+        )
+
+        response = AccumulatedResponse()
+        assert response.text_content == ""
+        assert response.thinking_content == ""
+        assert response.tool_calls == []
+        assert response.usage is None
+        assert response.finish_reason is None
+        assert response.error is None
+        assert not response.is_complete
+
+
+# ============================================================================
+# _extract_content_block fix tests
+# Contract: provider-protocol:complete:MUST:5
+# ============================================================================
+
+
+class TestExtractContentBlockSkipsToolCalls:
+    """Tests Fix 1: _extract_content_block skips tool_call blocks.
+
+    Contract: provider-protocol:complete:MUST:5
+    This ensures prior tool calls in conversation history don't get
+    serialized as '[Tool Call: ...]' text that triggers fake detection.
     """
-    Mock session that simulates streaming events.
 
-    Allows testing of event-based streaming logic by controlling
-    exactly which events are emitted and when.
-    """
+    def test_extract_content_block_skips_tool_call_dict(self) -> None:
+        """Dict with type=tool_call returns empty string.
 
-    def __init__(self, events: list[tuple[MockSessionEventType, Any]] | None = None):
+        Contract: provider-protocol:complete:MUST:5
         """
-        Initialize with list of (event_type, event_data) tuples.
+        from amplifier_module_provider_github_copilot.provider import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
 
-        Args:
-            events: List of (MockSessionEventType, data) tuples to emit
+        block = {"type": "tool_call", "tool_name": "bash", "arguments": {"cmd": "ls"}}
+        result = _extract_content_block(block)
+        assert result == ""
+
+    def test_extract_content_block_skips_tool_call_object(self) -> None:
+        """Object with tool_name attribute returns empty string.
+
+        Contract: provider-protocol:complete:MUST:5
         """
-        self.session_id = "mock-streaming-session"
-        self.events = events or []
-        self.event_handlers: list[Callable] = []
-        self.destroyed = False
-        self.sent_messages: list[Any] = []
+        from dataclasses import dataclass
 
-    def on(self, handler: Callable) -> Callable:
-        """Subscribe to events. Returns unsubscribe function."""
-        self.event_handlers.append(handler)
-
-        def unsubscribe():
-            if handler in self.event_handlers:
-                self.event_handlers.remove(handler)
-
-        return unsubscribe
-
-    async def send(self, message: dict[str, Any]) -> None:
-        """Send a message and trigger events."""
-        self.sent_messages.append(message)
-
-        # Emit all events in sequence
-        for event_type, event_data in self.events:
-            event = Mock()
-            event.type = event_type  # Use MockSessionEventType enum
-            event.data = event_data
-
-            for handler in self.event_handlers:
-                handler(event)
-
-    async def destroy(self) -> None:
-        """Destroy the session."""
-        self.destroyed = True
-
-
-def create_event_data(**kwargs) -> Mock:
-    """Create mock event data with attributes."""
-    data = Mock()
-    for key, value in kwargs.items():
-        setattr(data, key, value)
-    return data
-
-
-class TestStreamingEvents:
-    """Tests for streaming event handling."""
-
-    @pytest.fixture
-    def streaming_provider(self, mock_coordinator):
-        """Create provider configured for streaming."""
-        return CopilotSdkProvider(
-            api_key=None,
-            config={
-                "model": "claude-opus-4-5",
-                "timeout": 60.0,
-                "use_streaming": True,
-                "debug": False,
-            },
-            coordinator=mock_coordinator,
+        from amplifier_module_provider_github_copilot.provider import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
         )
 
-    @pytest.mark.asyncio
-    async def test_streaming_text_deltas(self, streaming_provider):
-        """Test handling of ASSISTANT_MESSAGE_DELTA events."""
-        # Create session that emits text deltas
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE_DELTA,
-                create_event_data(delta_content="Hello "),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE_DELTA,
-                create_event_data(delta_content="world!"),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="Hello world!", tool_requests=None),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=10, output_tokens=5),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
+        @dataclass
+        class ToolCallBlock:
+            type: str = "tool_call"
+            tool_name: str = "read_file"
+            arguments: dict[str, Any] | None = None
 
-        # Mock the _stream_with_session method by calling _process_streaming_response directly
-        # We need to patch the session creation
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
+            def __post_init__(self) -> None:
+                if self.arguments is None:
+                    self.arguments = {}
 
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    # Call complete with streaming
-                    request = {"messages": [{"role": "user", "content": "Hi"}]}
-                    response = await streaming_provider.complete(request)
+        block = ToolCallBlock(tool_name="read_file", arguments={"path": "test.py"})
+        result = _extract_content_block(block)
+        assert result == ""
 
-                    # Verify response
-                    assert response is not None
-                    assert len(response.content) > 0
+    def test_extract_content_block_preserves_text(self) -> None:
+        """Text blocks are still extracted correctly.
 
-    @pytest.mark.asyncio
-    async def test_streaming_reasoning_deltas(self, streaming_provider):
-        """Test handling of ASSISTANT_REASONING_DELTA events for thinking."""
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_REASONING_DELTA,
-                create_event_data(delta_content="Let me "),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_REASONING_DELTA,
-                create_event_data(delta_content="think..."),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE_DELTA,
-                create_event_data(delta_content="The answer is 4."),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="The answer is 4.", tool_requests=None),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=15, output_tokens=10),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    request = {"messages": [{"role": "user", "content": "What is 2+2?"}]}
-                    response = await streaming_provider.complete(request, extended_thinking=True)
-
-                    assert response is not None
-
-    @pytest.mark.asyncio
-    async def test_streaming_complete_reasoning_block(self, streaming_provider):
-        """Test handling of ASSISTANT_REASONING event (complete block)."""
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_REASONING,
-                create_event_data(content="I analyzed the problem carefully."),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="Here is my answer.", tool_requests=None),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=20, output_tokens=15),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    request = {"messages": [{"role": "user", "content": "Complex question"}]}
-                    response = await streaming_provider.complete(request, extended_thinking=True)
-
-                    assert response is not None
-
-    @pytest.mark.asyncio
-    async def test_streaming_with_tool_requests(self, streaming_provider):
-        """Test handling of tool requests in streaming mode."""
-        # Create tool request mock
-        tool_request = Mock()
-        tool_request.tool_call_id = "call_123"
-        tool_request.name = "read_file"
-        tool_request.arguments = {"path": "test.py"}
-
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE_DELTA,
-                create_event_data(delta_content="I'll read that file."),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="I'll read that file.", tool_requests=[tool_request]),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=25, output_tokens=20),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
-
-        # Mock tool spec to trigger the has_tools=True path
-        mock_tool_spec = Mock(name="read_file", description="Read a file", parameters={})
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    with patch(
-                        "amplifier_module_provider_github_copilot.provider.convert_tools_for_sdk",
-                        return_value=[Mock()],
-                    ):
-                        with patch(
-                            "amplifier_module_provider_github_copilot.provider.make_deny_all_hook",
-                            return_value={
-                                "on_pre_tool_use": lambda *a: {"permissionDecision": "deny"}
-                            },
-                        ):
-                            request = {
-                                "messages": [{"role": "user", "content": "Read test.py"}],
-                                "tools": [mock_tool_spec],
-                            }
-                            response = await streaming_provider.complete(request)
-
-                            assert response is not None
-                            # Should have tool_use finish reason
-                            assert response.finish_reason == "tool_use"
-                            assert response.tool_calls is not None
-                            assert len(response.tool_calls) == 1
-                            assert response.tool_calls[0].name == "read_file"
-
-    @pytest.mark.asyncio
-    async def test_streaming_tool_arguments_as_string(self, streaming_provider):
-        """Test handling of tool arguments passed as JSON string."""
-        tool_request = Mock()
-        tool_request.tool_call_id = "call_456"
-        tool_request.name = "search"
-        tool_request.arguments = '{"query": "python"}'  # String instead of dict
-
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="Searching...", tool_requests=[tool_request]),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=10, output_tokens=5),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
-
-        mock_tool_spec = Mock(name="search", description="Search", parameters={})
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    with patch(
-                        "amplifier_module_provider_github_copilot.provider.convert_tools_for_sdk",
-                        return_value=[Mock()],
-                    ):
-                        with patch(
-                            "amplifier_module_provider_github_copilot.provider.make_deny_all_hook",
-                            return_value={
-                                "on_pre_tool_use": lambda *a: {"permissionDecision": "deny"}
-                            },
-                        ):
-                            request = {
-                                "messages": [{"role": "user", "content": "Search for python"}],
-                                "tools": [mock_tool_spec],
-                            }
-                            response = await streaming_provider.complete(request)
-
-                            assert response.tool_calls[0].arguments == {"query": "python"}
-
-    @pytest.mark.asyncio
-    async def test_streaming_tool_arguments_invalid_json(self, streaming_provider):
-        """Test handling of invalid JSON in tool arguments."""
-        tool_request = Mock()
-        tool_request.tool_call_id = "call_789"
-        tool_request.name = "custom"
-        tool_request.arguments = "not valid json {"  # Invalid JSON
-
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="Running...", tool_requests=[tool_request]),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=10, output_tokens=5),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
-
-        mock_tool_spec = Mock(name="custom", description="Custom", parameters={})
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    with patch(
-                        "amplifier_module_provider_github_copilot.provider.convert_tools_for_sdk",
-                        return_value=[Mock()],
-                    ):
-                        with patch(
-                            "amplifier_module_provider_github_copilot.provider.make_deny_all_hook",
-                            return_value={
-                                "on_pre_tool_use": lambda *a: {"permissionDecision": "deny"}
-                            },
-                        ):
-                            request = {
-                                "messages": [{"role": "user", "content": "Run custom"}],
-                                "tools": [mock_tool_spec],
-                            }
-                            response = await streaming_provider.complete(request)
-
-                            # Should wrap in raw key
-                            assert response.tool_calls[0].arguments == {"raw": "not valid json {"}
-
-
-class TestStreamingErrors:
-    """Tests for error handling in streaming mode."""
-
-    @pytest.fixture
-    def streaming_provider(self, mock_coordinator):
-        """Create provider configured for streaming with short timeout."""
-        return CopilotSdkProvider(
-            api_key=None,
-            config={
-                "model": "claude-opus-4-5",
-                "timeout": 1.0,  # Short timeout for testing
-                "thinking_timeout": 1.0,  # Also short - opus triggers reasoning path
-                "use_streaming": True,
-                "debug": False,
-            },
-            coordinator=mock_coordinator,
+        Contract: provider-protocol:complete:MUST:5
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
         )
 
-    @pytest.mark.asyncio
-    async def test_streaming_session_error(self, streaming_provider):
-        """Test handling of SESSION_ERROR event."""
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE_DELTA,
-                create_event_data(delta_content="Starting..."),
-            ),
-            (
-                MockSessionEventType.SESSION_ERROR,
-                create_event_data(message="Backend error occurred"),
-            ),
-        ]
-        mock_session = MockStreamingSession(events)
+        block = {"type": "text", "text": "Hello, world!"}
+        result = _extract_content_block(block)
+        assert result == "Hello, world!"
 
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
+    def test_extract_content_block_preserves_thinking(self) -> None:
+        """Thinking blocks are still extracted correctly.
 
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    request = {"messages": [{"role": "user", "content": "Test"}]}
-
-                    with pytest.raises(Exception) as exc_info:
-                        await streaming_provider.complete(request)
-
-                    assert "Backend error" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_streaming_timeout(self, streaming_provider):
-        """Test timeout handling in streaming mode."""
-        from amplifier_core.llm_errors import LLMTimeoutError
-
-        # NOTE: Provider wraps CopilotTimeoutError -> LLMTimeoutError for kernel compatibility
-        # Session that emits a delta but never reaches idle — will trigger timeout
-        # Key: events must be emitted asynchronously to allow timeout to fire
-        class NeverIdleSession(MockStreamingSession):
-            """Session where send() returns quickly but idle never fires."""
-
-            async def send(self, message):
-                self.sent_messages.append(message)
-
-                async def emit_events_async():
-                    """Emit events asynchronously to simulate real SDK behavior."""
-                    await asyncio.sleep(0.01)  # Yield to event loop
-                    for event_type, event_data in self.events:
-                        event = Mock()
-                        event.type = event_type
-                        event.data = event_data
-                        for handler in self.event_handlers:
-                            handler(event)
-                    # No SESSION_IDLE — provider will timeout
-
-                # Start event emission but don't await (fire and forget)
-                asyncio.create_task(emit_events_async())
-                # Return immediately — timeout will fire on idle_event.wait()
-
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE_DELTA,
-                create_event_data(delta_content="Starting..."),
-            ),
-            # No SESSION_IDLE — provider's asyncio.timeout will fire
-        ]
-        mock_session = NeverIdleSession(events)
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    request = {"messages": [{"role": "user", "content": "Test"}]}
-
-                    with pytest.raises(LLMTimeoutError):
-                        await streaming_provider.complete(request)
-
-    @pytest.mark.asyncio
-    async def test_streaming_no_deltas_use_final_content(self, streaming_provider):
-        """Test fallback to final message content when no deltas received."""
-        events = [
-            # No delta events, only final message
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="Direct response without deltas", tool_requests=None),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=10, output_tokens=5),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    request = {"messages": [{"role": "user", "content": "Test"}]}
-                    response = await streaming_provider.complete(request)
-
-                    assert response is not None
-                    # Should use content from final message
-                    assert any("Direct response" in str(block) for block in response.content)
-
-
-class TestStreamingUsage:
-    """Tests for usage tracking in streaming mode."""
-
-    @pytest.fixture
-    def streaming_provider(self, mock_coordinator):
-        """Create provider configured for streaming."""
-        return CopilotSdkProvider(
-            api_key=None,
-            config={
-                "model": "claude-opus-4-5",
-                "timeout": 60.0,
-                "use_streaming": True,
-            },
-            coordinator=mock_coordinator,
+        Contract: provider-protocol:complete:MUST:5
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
         )
 
-    @pytest.mark.asyncio
-    async def test_streaming_usage_tracking(self, streaming_provider):
-        """Test that usage tokens are correctly tracked."""
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE_DELTA,
-                create_event_data(delta_content="Response"),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="Response", tool_requests=None),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=150, output_tokens=75),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
+        block = {"type": "thinking", "thinking": "Let me analyze..."}
+        result = _extract_content_block(block)
+        assert result == "[Thinking: Let me analyze...]"
+
+    def test_no_tool_call_text_in_serialized_output(self) -> None:
+        """Conversation with tool calls doesn't produce fake tool call text.
+
+        Contract: provider-protocol:complete:MUST:5
+
+        This is the integration test that proves Fix 1 works end-to-end.
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            _extract_message_content,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Mixed content with text and tool_call
+        content = [
+            {"type": "text", "text": "I'll run a command"},
+            {"type": "tool_call", "tool_name": "bash", "arguments": {"cmd": "ls"}},
+            {"type": "text", "text": "Command completed"},
         ]
-        mock_session = MockStreamingSession(events)
 
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
+        result = _extract_message_content(content)
 
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    request = {"messages": [{"role": "user", "content": "Test"}]}
-                    response = await streaming_provider.complete(request)
-
-                    assert response.usage.input_tokens == 150
-                    assert response.usage.output_tokens == 75
-                    assert response.usage.total_tokens == 225
-
-    @pytest.mark.asyncio
-    async def test_streaming_usage_with_none_values(self, streaming_provider):
-        """Test handling of None values in usage data."""
-        events = [
-            (
-                MockSessionEventType.ASSISTANT_MESSAGE,
-                create_event_data(content="Response", tool_requests=None),
-            ),
-            (
-                MockSessionEventType.ASSISTANT_USAGE,
-                create_event_data(input_tokens=None, output_tokens=None),
-            ),
-            (MockSessionEventType.SESSION_IDLE, create_event_data()),
-        ]
-        mock_session = MockStreamingSession(events)
-
-        @asynccontextmanager
-        async def mock_create_session(
-            self,
-            model,
-            system_message=None,
-            streaming=True,
-            reasoning_effort=None,
-            tools=None,
-            excluded_tools=None,
-            hooks=None,
-        ):
-            yield mock_session
-            await mock_session.destroy()
-
-        with patch.object(CopilotClientWrapper, "create_session", mock_create_session):
-            with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock):
-                with patch(
-                    "copilot.generated.session_events.SessionEventType", MockSessionEventType
-                ):
-                    request = {"messages": [{"role": "user", "content": "Test"}]}
-                    response = await streaming_provider.complete(request)
-
-                    # Should handle None gracefully
-                    assert response.usage.input_tokens == 0
-                    assert response.usage.output_tokens == 0
+        # Should NOT contain [Tool Call: pattern
+        assert "[Tool Call:" not in result
+        # Should preserve text
+        assert "I'll run a command" in result
+        assert "Command completed" in result

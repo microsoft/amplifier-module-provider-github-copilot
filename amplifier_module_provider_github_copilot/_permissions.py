@@ -1,52 +1,76 @@
-"""File permission utilities for the GitHub Copilot provider module.
+"""Execute Permission Handling.
 
-This module handles file permission operations, specifically ensuring
-binaries have execute permissions following least-privilege principles.
+Repairs execute permissions for SDK-bundled CLI binary stripped by package managers.
+
+Contract: sdk-boundary:BinaryResolution:MUST:6-7
+
+The `uv` package manager strips execute permissions from bundled binaries.
+This module repairs the permissions before mount() proceeds.
+
+MUST constraints:
+- MUST set S_IXUSR | S_IXGRP only (no world-execute per security review)
+- MUST be no-op on Windows (os.access unreliable)
+- MUST be idempotent (no chmod if already executable)
 """
 
+from __future__ import annotations
+
 import logging
-import os
 import stat
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Permission bits for user and group execute
+_EXECUTE_BITS = stat.S_IXUSR | stat.S_IXGRP
+
 
 def ensure_executable(path: Path) -> bool:
-    """Ensure a file has user and group execute permissions.
+    """Ensure file has user+group execute permission (S_IXUSR|S_IXGRP).
 
-    Sets S_IXUSR | S_IXGRP only — does NOT set S_IXOTH (world execute)
-    to follow the principle of least privilege.
+    MUST NOT set world-execute (S_IXOTH) — least privilege.
+    Idempotent: returns True immediately if already executable.
+    No-op on Windows (always returns True).
+
+    Contract: sdk-boundary:BinaryResolution:MUST:6
+    Contract: sdk-boundary:BinaryResolution:MUST:7
 
     Args:
-        path: Path to the file to make executable
+        path: Path to the file to make executable.
 
     Returns:
-        True if file is executable (or was made so), False on failure
+        True if executable (or made so), False on failure.
 
-    Note:
-        Security requirement from architecture review (PR #6):
-        "Both executable-permission fixes add world-execute (S_IXOTH).
-        Should be S_IXUSR | S_IXGRP only."
     """
-    # Edge case: file doesn't exist
-    if not path.exists():
-        logger.debug(f"File does not exist: {path}")
-        return False
+    from ._platform import get_platform_info
 
-    # Idempotent: already executable by user
-    if os.access(path, os.X_OK):
+    # No-op on Windows — os.access(X_OK) is unreliable
+    if get_platform_info().is_windows:
         return True
+
+    # Check if file exists
+    if not path.is_file():
+        logger.warning("[PERMISSIONS] File not found: %s", path)
+        return False
 
     try:
-        current = path.stat().st_mode
-        # Security: S_IXUSR | S_IXGRP only (no world-execute S_IXOTH)
-        path.chmod(current | stat.S_IXUSR | stat.S_IXGRP)
-        logger.debug(f"Added execute permission to {path}")
+        # Get current mode
+        current_mode = path.stat().st_mode
+
+        # Check if already executable (user execute bit is sufficient)
+        if current_mode & stat.S_IXUSR:
+            return True
+
+        # Add execute bits (user + group only, no world)
+        new_mode = current_mode | _EXECUTE_BITS
+        path.chmod(new_mode)
+
+        logger.debug("[PERMISSIONS] Added execute permission: %s", path)
         return True
-    except PermissionError:
-        logger.debug(f"Permission denied setting execute on {path}")
+
+    except PermissionError as e:
+        logger.warning("[PERMISSIONS] Permission denied fixing %s: %s", path, e)
         return False
     except OSError as e:
-        logger.debug(f"Failed to set execute on {path}: {e}")
+        logger.warning("[PERMISSIONS] OS error fixing %s: %s", path, e)
         return False

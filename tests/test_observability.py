@@ -1,0 +1,344 @@
+"""
+Tests for observability improvements.
+
+Contract: contracts/error-hierarchy.md
+
+Tests verify that observability logging is added to error translation
+and tool parsing without changing provider behavior.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+
+from amplifier_module_provider_github_copilot.error_translation import (
+    ErrorConfig,
+    ErrorMapping,
+    translate_sdk_error,
+)
+from amplifier_module_provider_github_copilot.tool_parsing import (
+    parse_tool_calls,
+)
+
+
+class TestErrorTranslationLogging:
+    """AC-1, AC-2, AC-3: Logger imported and DEBUG log emitted for translations."""
+
+    def test_logger_is_imported(self) -> None:
+        """AC-1: logger imported in error_translation.py."""
+        from amplifier_module_provider_github_copilot import error_translation
+
+        assert hasattr(error_translation, "logger")
+        assert isinstance(error_translation.logger, logging.Logger)
+
+    def test_debug_log_emitted_for_translation(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-2: DEBUG log emitted for every translate_sdk_error() call."""
+        mapping = ErrorMapping(
+            sdk_patterns=["AuthenticationError"],
+            kernel_error="AuthenticationError",
+            retryable=False,
+        )
+        config = ErrorConfig(mappings=[mapping])
+
+        class AuthenticationError(Exception):
+            pass
+
+        exc = AuthenticationError("Invalid token")
+
+        with caplog.at_level(logging.DEBUG):
+            translate_sdk_error(exc, config)
+
+        # Check DEBUG log was emitted
+        assert any(record.levelno == logging.DEBUG for record in caplog.records)
+        assert "[ERROR_TRANSLATION]" in caplog.text
+
+    def test_log_includes_error_types_and_retryable(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-3: Log includes original error type, kernel error type, retryable flag."""
+        mapping = ErrorMapping(
+            sdk_patterns=["RateLimitError"],
+            kernel_error="RateLimitError",
+            retryable=True,
+        )
+        config = ErrorConfig(mappings=[mapping])
+
+        class RateLimitError(Exception):
+            pass
+
+        exc = RateLimitError("Rate limit exceeded")
+
+        with caplog.at_level(logging.DEBUG):
+            translate_sdk_error(exc, config)
+
+        # Check log content
+        assert "RateLimitError" in caplog.text
+        assert "retryable=True" in caplog.text
+
+    def test_log_emitted_for_default_translation(self, caplog: pytest.LogCaptureFixture) -> None:
+        """DEBUG log emitted even when no mapping matches (default path)."""
+        config = ErrorConfig(
+            mappings=[],
+            default_error="ProviderUnavailableError",
+            default_retryable=True,
+        )
+
+        exc = Exception("Unknown error")
+
+        with caplog.at_level(logging.DEBUG):
+            translate_sdk_error(exc, config)
+
+        assert "[ERROR_TRANSLATION]" in caplog.text
+        assert "ProviderUnavailableError" in caplog.text
+        assert "default" in caplog.text
+
+
+class TestToolParsingLogging:
+    """AC-4, AC-5, AC-6: WARNING log for empty tool arguments."""
+
+    def test_warning_logged_for_empty_arguments(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-4: WARNING log emitted when tool_call.arguments == {}."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any]
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[MockToolCall(id="tc_1", name="apply_patch", arguments={})]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = parse_tool_calls(response)
+
+        # Verify parse succeeds
+        assert len(result) == 1
+        assert result[0].arguments == {}
+
+        # Check WARNING log was emitted
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+        assert "[TOOL_PARSING]" in caplog.text
+
+    def test_warning_includes_tool_name_and_id(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-5: Warning log includes tool name and ID."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any]
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[MockToolCall(id="tc_123", name="dangerous_tool", arguments={})]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            parse_tool_calls(response)
+
+        assert "dangerous_tool" in caplog.text
+        assert "tc_123" in caplog.text
+
+    def test_log_format_uses_correct_tag(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-6: Log format uses [TOOL_PARSING] tag."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any]
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[MockToolCall(id="tc_1", name="test_tool", arguments={})]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            parse_tool_calls(response)
+
+        assert "[TOOL_PARSING]" in caplog.text
+
+
+class TestNoWarningForNonEmptyArguments:
+    """Edge cases: no warning for non-empty arguments."""
+
+    def test_no_warning_for_none_arguments(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No warning when arguments are None (different from empty dict)."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any] | None
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[MockToolCall(id="tc_1", name="test_tool", arguments=None)]  # type: ignore
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = parse_tool_calls(response)
+
+        # Parse succeeds with empty dict
+        assert len(result) == 1
+        # No warning for None (only for explicit {})
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 0
+
+    def test_no_warning_for_populated_arguments(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No warning when arguments have content."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any]
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[MockToolCall(id="tc_1", name="test_tool", arguments={"path": "/test/path"})]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = parse_tool_calls(response)
+
+        # Parse succeeds
+        assert len(result) == 1
+        assert result[0].arguments == {"path": "/test/path"}
+        # No warning
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 0
+
+    def test_no_warning_for_empty_string_values(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No warning when arguments have keys with empty string values."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any]
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[MockToolCall(id="tc_1", name="test_tool", arguments={"key": ""})]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = parse_tool_calls(response)
+
+        # Parse succeeds
+        assert len(result) == 1
+        # No warning (has keys, just empty values)
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 0
+
+
+class TestMultipleToolCalls:
+    """Edge case: multiple tool calls with some empty args."""
+
+    def test_warning_for_each_empty_args_tool(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Warning logged for each tool call with empty arguments."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any]
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[
+                MockToolCall(id="tc_1", name="tool_a", arguments={}),
+                MockToolCall(id="tc_2", name="tool_b", arguments={"x": 1}),
+                MockToolCall(id="tc_3", name="tool_c", arguments={}),
+            ]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = parse_tool_calls(response)
+
+        # All three parsed
+        assert len(result) == 3
+
+        # Two warnings (for tc_1 and tc_3)
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_records) == 2
+        assert "tool_a" in caplog.text
+        assert "tool_c" in caplog.text
+
+
+class TestNoRegressions:
+    """AC-7: All existing tool parsing behavior preserved."""
+
+    def test_basic_parsing_still_works(self) -> None:
+        """Basic tool parsing without logging concerns."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: dict[str, Any]
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[
+                MockToolCall(id="tc_1", name="read_file", arguments={"path": "/workspace/test.py"})
+            ]
+        )
+
+        result = parse_tool_calls(response)
+
+        assert len(result) == 1
+        assert result[0].id == "tc_1"
+        assert result[0].name == "read_file"
+        assert result[0].arguments == {"path": "/workspace/test.py"}
+
+    def test_json_string_arguments_still_parsed(self) -> None:
+        """JSON string arguments are still parsed correctly."""
+
+        @dataclass
+        class MockToolCall:
+            id: str
+            name: str
+            arguments: str
+
+        @dataclass
+        class MockResponse:
+            tool_calls: list[MockToolCall]
+
+        response = MockResponse(
+            tool_calls=[MockToolCall(id="tc_1", name="test", arguments='{"key": "value"}')]
+        )
+
+        result = parse_tool_calls(response)
+
+        assert len(result) == 1
+        assert result[0].arguments == {"key": "value"}

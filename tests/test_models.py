@@ -1,473 +1,1097 @@
 """
-Tests for model mapping and metadata.
+Tests for model discovery and type translation.
 
-This module tests the model conversion between Copilot SDK format
-and Amplifier format.
+Contract: contracts/sdk-boundary.md (ModelDiscovery section)
+Contract: contracts/behaviors.md (ModelDiscoveryError section)
+
+Three-Medium Architecture:
+- Python: Type translation logic (models.py)
+- YAML: Cache policy values (config/model_cache.yaml)
+- Markdown: Invariants (contracts/*.md)
 """
 
-from unittest.mock import AsyncMock, Mock
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from amplifier_core import ModelInfo
 
-from amplifier_module_provider_github_copilot.exceptions import CopilotProviderError
-from amplifier_module_provider_github_copilot.models import (
-    CopilotModelInfo,
-    copilot_model_to_internal,
-    fetch_and_map_models,
-    get_default_model,
-    to_amplifier_model_info,
-)
+# =============================================================================
+# SDK Mock Types (replicating SDK type structure for tests)
+# These match the actual SDK types from github-copilot-sdk
+# =============================================================================
 
 
-class TestCopilotModelInfo:
-    """Tests for CopilotModelInfo dataclass."""
+@dataclass
+class MockModelVisionLimits:
+    """Mock SDK ModelVisionLimits."""
 
-    def test_create_model_info(self):
-        """Should create CopilotModelInfo with required fields."""
-        model = CopilotModelInfo(
-            id="test-model",
-            name="Test Model",
-            provider="test-provider",
-            context_window=100000,
-            max_output_tokens=8192,
+    supported_media_types: list[str] | None = None
+    max_prompt_images: int | None = None
+    max_prompt_image_size: int | None = None
+
+
+@dataclass
+class MockModelLimits:
+    """Mock SDK ModelLimits."""
+
+    max_prompt_tokens: int | None = None
+    max_context_window_tokens: int | None = None
+    vision: MockModelVisionLimits | None = None
+
+
+@dataclass
+class MockModelSupports:
+    """Mock SDK ModelSupports."""
+
+    vision: bool = False
+    reasoning_effort: bool = False
+
+
+@dataclass
+class MockModelCapabilities:
+    """Mock SDK ModelCapabilities."""
+
+    supports: MockModelSupports
+    limits: MockModelLimits
+
+
+@dataclass
+class MockSDKModelInfo:
+    """Mock SDK ModelInfo - replicates copilot.types.ModelInfo structure."""
+
+    id: str
+    name: str
+    capabilities: MockModelCapabilities
+    policy: Any = None
+    billing: Any = None
+    supported_reasoning_efforts: list[str] | None = None
+    default_reasoning_effort: str | None = None
+
+
+# =============================================================================
+# Test Fixtures
+# =============================================================================
+
+
+def make_sdk_model_info(
+    model_id: str = "claude-sonnet-4-5",
+    name: str = "Claude Sonnet 4.5",
+    context_window: int = 200000,
+    max_prompt_tokens: int = 168000,
+    supports_vision: bool = True,
+    supports_reasoning_effort: bool = False,
+    supported_reasoning_efforts: list[str] | None = None,
+    default_reasoning_effort: str | None = None,
+) -> MockSDKModelInfo:
+    """Create a mock SDK ModelInfo for testing."""
+    return MockSDKModelInfo(
+        id=model_id,
+        name=name,
+        capabilities=MockModelCapabilities(
+            supports=MockModelSupports(
+                vision=supports_vision,
+                reasoning_effort=supports_reasoning_effort,
+            ),
+            limits=MockModelLimits(
+                max_prompt_tokens=max_prompt_tokens,
+                max_context_window_tokens=context_window,
+            ),
+        ),
+        supported_reasoning_efforts=supported_reasoning_efforts,
+        default_reasoning_effort=default_reasoning_effort,
+    )
+
+
+# =============================================================================
+# Phase 1a: SDK ModelInfo → CopilotModelInfo (Isolation Layer)
+# Contract: sdk-boundary:ModelDiscovery:MUST:2
+# =============================================================================
+
+
+class TestSDKToCopilotModelInfoTranslation:
+    """Test translation from SDK ModelInfo to CopilotModelInfo.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:2
+    - MUST translate SDK ModelInfo to domain CopilotModelInfo
+    """
+
+    def test_copilot_model_to_internal_extracts_limits(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:2
+
+        MUST extract context_window from SDK capabilities.limits.max_context_window_tokens.
+        MUST derive max_output_tokens as context_window - max_prompt_tokens.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            sdk_model_to_copilot_model,
         )
 
-        assert model.id == "test-model"
-        assert model.name == "Test Model"
-        assert model.provider == "test-provider"
-        assert model.context_window == 100000
-        assert model.max_output_tokens == 8192
-        assert model.supports_tools is True  # Default
-        assert model.supports_vision is False  # Default
-        assert model.supports_extended_thinking is False  # Default
-
-    def test_model_info_with_all_fields(self):
-        """Should create CopilotModelInfo with all optional fields."""
-        model = CopilotModelInfo(
-            id="advanced-model",
-            name="Advanced Model",
-            provider="advanced",
+        sdk_model = make_sdk_model_info(
+            model_id="claude-sonnet-4-5",
+            name="Claude Sonnet 4.5",
             context_window=200000,
-            max_output_tokens=16384,
-            supports_tools=True,
+            max_prompt_tokens=168000,
             supports_vision=True,
-            supports_extended_thinking=True,
+        )
+
+        result = sdk_model_to_copilot_model(sdk_model)
+
+        assert isinstance(result, CopilotModelInfo)
+        assert result.id == "claude-sonnet-4-5"
+        assert result.name == "Claude Sonnet 4.5"
+        assert result.context_window == 200000
+        # max_output_tokens = context_window - max_prompt_tokens
+        assert result.max_output_tokens == 200000 - 168000  # 32000
+        assert result.supports_vision is True
+
+    def test_copilot_model_to_internal_handles_missing_limits(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:2
+
+        MUST handle None values in SDK limits gracefully with sensible defaults.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            sdk_model_to_copilot_model,
+        )
+
+        # Create model with None limits
+        sdk_model = MockSDKModelInfo(
+            id="test-model",
+            name="Test Model",
+            capabilities=MockModelCapabilities(
+                supports=MockModelSupports(vision=False),
+                limits=MockModelLimits(
+                    max_prompt_tokens=None,
+                    max_context_window_tokens=None,
+                ),
+            ),
+        )
+
+        result = sdk_model_to_copilot_model(sdk_model)
+
+        assert isinstance(result, CopilotModelInfo)
+        assert result.id == "test-model"
+        # Should use policy defaults from config/models.yaml
+        assert result.context_window > 0
+        assert result.max_output_tokens > 0
+
+    def test_copilot_model_info_is_frozen(self) -> None:
+        """CopilotModelInfo MUST be immutable (frozen dataclass)."""
+        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
+
+        model = CopilotModelInfo(
+            id="test",
+            name="Test",
+            context_window=100000,
+            max_output_tokens=32000,
+        )
+
+        with pytest.raises(AttributeError):  # Frozen dataclass
+            model.id = "modified"  # type: ignore[misc]
+
+    def test_extracts_vision_capability(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:2
+
+        MUST extract vision capability from SDK supports.vision.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            sdk_model_to_copilot_model,
+        )
+
+        sdk_model_with_vision = make_sdk_model_info(supports_vision=True)
+        sdk_model_without_vision = make_sdk_model_info(supports_vision=False)
+
+        result_with = sdk_model_to_copilot_model(sdk_model_with_vision)
+        result_without = sdk_model_to_copilot_model(sdk_model_without_vision)
+
+        assert result_with.supports_vision is True
+        assert result_without.supports_vision is False
+
+    def test_extracts_reasoning_effort_capability(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:2
+
+        MUST extract reasoning_effort capability from SDK supports.reasoning_effort.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            sdk_model_to_copilot_model,
+        )
+
+        sdk_model = make_sdk_model_info(
+            supports_reasoning_effort=True,
+            supported_reasoning_efforts=["low", "medium", "high"],
+            default_reasoning_effort="medium",
+        )
+
+        result = sdk_model_to_copilot_model(sdk_model)
+
+        assert result.supports_reasoning_effort is True
+        assert result.supported_reasoning_efforts == ("low", "medium", "high")
+        assert result.default_reasoning_effort == "medium"
+
+
+# =============================================================================
+# Phase 1a: CopilotModelInfo → amplifier_core.ModelInfo (Kernel Contract)
+# Contract: sdk-boundary:ModelDiscovery:MUST:3
+# =============================================================================
+
+
+class TestCopilotToAmplifierModelInfoTranslation:
+    """Test translation from CopilotModelInfo to amplifier_core.ModelInfo.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:3
+    - MUST translate CopilotModelInfo to amplifier_core.ModelInfo (kernel contract)
+    """
+
+    def test_to_amplifier_model_info_maps_all_fields(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:3
+
+        MUST translate CopilotModelInfo to amplifier_core.ModelInfo.
+        MUST map: id, display_name, context_window, max_output_tokens, capabilities.
+        """
+        from amplifier_core import ModelInfo as AmplifierModelInfo
+
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            copilot_model_to_amplifier_model,
+        )
+
+        copilot_model = CopilotModelInfo(
+            id="claude-sonnet-4-5",
+            name="Claude Sonnet 4.5",
+            context_window=200000,
+            max_output_tokens=32000,
+            supports_vision=True,
+            supports_reasoning_effort=False,
+        )
+
+        result = copilot_model_to_amplifier_model(copilot_model)
+
+        assert isinstance(result, AmplifierModelInfo)
+        assert result.id == "claude-sonnet-4-5"
+        assert result.display_name == "Claude Sonnet 4.5"
+        assert result.context_window == 200000
+        assert result.max_output_tokens == 32000
+
+    def test_capabilities_include_vision_when_supported(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:3
+
+        MUST include 'vision' in capabilities list when model supports vision.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            copilot_model_to_amplifier_model,
+        )
+
+        model_with_vision = CopilotModelInfo(
+            id="test",
+            name="Test",
+            context_window=100000,
+            max_output_tokens=32000,
+            supports_vision=True,
+        )
+        model_without_vision = CopilotModelInfo(
+            id="test2",
+            name="Test 2",
+            context_window=100000,
+            max_output_tokens=32000,
+            supports_vision=False,
+        )
+
+        result_with = copilot_model_to_amplifier_model(model_with_vision)
+        result_without = copilot_model_to_amplifier_model(model_without_vision)
+
+        assert "vision" in result_with.capabilities
+        assert "vision" not in result_without.capabilities
+
+    def test_capabilities_include_thinking_when_reasoning_supported(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:3
+
+        MUST include 'thinking' in capabilities when model supports reasoning effort.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            copilot_model_to_amplifier_model,
+        )
+
+        model_with_reasoning = CopilotModelInfo(
+            id="test",
+            name="Test",
+            context_window=100000,
+            max_output_tokens=32000,
+            supports_reasoning_effort=True,
+        )
+
+        result = copilot_model_to_amplifier_model(model_with_reasoning)
+
+        assert "thinking" in result.capabilities
+
+    def test_all_models_have_streaming_and_tools_capabilities(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:3
+
+        All GitHub Copilot models support streaming and tools.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            copilot_model_to_amplifier_model,
+        )
+
+        model = CopilotModelInfo(
+            id="any-model",
+            name="Any Model",
+            context_window=100000,
+            max_output_tokens=32000,
+        )
+
+        result = copilot_model_to_amplifier_model(model)
+
+        assert "streaming" in result.capabilities
+        assert "tools" in result.capabilities
+
+
+# =============================================================================
+# Phase 3: Provider.list_models() Dynamic Integration
+# Contract: sdk-boundary:ModelDiscovery:MUST:1
+# =============================================================================
+
+
+class TestProviderListModelsDynamic:
+    """Test that provider.list_models() uses SDK dynamically.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:1
+    - MUST fetch models from SDK list_models() API
+    """
+
+    @pytest.mark.asyncio
+    async def test_provider_list_models_calls_fetch_models(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:1
+
+        provider.list_models() MUST call models.fetch_and_map_models().
+        This test verifies the provider uses dynamic SDK fetch, not static YAML.
+        """
+        from unittest.mock import patch
+
+        from amplifier_core import ModelInfo as AmplifierModelInfo
+
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        # Create provider
+        provider = GitHubCopilotProvider()
+
+        # Create a unique model that would only come from SDK
+        # (different from any YAML config models)
+        sdk_only_model = AmplifierModelInfo(
+            id="sdk-unique-model-xyz",  # Not in any YAML config
+            display_name="SDK-Only Model XYZ",
+            context_window=999999,
+            max_output_tokens=88888,
+            capabilities=["streaming", "tools"],
+            defaults={},
+        )
+
+        # Patch fetch_and_map_models to return our unique model
+        with patch(
+            "amplifier_module_provider_github_copilot.provider.fetch_and_map_models"
+        ) as mock_fetch:
+            mock_fetch.return_value = [sdk_only_model]
+
+            result = await provider.list_models()
+
+        # Verify fetch was called
+        mock_fetch.assert_called_once()
+
+        # Verify we got the SDK model, not YAML config
+        assert len(result) == 1
+        assert result[0].id == "sdk-unique-model-xyz"
+        assert result[0].context_window == 999999
+
+    @pytest.mark.asyncio
+    async def test_provider_list_models_uses_cache_on_sdk_failure(self) -> None:
+        """Contract: behaviors:ModelCache:SHOULD:1
+
+        When SDK fails, provider.list_models() SHOULD use disk cache.
+        """
+        from unittest.mock import patch
+
+        from amplifier_core import ModelInfo as AmplifierModelInfo
+
+        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        provider = GitHubCopilotProvider()
+
+        # Cached model
+        cached_model = CopilotModelInfo(
+            id="cached-model",
+            name="Cached Model",
+            context_window=100000,
+            max_output_tokens=16000,
+        )
+
+        # Simulate SDK failure + cache hit
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
+                side_effect=Exception("SDK unavailable"),
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.provider.read_cache",
+                return_value=[cached_model],
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.provider.copilot_model_to_amplifier_model"
+            ) as mock_convert,
+        ):
+            mock_convert.return_value = AmplifierModelInfo(
+                id="cached-model",
+                display_name="Cached Model",
+                context_window=100000,
+                max_output_tokens=16000,
+                capabilities=["streaming", "tools"],
+                defaults={},
+            )
+
+            result = await provider.list_models()
+
+        # Should have used cache
+        assert len(result) == 1
+        assert result[0].id == "cached-model"
+
+    @pytest.mark.asyncio
+    async def test_provider_list_models_writes_cache_on_success(self) -> None:
+        """Contract: provider-protocol:list_models:SHOULD:1
+
+        Successful SDK fetch should write to cache for future fallback.
+        """
+        from unittest.mock import patch
+
+        from amplifier_core import ModelInfo as AmplifierModelInfo
+
+        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        provider = GitHubCopilotProvider()
+
+        copilot_model = CopilotModelInfo(
+            id="test-model",
+            name="Test Model",
+            context_window=200000,
+            max_output_tokens=32000,
+        )
+
+        amplifier_model = AmplifierModelInfo(
+            id="test-model",
+            display_name="Test Model",
+            context_window=200000,
+            max_output_tokens=32000,
+            capabilities=["streaming", "tools"],
+            defaults={},
+        )
+
+        write_cache_called = False
+
+        def mock_write_cache(models: Any) -> None:
+            nonlocal write_cache_called
+            write_cache_called = True
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
+                return_value=[amplifier_model],
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.provider.fetch_models",
+                return_value=[copilot_model],
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.provider.write_cache",
+                side_effect=mock_write_cache,
+            ),
+        ):
+            result = await provider.list_models()
+
+        assert len(result) == 1
+        assert write_cache_called, "write_cache should be called on SDK success"
+
+    @pytest.mark.asyncio
+    async def test_provider_list_models_raises_when_both_sdk_and_cache_fail(self) -> None:
+        """Contract: behaviors:ModelDiscoveryError:MUST:1
+
+        When SDK fails AND cache is empty, MUST raise ProviderUnavailableError.
+        """
+        from unittest.mock import patch
+
+        from amplifier_core import ProviderUnavailableError
+
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        provider = GitHubCopilotProvider()
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
+                side_effect=Exception("SDK unavailable"),
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.provider.read_cache",
+                return_value=None,  # Empty cache
+            ),
+        ):
+            with pytest.raises(ProviderUnavailableError) as exc_info:
+                await provider.list_models()
+
+        assert "cached models" in str(exc_info.value).lower()
+
+
+# =============================================================================
+# Phase 1e: CopilotClientWrapper.list_models()
+# =============================================================================
+
+
+class TestCopilotClientWrapperListModels:
+    """Test CopilotClientWrapper.list_models() method.
+
+    Contract: sdk-boundary:Models:MUST:1
+    - SDK CopilotClient.list_models() returns list[ModelInfo]
+    """
+
+    @pytest.mark.asyncio
+    async def test_client_wrapper_list_models_calls_sdk(self) -> None:
+        """Contract: sdk-boundary:Models:MUST:1
+
+        CopilotClientWrapper.list_models() MUST call SDK client.list_models().
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        # Mock SDK client
+        mock_sdk_client = MagicMock()
+        mock_sdk_client.list_models = AsyncMock(return_value=[make_sdk_model_info()])
+
+        wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
+        result = await wrapper.list_models()
+
+        mock_sdk_client.list_models.assert_called_once()
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_client_wrapper_list_models_returns_sdk_models(self) -> None:
+        """Contract: sdk-boundary:Models:MUST:1
+
+        list_models() returns SDK ModelInfo objects (translation happens elsewhere).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        sdk_model = make_sdk_model_info(model_id="claude-opus-4.5", name="Claude Opus 4.5")
+        mock_sdk_client = MagicMock()
+        mock_sdk_client.list_models = AsyncMock(return_value=[sdk_model])
+
+        wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
+        result = await wrapper.list_models()
+
+        assert len(result) == 1
+        assert result[0].id == "claude-opus-4.5"
+        assert result[0].name == "Claude Opus 4.5"
+
+    @pytest.mark.asyncio
+    async def test_client_wrapper_list_models_lazy_init(self) -> None:
+        """Contract: sdk-boundary:Models:MUST:1
+
+        list_models() should work with lazy-initialized client.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        # Create wrapper without injected client
+        wrapper = CopilotClientWrapper()
+
+        # Inject a mock client directly to test the path
+        mock_sdk_client = MagicMock()
+        mock_sdk_client.list_models = AsyncMock(return_value=[make_sdk_model_info()])
+        wrapper._owned_client = mock_sdk_client  # type: ignore[attr-defined]
+
+        result = await wrapper.list_models()
+
+        mock_sdk_client.list_models.assert_called_once()
+        assert len(result) == 1
+
+
+# =============================================================================
+# Phase 1a: SDK list_models() Integration
+# Contract: sdk-boundary:ModelDiscovery:MUST:1
+# =============================================================================
+
+
+class TestFetchModelsFromSDK:
+    """Test that models are fetched from SDK list_models() API.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:1
+    - MUST fetch models from SDK list_models() API
+    """
+
+    @pytest.mark.asyncio
+    async def test_fetch_calls_sdk_list_models(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:1
+
+        MUST call SDK client.list_models() to get available models.
+        """
+        from amplifier_module_provider_github_copilot.models import fetch_models
+
+        # Mock SDK client
+        mock_client = MagicMock()
+        mock_client.list_models = AsyncMock(
+            return_value=[
+                make_sdk_model_info(
+                    model_id="claude-sonnet-4-5",
+                    name="Claude Sonnet 4.5",
+                    context_window=200000,
+                    max_prompt_tokens=168000,
+                ),
+                make_sdk_model_info(
+                    model_id="gpt-4o",
+                    name="GPT-4o",
+                    context_window=128000,
+                    max_prompt_tokens=100000,
+                ),
+            ]
+        )
+
+        result = await fetch_models(mock_client)
+
+        mock_client.list_models.assert_called_once()
+        assert len(result) == 2
+        assert result[0].id == "claude-sonnet-4-5"
+        assert result[1].id == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_fetch_returns_copilot_model_info_list(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:2
+
+        fetch_models MUST return list[CopilotModelInfo], not SDK types.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            fetch_models,
+        )
+
+        mock_client = MagicMock()
+        mock_client.list_models = AsyncMock(return_value=[make_sdk_model_info()])
+
+        result = await fetch_models(mock_client)
+
+        assert len(result) == 1
+        assert isinstance(result[0], CopilotModelInfo)
+
+
+# =============================================================================
+# Phase 1a: No Hardcoded Model Lists
+# Contract: sdk-boundary:ModelDiscovery:MUST_NOT:1
+# =============================================================================
+
+
+class TestNoHardcodedModelLists:
+    """Verify no hardcoded model lists exist in production code.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST_NOT:1
+    - MUST NOT use hardcoded model lists in production code
+    """
+
+    def test_no_bundled_model_limits_dict(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST_NOT:1
+
+        There MUST NOT be a BUNDLED_MODEL_LIMITS dict or similar hardcoded fallback.
+        This is hardcoding disguised as a variable.
+        """
+        import amplifier_module_provider_github_copilot.provider as provider_module
+
+        # These names indicate hardcoded model data
+        forbidden_names = [
+            "BUNDLED_MODEL_LIMITS",
+            "MODEL_LIMITS",
+            "HARDCODED_MODELS",
+            "FALLBACK_MODELS",
+            "STATIC_MODELS",
+            "DEFAULT_MODELS_LIST",
+        ]
+
+        for name in forbidden_names:
+            assert not hasattr(provider_module, name), (
+                f"Found '{name}' in provider.py — contract "
+                "sdk-boundary:ModelDiscovery:MUST_NOT:1 violated. "
+                "Models must come from SDK, not hardcoded dicts."
+            )
+
+    def test_models_yaml_contains_policy_not_catalog(self) -> None:
+        """Contract: ARCHITECTURE.md line 71
+
+        models.yaml contains default model POLICY, not a model catalog.
+        It should have 'default_model' but NOT a list of all models with limits.
+        """
+        from amplifier_module_provider_github_copilot.config_loader import load_models_config
+
+        models_config = load_models_config()
+
+        # Should have defaults (policy)
+        assert models_config.defaults is not None, "models.yaml should contain default model policy"
+
+        # Should NOT have a full model catalog
+        # If models section exists, it should be for fallback defaults ONLY
+        # when SDK returns None limits, not a full catalog
+        assert len(models_config.models) <= 3, (
+            f"models.yaml has {len(models_config.models)} models — this looks like a catalog, "
+            "not a policy file. Models should come from SDK, not YAML."
+        )
+
+
+# =============================================================================
+# Error Handling Tests
+# Contract: behaviors:ModelDiscoveryError
+# =============================================================================
+
+
+class TestModelDiscoveryErrors:
+    """Test error handling when SDK model discovery fails.
+
+    Contract: behaviors:ModelDiscoveryError:MUST:1-2
+    Contract: behaviors:ModelDiscoveryError:MUST_NOT:1
+    """
+
+    @pytest.mark.asyncio
+    async def test_list_models_raises_when_sdk_fails_and_no_cache(self) -> None:
+        """Contract: behaviors:ModelDiscoveryError:MUST:1
+
+        MUST raise ProviderUnavailableError when SDK unavailable AND disk cache empty.
+        """
+        from amplifier_core import ProviderUnavailableError
+
+        from amplifier_module_provider_github_copilot.models import fetch_models
+
+        mock_client = MagicMock()
+        mock_client.list_models = AsyncMock(side_effect=Exception("SDK connection failed"))
+
+        with pytest.raises(ProviderUnavailableError) as exc_info:
+            await fetch_models(mock_client)
+
+        # Check error includes actionable information
+        assert "SDK" in str(exc_info.value) or "model" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_error_message_includes_reason(self) -> None:
+        """Contract: behaviors:ModelDiscoveryError:MUST:2
+
+        Error message MUST include reason for failure.
+        """
+        from amplifier_core import ProviderUnavailableError
+
+        from amplifier_module_provider_github_copilot.models import fetch_models
+
+        mock_client = MagicMock()
+        mock_client.list_models = AsyncMock(side_effect=ConnectionError("Network unreachable"))
+
+        with pytest.raises(ProviderUnavailableError) as exc_info:
+            await fetch_models(mock_client)
+
+        error_msg = str(exc_info.value).lower()
+        # Should explain what happened
+        assert any(
+            word in error_msg
+            for word in ["connection", "network", "unavailable", "failed", "model"]
+        )
+
+
+# =============================================================================
+# Three-Medium Architecture: Fail-Fast Configuration Loading
+# Contract: behaviors:ConfigLoading:MUST:1
+# =============================================================================
+
+
+class TestConfigurationFailFast:
+    """Test fail-fast behavior for configuration loading.
+
+    Contract: behaviors:ConfigLoading:MUST:1
+    Three-Medium Architecture: YAML is authoritative, fail-fast on missing.
+    """
+
+    def test_load_fallback_values_succeeds_with_valid_yaml(self) -> None:
+        """Contract: behaviors:ConfigLoading:MUST:1
+
+        Valid models.yaml should load fallback values successfully.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            get_default_context_window,
+            get_default_max_output_tokens,
+        )
+
+        # Should return values from models.yaml fallbacks section
+        context_window = get_default_context_window()
+        max_output_tokens = get_default_max_output_tokens()
+
+        assert context_window == 128000, "Expected fallback context_window from YAML"
+        assert max_output_tokens == 16384, "Expected fallback max_output_tokens from YAML"
+
+    def test_configuration_error_raised_when_yaml_missing(self) -> None:
+        """Contract: behaviors:ConfigLoading:MUST:1
+
+        ConfigurationError raised when models.yaml cannot be loaded.
+        Three-Medium Architecture: fail-fast, no hardcoded Python fallbacks.
+        """
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.models import (
+            ConfigurationError,
+            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Clear cache before test
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+        with patch("importlib.resources.files") as mock_files:
+            mock_files.side_effect = TypeError("Resource not found")
+
+            with pytest.raises(ConfigurationError) as exc_info:
+                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+
+            assert "models.yaml not found" in str(exc_info.value)
+            assert "YAML is authoritative" in str(exc_info.value)
+
+        # Clear cache after test to restore normal behavior
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+    def test_configuration_error_raised_when_fallbacks_missing(self) -> None:
+        """Contract: behaviors:ConfigLoading:MUST:1
+
+        ConfigurationError raised when fallbacks section missing from YAML.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from amplifier_module_provider_github_copilot.models import (
+            ConfigurationError,
+            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Clear cache before test
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+        with patch("importlib.resources.files") as mock_files:
+            # Return YAML without fallbacks section
+            mock_path = MagicMock()
+            mock_path.read_text.return_value = "provider:\n  id: test\n"
+            mock_files.return_value.__truediv__.return_value = mock_path
+
+            with pytest.raises(ConfigurationError) as exc_info:
+                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+
+            assert "fallbacks" in str(exc_info.value)
+
+        # Clear cache after test
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+    def test_configuration_error_raised_when_required_keys_missing(self) -> None:
+        """Contract: behaviors:ConfigLoading:MUST:1
+
+        ConfigurationError raised when required keys missing from fallbacks.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from amplifier_module_provider_github_copilot.models import (
+            ConfigurationError,
+            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Clear cache before test
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+        with patch("importlib.resources.files") as mock_files:
+            # Return YAML with incomplete fallbacks section
+            mock_path = MagicMock()
+            mock_path.read_text.return_value = (
+                "fallbacks:\n  context_window: 128000\n"  # missing max_output_tokens
+            )
+            mock_files.return_value.__truediv__.return_value = mock_path
+
+            with pytest.raises(ConfigurationError) as exc_info:
+                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+
+            assert "max_output_tokens" in str(exc_info.value)
+
+        # Clear cache after test
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+    def test_configuration_error_raised_when_yaml_invalid(self) -> None:
+        """Contract: behaviors:ConfigLoading:MUST:1
+
+        ConfigurationError raised when YAML is malformed.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from amplifier_module_provider_github_copilot.models import (
+            ConfigurationError,
+            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Clear cache before test
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+        with patch("importlib.resources.files") as mock_files:
+            # Return invalid YAML that will cause parse error
+            mock_path = MagicMock()
+            mock_path.read_text.return_value = "fallbacks: [invalid: yaml: structure"
+            mock_files.return_value.__truediv__.return_value = mock_path
+
+            with pytest.raises(ConfigurationError) as exc_info:
+                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+
+            assert "Failed to parse models.yaml" in str(exc_info.value)
+
+        # Clear cache after test
+        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+
+# =============================================================================
+# Edge Cases: SDK Model Translation
+# Contract: sdk-boundary:ModelDiscovery:MUST:2
+# =============================================================================
+
+
+class TestSDKModelEdgeCases:
+    """Test edge cases in SDK model translation.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:2
+    """
+
+    def test_negative_max_output_tokens_uses_fallback(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:2
+
+        When derived max_output_tokens is <= 0, use fallback from YAML.
+        Edge case: context_window < max_prompt_tokens
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            get_default_max_output_tokens,
+            sdk_model_to_copilot_model,
+        )
+
+        # Create SDK model where context_window < max_prompt_tokens
+        sdk_model = MockSDKModelInfo(
+            id="test-model",
+            name="Test Model",
+            capabilities=MockModelCapabilities(
+                supports=MockModelSupports(vision=False),
+                limits=MockModelLimits(
+                    max_context_window_tokens=100000,
+                    max_prompt_tokens=150000,  # Greater than context_window!
+                ),
+            ),
+        )
+
+        result = sdk_model_to_copilot_model(sdk_model)
+
+        # Should use fallback because 100000 - 150000 = -50000 <= 0
+        assert result.max_output_tokens == get_default_max_output_tokens()
+        assert result.max_output_tokens > 0
+
+    def test_reasoning_effort_defaults_populated(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:3
+
+        Reasoning effort fields should be included in defaults when present.
+        """
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            copilot_model_to_amplifier_model,
+        )
+
+        model = CopilotModelInfo(
+            id="claude-thinking",
+            name="Claude Thinking",
+            context_window=200000,
+            max_output_tokens=32000,
+            supports_vision=False,
+            supports_reasoning_effort=True,
             supported_reasoning_efforts=("low", "medium", "high"),
             default_reasoning_effort="medium",
         )
 
-        assert model.supports_tools is True
-        assert model.supports_vision is True
-        assert model.supports_extended_thinking is True
-        assert model.supported_reasoning_efforts == ("low", "medium", "high")
-        assert model.default_reasoning_effort == "medium"
+        result = copilot_model_to_amplifier_model(model)
 
-    def test_model_info_is_frozen(self):
-        """CopilotModelInfo should be immutable."""
-        model = CopilotModelInfo(
-            id="test",
-            name="Test",
-            provider="test",
-            context_window=100000,
-            max_output_tokens=8192,
-        )
-
-        with pytest.raises(AttributeError):
-            model.id = "changed"
+        assert "thinking" in result.capabilities
+        assert result.defaults["reasoning_effort"] == "medium"
+        assert result.defaults["supported_reasoning_efforts"] == ["low", "medium", "high"]
 
 
-class TestCopilotModelToInternal:
-    """Tests for copilot_model_to_internal converter."""
-
-    def test_convert_basic_model(self):
-        """Should convert basic model info."""
-        raw_model = Mock()
-        raw_model.id = "test-model"
-        raw_model.name = "Test Model"
-        raw_model.capabilities = Mock()
-        raw_model.capabilities.supports = Mock()
-        raw_model.capabilities.supports.vision = True
-        raw_model.capabilities.supports.reasoning_effort = False
-        raw_model.capabilities.limits = Mock()
-        raw_model.capabilities.limits.max_context_window_tokens = 128000
-        raw_model.capabilities.limits.max_prompt_tokens = 100000
-        raw_model.supported_reasoning_efforts = None
-        raw_model.default_reasoning_effort = None
-
-        result = copilot_model_to_internal(raw_model)
-
-        assert result.id == "test-model"
-        assert result.name == "Test Model"
-        assert result.context_window == 128000
-        assert result.supports_vision is True
-        assert result.supports_extended_thinking is False
-
-    def test_provider_from_sdk_field(self):
-        """Should use provider field from SDK when available."""
-        raw_model = Mock()
-        raw_model.id = "custom-model"
-        raw_model.name = "Custom Model"
-        raw_model.provider = "anthropic"  # SDK provides this directly
-        raw_model.vendor = None
-        raw_model.capabilities = None
-        raw_model.supported_reasoning_efforts = None
-        raw_model.default_reasoning_effort = None
-
-        result = copilot_model_to_internal(raw_model)
-
-        assert result.provider == "anthropic"
-
-    def test_provider_from_vendor_field(self):
-        """Should use vendor field from SDK when provider is not available."""
-        raw_model = Mock()
-        raw_model.id = "custom-model"
-        raw_model.name = "Custom Model"
-        raw_model.provider = None
-        raw_model.vendor = "google"  # SDK provides vendor instead
-        raw_model.capabilities = None
-        raw_model.supported_reasoning_efforts = None
-        raw_model.default_reasoning_effort = None
-
-        result = copilot_model_to_internal(raw_model)
-
-        assert result.provider == "google"
-
-    def test_provider_prefers_provider_over_vendor(self):
-        """Should prefer provider field over vendor field."""
-        raw_model = Mock()
-        raw_model.id = "some-model"
-        raw_model.name = "Some Model"
-        raw_model.provider = "openai"
-        raw_model.vendor = "google"  # Should be ignored
-        raw_model.capabilities = None
-        raw_model.supported_reasoning_efforts = None
-        raw_model.default_reasoning_effort = None
-
-        result = copilot_model_to_internal(raw_model)
-
-        assert result.provider == "openai"
-
-    def test_unknown_when_sdk_lacks_provider(self):
-        """Should return 'unknown' when SDK doesn't provide provider info."""
-        raw_model = Mock()
-        raw_model.id = "some-new-model-xyz"
-        raw_model.name = "Some New Model"
-        raw_model.provider = None
-        raw_model.vendor = None
-        raw_model.capabilities = None
-        raw_model.supported_reasoning_efforts = None
-        raw_model.default_reasoning_effort = None
-
-        result = copilot_model_to_internal(raw_model)
-
-        assert result.provider == "unknown"
-
-
-class TestToAmplifierModelInfo:
-    """Tests for to_amplifier_model_info converter."""
-
-    def test_convert_to_amplifier_format(self):
-        """Should convert to Amplifier ModelInfo format."""
-        model = CopilotModelInfo(
-            id="test-model",
-            name="Test Model",
-            provider="test",
-            context_window=100000,
-            max_output_tokens=8192,
-            supports_tools=True,
-            supports_vision=True,
-            supports_extended_thinking=True,
-            supported_reasoning_efforts=("low", "medium"),
-            default_reasoning_effort="low",
-        )
-
-        result = to_amplifier_model_info(model)
-
-        # Now returns official ModelInfo from amplifier_core
-        assert isinstance(result, ModelInfo)
-        assert result.id == "test-model"
-        assert result.display_name == "Test Model"
-        assert result.context_window == 100000
-        assert result.max_output_tokens == 8192
-        # Capabilities are list of strings
-        assert "streaming" in result.capabilities
-        assert "tools" in result.capabilities
-        assert "vision" in result.capabilities
+# =============================================================================
+# Full Translation Chain: fetch_and_map_models
+# Contract: sdk-boundary:ModelDiscovery:MUST:1,2,3
+# =============================================================================
 
 
 class TestFetchAndMapModels:
-    """Tests for fetch_and_map_models function."""
+    """Test the full translation chain via fetch_and_map_models.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:1,2,3
+
+    Note: Uses real_model_discovery fixture to bypass autouse mock.
+    """
 
     @pytest.mark.asyncio
-    async def test_fetch_models_from_sdk(self, mock_copilot_client):
-        """Should fetch models from SDK and convert."""
-        mock_wrapper = Mock()
-        mock_wrapper.ensure_client = AsyncMock(return_value=mock_copilot_client)
+    @pytest.mark.usefixtures("real_model_discovery")
+    async def test_fetch_and_map_returns_amplifier_models(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:1,2,3
 
-        result = await fetch_and_map_models(mock_wrapper)
+        fetch_and_map_models chains: SDK → CopilotModelInfo → AmplifierModelInfo
+        """
+        from amplifier_module_provider_github_copilot.models import fetch_and_map_models
 
-        assert isinstance(result, list)
-        assert len(result) > 0
-        # Returns ModelInfo objects now
-        assert isinstance(result[0], ModelInfo)
-        assert result[0].id == "claude-opus-4.5"
+        mock_client = MagicMock()
+        mock_client.list_models = AsyncMock(
+            return_value=[
+                make_sdk_model_info(
+                    model_id="claude-opus-4.5",
+                    name="Claude Opus 4.5",
+                    context_window=200000,
+                    max_prompt_tokens=168000,
+                    supports_vision=True,
+                ),
+            ]
+        )
 
-    @pytest.mark.asyncio
-    async def test_raises_error_on_sdk_failure(self):
-        """Should raise CopilotProviderError when SDK fails (no fallback)."""
-        mock_wrapper = Mock()
-        mock_wrapper.ensure_client = AsyncMock(side_effect=Exception("SDK error"))
+        result = await fetch_and_map_models(mock_client)
 
-        with pytest.raises(CopilotProviderError) as exc_info:
-            await fetch_and_map_models(mock_wrapper)
-
-        assert "Failed to fetch models" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_raises_error_on_empty_models(self, mock_copilot_client):
-        """Should raise CopilotProviderError when SDK returns no models."""
-        mock_copilot_client.list_models = AsyncMock(return_value=[])
-        mock_wrapper = Mock()
-        mock_wrapper.ensure_client = AsyncMock(return_value=mock_copilot_client)
-
-        with pytest.raises(CopilotProviderError) as exc_info:
-            await fetch_and_map_models(mock_wrapper)
-
-        assert "returned no models" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_skips_unconvertible_models(self):
-        """Should skip models that fail conversion and continue with valid ones."""
-        from unittest.mock import patch
-
-        # Create two mock raw models
-        bad_model = Mock()
-        bad_model.id = "bad-model"
-        bad_model.name = "Bad Model"
-
-        good_model = Mock()
-        good_model.id = "good-model"
-        good_model.name = "Good Model"
-
-        mock_client = Mock()
-        mock_client.list_models = AsyncMock(return_value=[bad_model, good_model])
-
-        mock_wrapper = Mock()
-        mock_wrapper.ensure_client = AsyncMock(return_value=mock_client)
-
-        # Patch copilot_model_to_internal to fail on first call, succeed on second
-        call_count = 0
-
-        def mock_convert(raw_model):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise ValueError("Simulated conversion error")
-            # Return valid internal model for second call
-            return CopilotModelInfo(
-                id="good-model",
-                name="Good Model",
-                provider="test",
-                context_window=100000,
-                max_output_tokens=4096,
-            )
-
-        with patch(
-            "amplifier_module_provider_github_copilot.models.copilot_model_to_internal",
-            side_effect=mock_convert,
-        ):
-            result = await fetch_and_map_models(mock_wrapper)
-
-        # Should have only the good model
         assert len(result) == 1
-        assert result[0].id == "good-model"
+        model = result[0]
+        assert model.id == "claude-opus-4.5"
+        assert model.display_name == "Claude Opus 4.5"
+        assert model.context_window == 200000
+        assert model.max_output_tokens == 32000  # 200000 - 168000
+        assert "vision" in model.capabilities
+        assert "streaming" in model.capabilities
+        assert "tools" in model.capabilities
 
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("real_model_discovery")
+    async def test_fetch_and_map_propagates_errors(self) -> None:
+        """Contract: behaviors:ModelDiscoveryError:MUST:1
 
-class TestUtilityFunctions:
-    """Tests for utility functions."""
-
-    def test_get_default_model(self):
-        """Should return default model ID."""
-        default = get_default_model()
-        assert default == "claude-opus-4.5"
-
-
-class TestCapabilityInferenceRegression:
-    """
-    Regression tests for capability inference.
-
-    These tests ensure we NEVER advertise capabilities that the SDK
-    doesn't explicitly support. The Amplifier orchestrator uses
-    capabilities to decide which kwargs to pass to complete().
-
-    Bug fixed: We were inferring "thinking" capability from model name
-    (e.g., "claude-opus" → thinking) but Copilot SDK said model doesn't
-    support reasoning_effort. When Amplifier passed extended_thinking=True,
-    the SDK rejected: "Model does not support reasoning effort configuration."
-    """
-
-    def test_no_thinking_capability_when_sdk_says_no(self):
+        fetch_and_map_models propagates SDK errors as ProviderUnavailableError.
         """
-        REGRESSION: Don't advertise 'thinking' if SDK says reasoning_effort=False.
+        from amplifier_core import ProviderUnavailableError
 
-        This is the exact bug that was found in production via Amplifier.
-        """
-        # SDK says Claude Opus 4.5 does NOT support reasoning
-        raw_model = Mock()
-        raw_model.id = "claude-opus-4.5"
-        raw_model.name = "Claude Opus 4.5"
-        raw_model.provider = None
-        raw_model.vendor = None
-        raw_model.capabilities = Mock()
-        raw_model.capabilities.supports = Mock()
-        raw_model.capabilities.supports.vision = True
-        raw_model.capabilities.supports.reasoning_effort = False  # SDK says NO
-        raw_model.capabilities.limits = Mock()
-        raw_model.capabilities.limits.max_context_window_tokens = 200000
-        raw_model.capabilities.limits.max_prompt_tokens = 150000
-        raw_model.supported_reasoning_efforts = None
-        raw_model.default_reasoning_effort = None
+        from amplifier_module_provider_github_copilot.models import fetch_and_map_models
 
-        internal = copilot_model_to_internal(raw_model)
-        result = to_amplifier_model_info(internal)
+        mock_client = MagicMock()
+        mock_client.list_models = AsyncMock(side_effect=ConnectionError("SDK unavailable"))
 
-        # CRITICAL: "thinking" should NOT be in capabilities
-        assert "thinking" not in result.capabilities, (
-            "BUG REGRESSION: 'thinking' capability advertised but SDK says "
-            "reasoning_effort=False. This will cause Amplifier to pass "
-            "extended_thinking=True and crash the session."
-        )
-
-    def test_no_thinking_capability_for_any_model_without_sdk_support(self):
-        """Don't infer thinking for ANY model if SDK doesn't confirm support."""
-        test_cases = [
-            ("claude-opus-4.5", "Claude Opus 4.5"),
-            ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
-            ("gpt-5.2", "GPT 5.2"),
-            ("o3-preview", "O3 Preview"),
-            ("gemini-3-pro", "Gemini 3 Pro"),
-        ]
-
-        for model_id, model_name in test_cases:
-            raw_model = Mock()
-            raw_model.id = model_id
-            raw_model.name = model_name
-            raw_model.provider = None
-            raw_model.vendor = None
-            raw_model.capabilities = Mock()
-            raw_model.capabilities.supports = Mock()
-            raw_model.capabilities.supports.vision = True
-            raw_model.capabilities.supports.reasoning_effort = False  # SDK says NO
-            raw_model.capabilities.limits = Mock()
-            raw_model.capabilities.limits.max_context_window_tokens = 200000
-            raw_model.capabilities.limits.max_prompt_tokens = 150000
-            raw_model.supported_reasoning_efforts = None
-            raw_model.default_reasoning_effort = None
-
-            internal = copilot_model_to_internal(raw_model)
-            result = to_amplifier_model_info(internal)
-
-            assert "thinking" not in result.capabilities, (
-                f"Model {model_id}: 'thinking' should not be in capabilities "
-                f"when SDK says reasoning_effort=False"
-            )
-            assert "reasoning" not in result.capabilities, (
-                f"Model {model_id}: 'reasoning' should not be in capabilities "
-                f"when SDK says reasoning_effort=False"
-            )
-
-    def test_thinking_capability_when_sdk_supports_it(self):
-        """DO advertise 'thinking' when SDK explicitly says yes."""
-        raw_model = Mock()
-        raw_model.id = "claude-opus-4.5"
-        raw_model.name = "Claude Opus 4.5"
-        raw_model.provider = None
-        raw_model.vendor = None
-        raw_model.capabilities = Mock()
-        raw_model.capabilities.supports = Mock()
-        raw_model.capabilities.supports.vision = True
-        raw_model.capabilities.supports.reasoning_effort = True  # SDK says YES
-        raw_model.capabilities.limits = Mock()
-        raw_model.capabilities.limits.max_context_window_tokens = 200000
-        raw_model.capabilities.limits.max_prompt_tokens = 150000
-        raw_model.supported_reasoning_efforts = ["low", "medium", "high"]
-        raw_model.default_reasoning_effort = "medium"
-
-        internal = copilot_model_to_internal(raw_model)
-        result = to_amplifier_model_info(internal)
-
-        # Should have thinking because SDK says yes
-        assert "thinking" in result.capabilities, (
-            "Model with SDK reasoning_effort=True should have 'thinking' capability"
-        )
-
-    def test_reasoning_capability_for_openai_models_when_supported(self):
-        """OpenAI-prefixed models should get 'reasoning' not 'thinking' when supported."""
-        raw_model = Mock()
-        raw_model.id = "o3-reasoning"
-        raw_model.name = "O3 Reasoning"
-        raw_model.provider = "openai"
-        raw_model.vendor = None
-        raw_model.capabilities = Mock()
-        raw_model.capabilities.supports = Mock()
-        raw_model.capabilities.supports.vision = True
-        raw_model.capabilities.supports.reasoning_effort = True  # SDK says YES
-        raw_model.capabilities.limits = Mock()
-        raw_model.capabilities.limits.max_context_window_tokens = 200000
-        raw_model.capabilities.limits.max_prompt_tokens = 150000
-        raw_model.supported_reasoning_efforts = ["low", "medium", "high"]
-        raw_model.default_reasoning_effort = "medium"
-
-        internal = copilot_model_to_internal(raw_model)
-        result = to_amplifier_model_info(internal)
-
-        # OpenAI models get "reasoning" instead of "thinking"
-        assert "reasoning" in result.capabilities, (
-            "OpenAI model with SDK reasoning_effort=True should have 'reasoning' capability"
-        )
-
-
-class TestFastModelCapability:
-    """Tests for fast model capability detection.
-
-    Models with -haiku, -mini, or -flash patterns should get the 'fast' capability.
-    """
-
-    @pytest.mark.parametrize(
-        "model_id,expected_fast",
-        [
-            ("claude-3-5-haiku-latest", True),
-            ("gpt-4o-mini", True),
-            ("gemini-2.0-flash-latest", True),
-            ("claude-opus-4.5", False),
-            ("gpt-4o", False),
-            ("gemini-3-pro", False),
-        ],
-    )
-    def test_fast_capability_based_on_model_name(self, model_id, expected_fast):
-        """Fast capability should be added based on model name patterns."""
-        raw_model = Mock()
-        raw_model.id = model_id
-        raw_model.name = f"Test {model_id}"
-        raw_model.provider = None
-        raw_model.vendor = None
-        raw_model.capabilities = Mock()
-        raw_model.capabilities.supports = Mock()
-        raw_model.capabilities.supports.vision = False
-        raw_model.capabilities.supports.reasoning_effort = False
-        raw_model.capabilities.limits = Mock()
-        raw_model.capabilities.limits.max_context_window_tokens = 128000
-        raw_model.capabilities.limits.max_prompt_tokens = 100000
-        raw_model.supported_reasoning_efforts = None
-        raw_model.default_reasoning_effort = None
-
-        internal = copilot_model_to_internal(raw_model)
-        result = to_amplifier_model_info(internal)
-
-        if expected_fast:
-            assert "fast" in result.capabilities, f"Model {model_id} should have 'fast' capability"
-        else:
-            assert "fast" not in result.capabilities, (
-                f"Model {model_id} should NOT have 'fast' capability"
-            )
+        with pytest.raises(ProviderUnavailableError):
+            await fetch_and_map_models(mock_client)

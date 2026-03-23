@@ -1,0 +1,62 @@
+# config/sdk_protection.yaml
+# SDK protection policy for tool capture and session management
+# Contract: contracts/sdk-protection.md
+
+version: "1.0"
+
+# ============================================================================
+# Tool Capture Policy
+# ============================================================================
+# Contract: sdk-protection:ToolCapture:MUST:1,2
+#
+# The SDK emits ASSISTANT_MESSAGE events with tool_requests when the model
+# wants to call tools. These must be captured and returned to Amplifier's
+# orchestrator for execution.
+#
+# CRITICAL: Do NOT let the SDK execute tools - only Amplifier does execution.
+
+tool_capture:
+  # First-turn-only prevents accumulation across multiple SDK turns.
+  # When the model requests tools, capture them once and abort - don't loop.
+  first_turn_only: true
+
+  # Deduplicate by tool_call_id to prevent duplicate execution.
+  # SDK may emit duplicate events during reconnection or retry scenarios.
+  deduplicate: true
+
+  # Log capture events for debugging and forensics
+  # Set to false in production for reduced log volume
+  log_capture_events: true
+
+# ============================================================================
+# Session Management Policy
+# ============================================================================
+# Contract: deny-destroy:Ephemeral:MUST:1,2,3
+#
+# Sessions are ephemeral - created per complete() call and destroyed after.
+# This prevents state accumulation and ensures clean abort on capture.
+
+session:
+  # Call session.abort() explicitly after tool capture.
+  # This signals clean termination rather than relying on timeout cleanup.
+  explicit_abort: true
+
+  # Timeout for abort call to prevent hang on shutdown
+  # If abort takes longer than this, log warning and proceed with cleanup
+  abort_timeout_seconds: 5.0
+
+  # Maximum wait time for session.idle event
+  # This is a safety bound - normally idle fires within milliseconds of tool capture
+  # Contract: streaming-contract:abort-on-capture:MUST:1
+  idle_timeout_seconds: 30.0
+
+# ============================================================================
+# Architecture Note: Circuit Breaker NOT Needed
+# ============================================================================
+# This provider uses single-turn-then-destroy pattern:
+#
+#   send() once → drain events → done
+#
+# Unlike multi-turn loop architectures, runaway loops are structurally
+# impossible here. We handle CircuitBreakerError from the SDK (errors.yaml)
+# in case the SDK internally trips a circuit breaker, but we don't need one.

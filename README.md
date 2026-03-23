@@ -39,12 +39,12 @@ One command to bridge your existing `gh` CLI authentication into Amplifier.
 
 **Linux/macOS:**
 ```bash
-export GITHUB_TOKEN="ghp_your_token_here"
+export GITHUB_TOKEN="<YOUR_TOKEN_HERE>"
 ```
 
 **Windows PowerShell:**
 ```powershell
-$env:GITHUB_TOKEN = "ghp_your_token_here"
+$env:GITHUB_TOKEN = "<YOUR_TOKEN_HERE>"
 ```
 
 Use a GitHub Personal Access Token directly.
