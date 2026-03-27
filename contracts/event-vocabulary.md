@@ -11,7 +11,7 @@
 
 ## Overview
 
-This contract defines the 6 stable domain events and how SDK events are classified into BRIDGE, CONSUME, or DROP categories. Event classification is config-driven.
+This contract defines the 5 stable domain events and how SDK events are classified into BRIDGE, CONSUME, or DROP categories. Event classification is config-driven.
 
 ---
 
@@ -19,12 +19,16 @@ This contract defines the 6 stable domain events and how SDK events are classifi
 
 | Event | Description | Source |
 |-------|-------------|--------|
-| `CONTENT_DELTA` | Text chunk from assistant; also carries thinking blocks via `block_type=THINKING` | SDK assistant.message_delta / assistant.reasoning_delta |
+| `CONTENT_DELTA` | Text chunk from assistant | SDK assistant.message_delta |
+| `THINKING_DELTA` | Reasoning/thinking chunk | SDK assistant.reasoning_delta |
 | `TOOL_CALL` | Tool invocation request | SDK tool.call (captured, not executed) |
 | `USAGE_UPDATE` | Token usage statistics | SDK assistant.usage |
 | `TURN_COMPLETE` | Assistant turn finished | SDK assistant.message / session.idle |
-| `SESSION_IDLE` | Session returned to idle state | SDK session.idle |
+| `SESSION_IDLE` | Reserved for future use | Not currently emitted |
 | `ERROR` | Session error event | SDK error / exception |
+
+**Note:** `session.idle` triggers TURN_COMPLETE, not SESSION_IDLE.
+The SESSION_IDLE enum value exists for potential future extensibility.
 
 ---
 
@@ -36,9 +40,9 @@ Events translated to domain events and passed to Amplifier.
 | SDK Event | Domain Event | Notes |
 |-----------|--------------|-------|
 | `assistant.message_delta` | `CONTENT_DELTA` | Text streaming |
-| `assistant.reasoning_delta` | `CONTENT_DELTA (block_type=THINKING)` | Reasoning streaming |
+| `assistant.reasoning_delta` | `THINKING_DELTA` | Reasoning/thinking streaming |
 | `assistant.message` | `TURN_COMPLETE` | Final message |
-| `session.idle` | `TURN_COMPLETE` | Turn finished |
+| `session.idle` | `TURN_COMPLETE` | Turn finished (not SESSION_IDLE) |
 | `assistant.usage` | `USAGE_UPDATE` | Token counts |
 
 ### CONSUME Events
@@ -142,7 +146,7 @@ DomainEvent(
 DomainEvent(
     type="TURN_COMPLETE",
     data={
-        "finish_reason": "end_turn",  # or "tool_use"
+        "finish_reason": "end_turn",  # or "tool_calls" (amplifier-core canonical)
         "message_id": "msg_123",
     }
 )
@@ -156,10 +160,13 @@ DomainEvent(
 |------------|---------------|
 | `end_turn` | `STOP` |
 | `stop` | `STOP` |
-| `tool_use` | `TOOL_USE` |
+| `tool_calls` | `TOOL_CALLS` |
 | `max_tokens` | `LENGTH` |
 | `content_filter` | `CONTENT_FILTER` |
 | (default) | `ERROR` |
+
+**Note:** Provider normalizes to `"tool_calls"` (amplifier-core proto) when tool_calls are present,
+regardless of what SDK sends. See streaming-contract.md for details.
 
 ---
 
@@ -204,7 +211,7 @@ event_classifications:
 finish_reason_map:
   end_turn: STOP
   stop: STOP
-  tool_use: TOOL_USE
+  tool_calls: TOOL_CALLS  # amplifier-core canonical value
   max_tokens: LENGTH
   content_filter: CONTENT_FILTER
   "": STOP  # SDK sends empty string for normal completion

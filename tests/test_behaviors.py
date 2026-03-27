@@ -36,7 +36,7 @@ class TestBehaviorsContractExists:
         # Root config (legacy) may be absent or tombstoned
         root_config_path = Path("config/retry.yaml")
         if root_config_path.exists():
-            content = root_config_path.read_text()
+            content = root_config_path.read_text(encoding="utf-8")
             assert "REMOVED" in content or len(content.strip()) == 0, (
                 "config/retry.yaml should be tombstone (legacy location, not packaged)"
             )
@@ -60,7 +60,7 @@ class TestRetryConfigDeferred:
     def test_behaviors_contract_defines_retry_policy(self) -> None:
         """behaviors:Retry:MUST:1 — contract defines max_attempts=3."""
         contract_path = Path("contracts/behaviors.md")
-        content = contract_path.read_text()
+        content = contract_path.read_text(encoding="utf-8")
 
         # Verify contract defines expected values
         assert "max_attempts: 3" in content
@@ -240,7 +240,7 @@ class TestStreamingBehavior:
 
         # Contract specifies lenient thresholds for SDK latency
         assert config.ttft_warning_ms == 15000
-        assert config.event_queue_size == 1024
+        assert config.event_queue_size == 10000
         assert config.max_gap_warning_ms == 10000
         assert config.max_gap_error_ms == 30000
 
@@ -319,7 +319,7 @@ class TestBoundedQueueBehavior:
         # Config must define event_queue_size
         assert hasattr(config, "event_queue_size"), "Config must have event_queue_size"
         assert config.event_queue_size > 0, "event_queue_size must be positive"
-        assert config.event_queue_size == 1024, "Contract specifies 1024 as default"
+        assert config.event_queue_size == 10000, "Contract specifies 10000 as default"
 
     @pytest.mark.asyncio
     async def test_queue_full_drops_without_blocking(self) -> None:
@@ -367,30 +367,32 @@ class TestBoundedQueueBehavior:
     def test_queue_full_handling_pattern_in_provider(self) -> None:
         """behaviors:Streaming:MUST:4 — Verify provider has QueueFull handling.
 
-        Code inspection test that verifies provider.py catches QueueFull,
+        Code inspection test that verifies the streaming event handler catches QueueFull,
         logs a message, and continues (not just that queue has maxsize).
+        Post-P1.6 refactor: event_router.py contains the QueueFull handling logic.
         """
         import re
         from pathlib import Path
 
-        provider_path = Path("amplifier_module_provider_github_copilot/provider.py")
-        source = provider_path.read_text(encoding="utf-8")
+        # P1.6 refactor: QueueFull handling now lives in event_router.py
+        event_router_path = Path("amplifier_module_provider_github_copilot/event_router.py")
+        source = event_router_path.read_text(encoding="utf-8")
 
         # Verify QueueFull exception is caught
         assert "except asyncio.QueueFull:" in source, (
-            "provider.py must catch asyncio.QueueFull exception"
+            "event_router.py must catch asyncio.QueueFull exception"
         )
 
         # Verify logging happens in the except block
         # Look for pattern: except QueueFull: ... logger.(debug|warning|info)
         queuefull_pattern = r"except asyncio\.QueueFull:.*?logger\.(debug|warning|info)"
         match = re.search(queuefull_pattern, source, re.DOTALL)
-        assert match, "provider.py must log when QueueFull is caught (for observability)"
+        assert match, "event_router.py must log when QueueFull is caught (for observability)"
 
         # Verify return statement after QueueFull (proves we don't propagate)
         return_after_pattern = r"except asyncio\.QueueFull:.*?return"
         match = re.search(return_after_pattern, source, re.DOTALL)
-        assert match, "provider.py must return after QueueFull (drop event, don't propagate)"
+        assert match, "event_router.py must return after QueueFull (drop event, don't propagate)"
 
     @pytest.mark.asyncio
     async def test_event_handler_logs_on_queue_full(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -542,7 +544,7 @@ class TestSdkVersionConsistency:
 
         # Read pyproject.toml to get the authoritative SDK version requirement
         pyproject_path = Path("pyproject.toml")
-        pyproject_content = pyproject_path.read_text()
+        pyproject_content = pyproject_path.read_text(encoding="utf-8")
 
         # Extract SDK version from pyproject.toml dependencies
         sdk_pattern = r'"github-copilot-sdk([^"]+)"'
@@ -552,7 +554,7 @@ class TestSdkVersionConsistency:
 
         # Read __init__.py source and find the error message version
         init_path = Path("amplifier_module_provider_github_copilot/__init__.py")
-        init_content = init_path.read_text()
+        init_content = init_path.read_text(encoding="utf-8")
 
         # Extract SDK version from the ImportError message
         # Looking for: pip install 'github-copilot-sdk>=X.X.X,<Y.Y.Y'
@@ -590,7 +592,7 @@ class TestPackageVersionConsistency:
 
         # Read pyproject.toml to get the authoritative package version
         pyproject_path = Path("pyproject.toml")
-        pyproject_content = pyproject_path.read_text()
+        pyproject_content = pyproject_path.read_text(encoding="utf-8")
 
         # Extract version from pyproject.toml [project] section
         # Looking for: version = "X.Y.Z"
@@ -649,7 +651,7 @@ class TestDocstringYamlConsistency:
 
         # Read the YAML (authoritative source of truth)
         yaml_path = Path("amplifier_module_provider_github_copilot/config/errors.yaml")
-        yaml_content = yaml_path.read_text()
+        yaml_content = yaml_path.read_text(encoding="utf-8")
 
         # Extract default retryable from YAML
         # Looking for:  default:\n  ...retryable: true/false
@@ -663,7 +665,7 @@ class TestDocstringYamlConsistency:
 
         # Read the module docstring
         module_path = Path("amplifier_module_provider_github_copilot/error_translation.py")
-        module_content = module_path.read_text()
+        module_content = module_path.read_text(encoding="utf-8")
 
         # Extract retryable claim from docstring
         # Looking for: retryable=True or retryable=False
@@ -688,7 +690,7 @@ class TestDocstringYamlConsistency:
 
         # Read YAML default
         yaml_path = Path("amplifier_module_provider_github_copilot/config/errors.yaml")
-        yaml_content = yaml_path.read_text()
+        yaml_content = yaml_path.read_text(encoding="utf-8")
         default_match = re.search(
             r"^default:\s*\n(?:.*\n)*?\s+retryable:\s*(true|false)",
             yaml_content,
@@ -699,7 +701,7 @@ class TestDocstringYamlConsistency:
 
         # Read Python fallback
         module_path = Path("amplifier_module_provider_github_copilot/error_translation.py")
-        module_content = module_path.read_text()
+        module_content = module_path.read_text(encoding="utf-8")
 
         # Find the hardcoded fallback: default.get("retryable", True)
         fallback_match = re.search(
@@ -836,6 +838,52 @@ class TestProductionPathWithMockClient:
         # Verify tools were passed to session
         assert mock_client.last_tools is not None
         assert len(mock_client.last_tools) == 1
+
+    @pytest.mark.asyncio
+    async def test_mock_client_session_receives_system_message(self) -> None:
+        """MockCopilotClientWrapper.session() receives system_message from ChatRequest.
+
+        This verifies the complete() -> _execute_sdk_completion() -> session() chain
+        correctly extracts and forwards system_message from ChatRequest.messages.
+
+        Contract: sdk-boundary:Config:MUST:2
+        Bug fix: system_message was missing, causing SDK to use default persona
+        instead of Amplifier bundle instructions.
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
+
+        mock_client = MockCopilotClientWrapper(events=[])
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        # Create request with system message in messages
+        system_msg = MagicMock()
+        system_msg.role = "system"
+        system_msg.content = "You are a helpful coding assistant."
+
+        user_msg = MagicMock()
+        user_msg.role = "user"
+        user_msg.content = "Hello"
+
+        request = MagicMock()
+        request.model = "gpt-4"
+        request.messages = [system_msg, user_msg]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        await provider.complete(request)
+
+        # Verify system_message was extracted and forwarded
+        assert mock_client.last_system_message is not None, (
+            "system_message was not forwarded to SDK session. "
+            "This causes SDK to use default persona instead of bundle instructions."
+        )
+        assert mock_client.last_system_message == "You are a helpful coding assistant."
 
     @pytest.mark.asyncio
     async def test_mock_client_propagates_errors_correctly(self) -> None:

@@ -4,7 +4,7 @@ Cross-platform compatibility tests.
 This test suite verifies that the provider works correctly on Windows, macOS, and Linux.
 It catches platform-specific issues before they reach CI.
 
-Contract: sdk-boundary:Membrane:MUST:1, behaviors:Logging:MUST:4
+Contract: behaviors.md (cross-platform hygiene)
 
 Note: The Windows event loop policy is set in conftest.py, not here.
 """
@@ -26,15 +26,13 @@ if TYPE_CHECKING:
 class TestNoHardcodedPathSeparators:
     """AC-2: No hardcoded path separators in production code.
 
-    Contract: sdk-boundary:Membrane:MUST:1
+    Cross-platform hygiene test.
     """
 
     def test_no_hardcoded_path_separators(self) -> None:
         """No '/' or '\\' in path construction.
 
-        Contract: sdk-boundary:Membrane:MUST:1
-
-        Production code should use pathlib.Path for all path operations.
+        Cross-platform hygiene: Use pathlib.Path for all path operations.
         Hardcoded separators break on different platforms.
         """
         src_root = Path("amplifier_module_provider_github_copilot")
@@ -55,7 +53,7 @@ class TestNoHardcodedPathSeparators:
 
         for py_file in src_root.rglob("*.py"):
             files_scanned += 1
-            source = py_file.read_text()
+            source = py_file.read_text(encoding="utf-8")
             for i, line in enumerate(source.splitlines(), 1):
                 # Skip comments and docstrings indicators
                 stripped = line.strip()
@@ -80,7 +78,7 @@ class TestNoHardcodedPathSeparators:
 class TestNoOsAccessOnMissingPaths:
     """AC-5: No os.access/os.stat on potentially missing paths.
 
-    Contract: sdk-boundary:Membrane:MUST:1
+    Cross-platform hygiene test.
     """
 
     def test_no_os_access_in_production_code(self) -> None:
@@ -110,7 +108,7 @@ class TestNoOsAccessOnMissingPaths:
                 continue
 
             files_scanned += 1
-            source = py_file.read_text()
+            source = py_file.read_text(encoding="utf-8")
             for i, line in enumerate(source.splitlines(), 1):
                 stripped = line.strip()
                 if stripped.startswith("#"):
@@ -324,7 +322,7 @@ class TestWindowsEventLoopPolicy:
         Contract: provider-protocol:QualityGates:MUST:1
         """
         conftest_path = Path("tests/conftest.py")
-        source = conftest_path.read_text()
+        source = conftest_path.read_text(encoding="utf-8")
 
         assert "WindowsSelectorEventLoopPolicy" in source, (
             "conftest.py should set WindowsSelectorEventLoopPolicy for Windows"

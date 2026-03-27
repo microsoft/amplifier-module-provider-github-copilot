@@ -155,14 +155,17 @@ class TestAccumulatedResponse:
 class TestFinishReasonNormalization:
     """streaming-contract:FinishReason:MUST:5"""
 
-    def test_finish_reason_tool_use_when_tools_captured(self) -> None:
+    def test_finish_reason_tool_calls_when_tools_captured(self) -> None:
         """streaming-contract:FinishReason:MUST:5.
 
-        finish_reason="tool_use" when tool_calls present.
+        finish_reason="tool_calls" when tool_calls present.
 
         In abort-on-capture flow, TURN_COMPLETE may not arrive before session termination.
-        The provider MUST set finish_reason="tool_use" when tool_calls is non-empty,
+        The provider MUST set finish_reason="tool_calls" when tool_calls is non-empty,
         regardless of whether TURN_COMPLETE event was received.
+
+        Note: amplifier-core proto defines valid values as:
+              "stop", "tool_calls", "length", "content_filter"
 
         This ensures the orchestrator continues the agent loop instead of dropping
         to interactive mode.
@@ -182,9 +185,9 @@ class TestFinishReasonNormalization:
 
         assert response.tool_calls is not None
         assert len(response.tool_calls) == 1
-        # CRITICAL: finish_reason must be "tool_use" even without TURN_COMPLETE
-        assert response.finish_reason == "tool_use", (
-            f"Expected finish_reason='tool_use' for tool calls, got '{response.finish_reason}'. "
+        # CRITICAL: finish_reason must be "tool_calls" even without TURN_COMPLETE
+        assert response.finish_reason == "tool_calls", (
+            f"Expected finish_reason='tool_calls' for tool calls, got '{response.finish_reason}'. "
             "This causes the orchestrator to drop to interactive mode prematurely."
         )
 
@@ -239,11 +242,14 @@ class TestFinishReasonNormalization:
         # SDK-provided finish_reason should be preserved for text-only responses
         assert response.finish_reason == "stop"
 
-    def test_finish_reason_overridden_to_tool_use_when_sdk_sends_stop_with_tools(self) -> None:
-        """streaming-contract:FinishReason:MUST:5 — tool_use overrides SDK finish_reason.
+    def test_finish_reason_overridden_to_tool_calls_when_sdk_sends_stop_with_tools(self) -> None:
+        """streaming-contract:FinishReason:MUST:5 — tool_calls overrides SDK finish_reason.
 
         Critical bug fix: When SDK sends TURN_COMPLETE with finish_reason="stop"
-        but there are tool_calls, we MUST override to "tool_use".
+        but there are tool_calls, we MUST override to "tool_calls".
+
+        Note: amplifier-core proto defines valid values as:
+              "stop", "tool_calls", "length", "content_filter"
 
         This scenario happens when:
         1. SDK returns tool calls in ASSISTANT_MESSAGE
@@ -251,7 +257,7 @@ class TestFinishReasonNormalization:
         3. SDK sends TURN_COMPLETE with finish_reason="stop" (normal completion)
         4. We capture the tool calls and need to tell orchestrator to execute them
 
-        If we don't override to "tool_use", Amplifier's orchestrator thinks the
+        If we don't override to "tool_calls", Amplifier's orchestrator thinks the
         conversation is complete and drops to interactive mode prematurely.
         """
         accumulator = StreamingAccumulator()
@@ -269,10 +275,11 @@ class TestFinishReasonNormalization:
 
         response = accumulator.to_chat_response()
 
-        # CRITICAL: Must be "tool_use" even though SDK sent "stop"
+        # CRITICAL: Must be "tool_calls" even though SDK sent "stop"
         assert response.tool_calls is not None
         assert len(response.tool_calls) == 1
-        assert response.finish_reason == "tool_use", (
-            f"Expected finish_reason='tool_use' to override SDK's 'stop' when tool_calls present. "
-            f"Got '{response.finish_reason}'. This causes premature exit to interactive mode."
+        assert response.finish_reason == "tool_calls", (
+            f"Expected finish_reason='tool_calls' to override SDK's 'stop' "
+            f"when tool_calls present. Got '{response.finish_reason}'. "
+            f"This causes premature exit to interactive mode."
         )

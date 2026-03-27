@@ -153,7 +153,8 @@ class ErrorConfig:
 
     mappings: list[ErrorMapping] = field(default_factory=_mapping_list)
     default_error: str = "ProviderUnavailableError"
-    default_retryable: bool = True
+    # Three-Medium: Must match YAML default (config/errors.yaml:128) and loader fallback
+    default_retryable: bool = False
 
 
 @functools.lru_cache(maxsize=4)

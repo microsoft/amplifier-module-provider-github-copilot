@@ -100,11 +100,16 @@ def mock_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     from amplifier_core import ModelInfo
 
     from amplifier_module_provider_github_copilot.config_loader import load_models_config
+    from amplifier_module_provider_github_copilot.sdk_adapter.model_translation import (
+        CopilotModelInfo,
+    )
 
-    async def mock_fetch_and_map_models(_client: object) -> list[ModelInfo]:
-        """Return models from YAML config (test compatibility)."""
+    async def mock_fetch_and_map_models(
+        _client: object,
+    ) -> tuple[list[ModelInfo], list[CopilotModelInfo]]:
+        """Return models from YAML config with raw CopilotModelInfo for caching."""
         cfg = load_models_config()
-        return [
+        amplifier_models = [
             ModelInfo(
                 id=m["id"],
                 display_name=m["display_name"],
@@ -115,6 +120,17 @@ def mock_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
             )
             for m in cfg.models
         ]
+        # Create matching CopilotModelInfo for cache consistency
+        copilot_models = [
+            CopilotModelInfo(
+                id=m["id"],
+                name=m["display_name"],
+                context_window=m["context_window"],
+                max_output_tokens=m["max_output_tokens"],
+            )
+            for m in cfg.models
+        ]
+        return amplifier_models, copilot_models
 
     # Patch both the import location AND the definition
     # This handles cases where the function was already imported

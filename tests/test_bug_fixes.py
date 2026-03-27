@@ -207,3 +207,98 @@ class TestAC6TombstoneFiles:
         )
         # AC-6: File MUST be deleted, not just a tombstone
         assert not tombstone.exists(), "session_factory.py should be deleted (AC-6)"
+
+
+class TestSessionLifecycleValidation:
+    """Fail-fast validation for session_lifecycle config.
+
+    Contract: streaming-contract:SessionLifecycle:MUST:1
+
+    session_lifecycle is CORE config, not observability:
+    - If idle_events is empty, provider cannot detect session completion
+    - This causes infinite hang with no error message
+    - Developer experience: fail loudly at startup, not silently at runtime
+
+    Bug discovery: Session hung for 4+ minutes because load_event_config
+    returned empty sets, and is_idle_event() always returned False.
+    """
+
+    def test_missing_idle_events_raises_configuration_error(self, tmp_path: Path):
+        """load_event_config MUST raise ConfigurationError if idle_events is empty.
+
+        This is fail-fast at load time, not silent degradation.
+        Developers need loud failures, not 4-minute debugging sessions.
+        """
+        import pytest
+        from amplifier_core.llm_errors import ConfigurationError
+
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        # Create events.yaml without session_lifecycle
+        events_yaml = tmp_path / "events.yaml"
+        events_yaml.write_text(
+            """
+event_classifications:
+  bridge: []
+  consume: []
+  drop: []
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_event_config(str(events_yaml))
+
+        assert "idle_events" in str(exc_info.value)
+        assert "session_lifecycle" in str(exc_info.value)
+
+    def test_empty_idle_events_raises_configuration_error(self, tmp_path: Path):
+        """Explicitly empty idle_events list MUST also raise ConfigurationError."""
+        import pytest
+        from amplifier_core.llm_errors import ConfigurationError
+
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        # Create events.yaml with empty idle_events
+        events_yaml = tmp_path / "events.yaml"
+        events_yaml.write_text(
+            """
+event_classifications:
+  bridge: []
+  consume: []
+  drop: []
+session_lifecycle:
+  idle_events: []
+  error_events: []
+  usage_events: []
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_event_config(str(events_yaml))
+
+        assert "idle_events" in str(exc_info.value)
+
+    def test_production_events_yaml_has_valid_session_lifecycle(self):
+        """Production events.yaml MUST have valid session_lifecycle config.
+
+        This verifies our shipped YAML is correct and won't cause runtime failures.
+        """
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        config_path = (
+            Path(__file__).parent.parent
+            / "amplifier_module_provider_github_copilot"
+            / "config"
+            / "events.yaml"
+        )
+
+        # Should not raise - validates at load time
+        config = load_event_config(str(config_path))
+
+        # Verify session_lifecycle is populated
+        assert config.idle_event_types, "idle_event_types must not be empty"
+        assert "session.idle" in config.idle_event_types
+        assert config.error_event_types, "error_event_types must not be empty"
+        assert config.usage_event_types, "usage_event_types must not be empty"

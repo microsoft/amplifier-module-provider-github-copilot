@@ -1,7 +1,7 @@
 """
 Tests for observability improvements.
 
-Contract: contracts/error-hierarchy.md
+Contract: contracts/observability.md
 
 Tests verify that observability logging is added to error translation
 and tool parsing without changing provider behavior.

@@ -20,7 +20,7 @@ class TestBundleFile:
     def test_pyproject_has_project_section(self) -> None:
         """pyproject.toml contains project metadata."""
         pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
-        content = pyproject_path.read_text()
+        content = pyproject_path.read_text(encoding="utf-8")
         assert "[project]" in content, "pyproject.toml should have [project] section"
         assert "name" in content, "pyproject.toml should have name field"
 

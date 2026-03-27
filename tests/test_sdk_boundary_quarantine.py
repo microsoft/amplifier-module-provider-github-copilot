@@ -40,7 +40,7 @@ class TestSDKImportQuarantine:
         if not IMPORTS_FILE.exists():
             pytest.skip("_imports.py not found")
 
-        content = IMPORTS_FILE.read_text()
+        content = IMPORTS_FILE.read_text(encoding="utf-8")
         assert "from copilot import" in content or "import copilot" in content, (
             "_imports.py should contain SDK imports (from copilot import ...)"
         )
@@ -51,7 +51,7 @@ class TestSDKImportQuarantine:
         if not client_file.exists():
             pytest.skip("client.py not found")
 
-        content = client_file.read_text()
+        content = client_file.read_text(encoding="utf-8")
 
         # Should NOT have direct SDK imports
         # Note: We allow "from copilot import" in string literals (e.g., docstrings)
@@ -78,7 +78,7 @@ class TestSDKImportQuarantine:
             if py_file.name == "_imports.py":
                 continue  # Skip the quarantine file
 
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
             tree = ast.parse(content)
 
             for node in ast.walk(tree):
@@ -107,7 +107,7 @@ class TestSDKAdapterExports:
         if not init_file.exists():
             pytest.skip("__init__.py not found")
 
-        content = init_file.read_text()
+        content = init_file.read_text(encoding="utf-8")
         assert "SessionConfig" in content, "__init__.py should export SessionConfig domain type"
 
     def test_init_exports_sdk_session_type(self) -> None:
@@ -116,7 +116,7 @@ class TestSDKAdapterExports:
         if not init_file.exists():
             pytest.skip("__init__.py not found")
 
-        content = init_file.read_text()
+        content = init_file.read_text(encoding="utf-8")
         assert "SDKSession" in content, "__init__.py should export SDKSession type alias"
 
     def test_init_has_docstring_about_quarantine(self) -> None:
@@ -125,7 +125,7 @@ class TestSDKAdapterExports:
         if not init_file.exists():
             pytest.skip("__init__.py not found")
 
-        content = init_file.read_text()
+        content = init_file.read_text(encoding="utf-8")
         assert "_imports.py" in content or "quarantine" in content.lower(), (
             "__init__.py should document that SDK imports are quarantined"
         )
@@ -136,7 +136,7 @@ class TestSDKAdapterExports:
         if not init_file.exists():
             pytest.skip("__init__.py not found")
 
-        content = init_file.read_text()
+        content = init_file.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
         # Find __all__ list
@@ -167,7 +167,7 @@ class TestDomainCodeBoundary:
         if not provider_file.exists():
             pytest.skip("provider.py not found")
 
-        content = provider_file.read_text()
+        content = provider_file.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
         violations: list[str] = []
@@ -191,7 +191,7 @@ class TestDomainCodeBoundary:
         if not streaming_file.exists():
             pytest.skip("streaming.py not found")
 
-        content = streaming_file.read_text()
+        content = streaming_file.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
         for node in ast.walk(tree):
@@ -211,7 +211,7 @@ class TestDomainCodeBoundary:
         if not error_file.exists():
             pytest.skip("error_translation.py not found")
 
-        content = error_file.read_text()
+        content = error_file.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
         for node in ast.walk(tree):
@@ -375,7 +375,7 @@ class TestMembraneAPIPattern:
         if not py_file.exists():
             pytest.skip(f"{file_path} not found")
 
-        content = py_file.read_text()
+        content = py_file.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
         violations: list[str] = []

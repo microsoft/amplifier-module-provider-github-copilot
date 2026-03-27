@@ -394,10 +394,22 @@ class TestProviderListModelsDynamic:
         )
 
         # Patch fetch_and_map_models to return our unique model
+        # fetch_and_map_models now returns (amplifier_models, copilot_models) tuple
         with patch(
             "amplifier_module_provider_github_copilot.provider.fetch_and_map_models"
         ) as mock_fetch:
-            mock_fetch.return_value = [sdk_only_model]
+            # Create matching CopilotModelInfo for the tuple
+            from amplifier_module_provider_github_copilot.sdk_adapter.model_translation import (
+                CopilotModelInfo,
+            )
+
+            copilot_model = CopilotModelInfo(
+                id="sdk-unique-model-xyz",
+                name="SDK-Only Model XYZ",
+                context_window=999999,
+                max_output_tokens=88888,
+            )
+            mock_fetch.return_value = ([sdk_only_model], [copilot_model])
 
             result = await provider.list_models()
 
@@ -502,14 +514,12 @@ class TestProviderListModelsDynamic:
             nonlocal write_cache_called
             write_cache_called = True
 
+        # fetch_and_map_models now returns (amplifier_models, copilot_models) tuple
+        # The provider uses copilot_models for caching directly
         with (
             patch(
                 "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
-                return_value=[amplifier_model],
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.provider.fetch_models",
-                return_value=[copilot_model],
+                return_value=([amplifier_model], [copilot_model]),
             ),
             patch(
                 "amplifier_module_provider_github_copilot.provider.write_cache",
@@ -851,25 +861,25 @@ class TestConfigurationFailFast:
         """
         from unittest.mock import patch
 
-        from amplifier_module_provider_github_copilot.models import (
-            ConfigurationError,
-            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config_loader import (
+            _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
 
         # Clear cache before test
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
         with patch("importlib.resources.files") as mock_files:
             mock_files.side_effect = TypeError("Resource not found")
 
             with pytest.raises(ConfigurationError) as exc_info:
-                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+                _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
             assert "models.yaml not found" in str(exc_info.value)
             assert "YAML is authoritative" in str(exc_info.value)
 
         # Clear cache after test to restore normal behavior
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
     def test_configuration_error_raised_when_fallbacks_missing(self) -> None:
         """Contract: behaviors:ConfigLoading:MUST:1
@@ -878,13 +888,13 @@ class TestConfigurationFailFast:
         """
         from unittest.mock import MagicMock, patch
 
-        from amplifier_module_provider_github_copilot.models import (
-            ConfigurationError,
-            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config_loader import (
+            _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
 
         # Clear cache before test
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
         with patch("importlib.resources.files") as mock_files:
             # Return YAML without fallbacks section
@@ -893,12 +903,12 @@ class TestConfigurationFailFast:
             mock_files.return_value.__truediv__.return_value = mock_path
 
             with pytest.raises(ConfigurationError) as exc_info:
-                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+                _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
             assert "fallbacks" in str(exc_info.value)
 
         # Clear cache after test
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
     def test_configuration_error_raised_when_required_keys_missing(self) -> None:
         """Contract: behaviors:ConfigLoading:MUST:1
@@ -907,13 +917,13 @@ class TestConfigurationFailFast:
         """
         from unittest.mock import MagicMock, patch
 
-        from amplifier_module_provider_github_copilot.models import (
-            ConfigurationError,
-            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config_loader import (
+            _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
 
         # Clear cache before test
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
         with patch("importlib.resources.files") as mock_files:
             # Return YAML with incomplete fallbacks section
@@ -924,12 +934,12 @@ class TestConfigurationFailFast:
             mock_files.return_value.__truediv__.return_value = mock_path
 
             with pytest.raises(ConfigurationError) as exc_info:
-                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+                _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
             assert "max_output_tokens" in str(exc_info.value)
 
         # Clear cache after test
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
     def test_configuration_error_raised_when_yaml_invalid(self) -> None:
         """Contract: behaviors:ConfigLoading:MUST:1
@@ -938,13 +948,13 @@ class TestConfigurationFailFast:
         """
         from unittest.mock import MagicMock, patch
 
-        from amplifier_module_provider_github_copilot.models import (
-            ConfigurationError,
-            _load_fallback_values,  # pyright: ignore[reportPrivateUsage]
+        from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config_loader import (
+            _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
 
         # Clear cache before test
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
         with patch("importlib.resources.files") as mock_files:
             # Return invalid YAML that will cause parse error
@@ -953,12 +963,12 @@ class TestConfigurationFailFast:
             mock_files.return_value.__truediv__.return_value = mock_path
 
             with pytest.raises(ConfigurationError) as exc_info:
-                _load_fallback_values()  # pyright: ignore[reportPrivateUsage]
+                _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
             assert "Failed to parse models.yaml" in str(exc_info.value)
 
         # Clear cache after test
-        _load_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
 
 # =============================================================================
@@ -1051,6 +1061,7 @@ class TestFetchAndMapModels:
         """Contract: sdk-boundary:ModelDiscovery:MUST:1,2,3
 
         fetch_and_map_models chains: SDK → CopilotModelInfo → AmplifierModelInfo
+        Returns tuple of (amplifier_models, copilot_models) for caching.
         """
         from amplifier_module_provider_github_copilot.models import fetch_and_map_models
 
@@ -1067,10 +1078,11 @@ class TestFetchAndMapModels:
             ]
         )
 
-        result = await fetch_and_map_models(mock_client)
+        amplifier_models, copilot_models = await fetch_and_map_models(mock_client)
 
-        assert len(result) == 1
-        model = result[0]
+        # Verify amplifier models
+        assert len(amplifier_models) == 1
+        model = amplifier_models[0]
         assert model.id == "claude-opus-4.5"
         assert model.display_name == "Claude Opus 4.5"
         assert model.context_window == 200000
@@ -1078,6 +1090,10 @@ class TestFetchAndMapModels:
         assert "vision" in model.capabilities
         assert "streaming" in model.capabilities
         assert "tools" in model.capabilities
+
+        # Verify copilot models (for caching)
+        assert len(copilot_models) == 1
+        assert copilot_models[0].id == "claude-opus-4.5"
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("real_model_discovery")

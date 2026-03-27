@@ -154,6 +154,9 @@ class TestUnifiedErrorConfigLoading:
 
         If the config file is missing, load_error_config should return
         a default ErrorConfig with sensible defaults.
+
+        Three-Medium: default_retryable=False matches YAML default (errors.yaml:128)
+        and loader fallback for consistency.
         """
         from amplifier_module_provider_github_copilot.error_translation import (
             load_error_config,
@@ -165,4 +168,5 @@ class TestUnifiedErrorConfigLoading:
         # Should return default config, not crash
         assert config is not None
         assert config.default_error == "ProviderUnavailableError"
-        assert config.default_retryable is True
+        # Three-Medium: default_retryable=False (conservative: unknown errors don't retry)
+        assert config.default_retryable is False

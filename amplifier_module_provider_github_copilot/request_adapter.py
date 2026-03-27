@@ -12,14 +12,18 @@ Separation of Concerns:
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import CompletionRequest, extract_attachments_from_chat_request
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "convert_chat_request",
     "extract_prompt_from_chat_request",
+    "extract_system_message",
     # Private exports for backward compatibility with tests
     "_extract_message_content",
     "_extract_content_block",
@@ -48,6 +52,14 @@ def convert_chat_request(
     if isinstance(request, CompletionRequest):
         return request
 
+    # DEBUG: Log incoming request structure
+    messages: list[Any] = getattr(request, "messages", [])
+    logger.debug(
+        "[REQUEST_ADAPTER] Received ChatRequest with %d messages, roles=%s",
+        len(messages),
+        [getattr(m, "role", "?") for m in messages[:5]],  # First 5 roles
+    )
+
     # Extract prompt preserving multi-turn context
     prompt = extract_prompt_from_chat_request(request)
 
@@ -59,11 +71,16 @@ def convert_chat_request(
     # Contract: sdk-boundary:ImagePassthrough:MUST:1
     attachments = extract_attachments_from_chat_request(request)
 
+    # Extract system message for SDK session config (mode: replace)
+    # CRITICAL: Without system_message, SDK uses default persona instead of bundle
+    system_message = extract_system_message(request)
+
     return CompletionRequest(
         prompt=prompt,
         model=model,
         tools=tools,
         attachments=attachments,
+        system_message=system_message,
     )
 
 
@@ -158,17 +175,25 @@ def _extract_content_block(block: Any) -> str:
     # Get block type
     block_type: str | None = getattr(block, "type", None) or _get("type")
 
-    # TextContent - extract text attribute
-    if block_type == "text" or hasattr(block, "text"):
-        text: str | None = getattr(block, "text", None) or _get("text")
-        return str(text) if text else ""
+    # CRITICAL: Check block_type FIRST before hasattr fallbacks.
+    # ThinkingContent has a "text" attribute, so hasattr(block, "text") is True.
+    # Bug fix: Check explicit types before hasattr fallbacks to prevent
+    # ThinkingContent from being misclassified as TextContent.
 
     # ThinkingContent - extract thinking attribute with marker
-    if block_type == "thinking" or hasattr(block, "thinking"):
+    # Must check BEFORE TextContent because ThinkingContent also has text attr
+    if block_type == "thinking" or (
+        block_type is None and hasattr(block, "thinking")
+    ):
         thinking: str | None = getattr(block, "thinking", None) or _get("thinking")
         if thinking:
             return f"[Thinking: {thinking}]"
         return ""
+
+    # TextContent - extract text attribute
+    if block_type == "text" or (block_type is None and hasattr(block, "text")):
+        text: str | None = getattr(block, "text", None) or _get("text")
+        return str(text) if text else ""
 
     # Skip ToolCallContent blocks entirely — they are handled via tool_calls field.
     # This prevents fake tool call detection from triggering on prior turns.
@@ -189,3 +214,51 @@ def _extract_content_block(block: Any) -> str:
             return str(val)
 
     return ""
+
+
+def extract_system_message(request: Any) -> str | None:
+    """Extract system message(s) from ChatRequest for SDK session config.
+
+    The SDK handles system messages specially — they're passed to the session
+    config with mode="replace" rather than included in the prompt.
+
+    This is CRITICAL for Amplifier agent behavior:
+    - Without system_message, SDK uses default "GitHub Copilot CLI" persona
+    - With system_message, the Amplifier bundle persona takes precedence
+    - Missing system_message causes agent to not follow bundle instructions
+
+    If multiple system messages exist, they are joined with double newlines
+    (consistent with Anthropic/OpenAI/Gemini providers).
+
+    Args:
+        request: Kernel ChatRequest with messages attribute.
+
+    Returns:
+        Combined system message content, or None if not present.
+    """
+    messages: list[Any] = getattr(request, "messages", [])
+    if not messages:
+        return None
+
+    system_parts: list[str] = []
+
+    for msg in messages:
+        role: str = getattr(msg, "role", "user")
+        if role != "system":
+            continue
+
+        content: Any = getattr(msg, "content", "")
+        content_text = _extract_message_content(content)
+        if content_text:
+            system_parts.append(content_text)
+
+    if not system_parts:
+        return None
+
+    if len(system_parts) > 1:
+        logger.debug("[REQUEST_ADAPTER] Joining %d system messages into one", len(system_parts))
+
+    system_message = "\n\n".join(system_parts)
+    logger.debug("[REQUEST_ADAPTER] Extracted system_message (length=%d)", len(system_message))
+
+    return system_message

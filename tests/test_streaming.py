@@ -877,7 +877,10 @@ class TestProgressiveStreamingEmission:
         call_args = coordinator.hooks.emit.call_args
         assert call_args[0][0] == "llm:content_block"
         assert call_args[0][1]["provider"] == "github-copilot"
-        assert call_args[0][1]["content"] == content
+        # Content is serialized to JSON-compatible dict (enums converted to values)
+        content_data = call_args[0][1]["content"]
+        assert content_data["text"] == content.text
+        assert content_data["type"] == "text"  # Enum value, not ContentBlockType.TEXT
 
     def test_emit_streaming_content_skips_without_coordinator(self) -> None:
         """streaming-contract:ProgressiveStreaming:SHOULD:4.

@@ -105,7 +105,7 @@ class TestConfigComment:
             / "models.yaml"
         )
 
-        content = config_path.read_text()
+        content = config_path.read_text(encoding="utf-8")
 
         # Verify timeout value is present
         assert "timeout:" in content, "Config must have timeout key"
@@ -145,7 +145,7 @@ class TestNoHardcodedTimeouts:
             / "provider.py"
         )
 
-        content = provider_path.read_text()
+        content = provider_path.read_text(encoding="utf-8")
 
         # Three-Medium: should use direct dict access, not .get() with fallback
         assert "_provider_config.defaults[" in content, (

@@ -61,11 +61,13 @@ The provider MUST bound the abort call by `session.abort_timeout_seconds`. If ab
 
 **Implementation:** `asyncio.wait_for(session.abort(), timeout=abort_timeout)`
 
-### SHOULD-2: Idle Timeout
+### SHOULD-2: Idle Timeout (Safety Bound Only)
 
-The provider SHOULD use `session.idle_timeout_seconds` as a safety bound when waiting for the idle event. This prevents indefinite waits if the SDK malfunctions.
+The provider SHOULD NOT use `session.idle_timeout_seconds` for the main idle wait. SDK API calls can take 60+ seconds for complex operations (e.g., agent delegation). Use the caller's request timeout instead.
 
-**Implementation:** `asyncio.wait_for(idle_event.wait(), timeout=idle_timeout)`
+The `idle_timeout_seconds` config is retained for abort operations only.
+
+**Implementation:** `asyncio.wait_for(idle_event.wait(), timeout=timeout)` — uses caller's timeout
 
 ---
 

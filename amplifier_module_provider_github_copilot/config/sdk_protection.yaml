@@ -46,7 +46,9 @@ session:
   abort_timeout_seconds: 5.0
 
   # Maximum wait time for session.idle event
-  # This is a safety bound - normally idle fires within milliseconds of tool capture
+  # NOTE: This is NOT used for main SDK wait. SDK API calls can take 60+ seconds
+  # for complex operations like delegation. The provider uses caller's timeout.
+  # This value is retained for abort/cleanup operations only.
   # Contract: streaming-contract:abort-on-capture:MUST:1
   idle_timeout_seconds: 30.0
 

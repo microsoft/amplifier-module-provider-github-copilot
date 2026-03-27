@@ -10,6 +10,43 @@ Contract: contracts/provider-protocol.md
 
 from __future__ import annotations
 
+import logging as _logging
+import os as _os_logging
+
+# Configure debug logging if GHCP_DEBUG environment variable is set
+# Usage: GHCP_DEBUG=1 amplifier run "your prompt"
+#
+# SECURITY: Logs go to stderr ONLY (captured by Amplifier's logging infrastructure).
+# File-based logging is intentionally NOT supported to prevent:
+# - Sensitive data (prompts, tokens, tool outputs) persisting on disk
+# - World-readable log files in /tmp/ or other locations
+# - Compliance violations (GDPR, SOC2, etc.)
+if _os_logging.environ.get("GHCP_DEBUG"):
+    _stderr_handler = _logging.StreamHandler()
+    _stderr_handler.setFormatter(
+        _logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s", "%H:%M:%S")
+    )
+
+    _logging.basicConfig(
+        level=_logging.DEBUG,
+        handlers=[_stderr_handler],
+    )
+
+    # Enable debug for all our modules
+    for _logger_name in [
+        "amplifier_module_provider_github_copilot",
+        "amplifier_module_provider_github_copilot.provider",
+        "amplifier_module_provider_github_copilot.request_adapter",
+        "amplifier_module_provider_github_copilot.streaming",
+        "amplifier_module_provider_github_copilot.sdk_adapter",
+        "amplifier_module_provider_github_copilot.sdk_adapter.client",
+        "amplifier_module_provider_github_copilot.sdk_adapter.event_helpers",
+        "amplifier_module_provider_github_copilot.sdk_adapter.tool_capture",
+    ]:
+        _logging.getLogger(_logger_name).setLevel(_logging.DEBUG)
+
+    _logging.getLogger(__name__).debug("GHCP_DEBUG enabled - verbose logging to stderr")
+
 # Eager dependency check: ensure github-copilot-sdk is installed.
 # All SDK imports in this module are lazy (inside function bodies) so the module
 # would otherwise import successfully without the SDK. That tricks Amplifier's
@@ -235,10 +272,11 @@ async def mount(
 
         # Graceful degradation: log error and return None instead of crashing
         # This matches the production provider pattern
+        # Contract: security — Only log exception type/message at ERROR, not full traceback
+        # (traceback may contain sensitive request data)
         logger.error(f"[MOUNT] Failed to mount GitHubCopilotProvider: {type(e).__name__}: {e}")
-        import traceback
-
-        logger.error(f"[MOUNT] Traceback:\n{traceback.format_exc()}")
+        # Full traceback at DEBUG level only (security: avoid leaking sensitive data)
+        logger.debug("[MOUNT] Mount failure traceback", exc_info=True)
         return None
 
 

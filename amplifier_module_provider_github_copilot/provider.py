@@ -53,6 +53,9 @@ from .error_translation import (
     load_error_config,
     translate_sdk_error,
 )
+
+# Event routing (moved from inline import per W-02 code review)
+from .event_router import EventRouter
 from .fake_tool_detection import (
     load_fake_tool_detection_config,
     log_detection,
@@ -67,7 +70,6 @@ from .model_cache import read_cache, write_cache
 from .models import (
     copilot_model_to_amplifier_model,
     fetch_and_map_models,
-    fetch_models,
 )
 
 # Observability module for hook event emission (separation of concerns)
@@ -97,9 +99,6 @@ from .sdk_adapter import (
     SessionConfig,
     ToolCaptureHandler,
     extract_event_fields,
-    extract_event_type,
-    is_error_event,
-    is_idle_event,
 )
 from .streaming import (
     MAX_EXTRACTION_DEPTH,
@@ -158,36 +157,6 @@ _is_retryable_error = is_retryable_error
 _get_retry_after = get_retry_after
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_delta_text(sdk_event: Any) -> str | None:
-    """Extract text delta from an SDK streaming event.
-
-    Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
-
-    Handles SDK v0.2.0 nested data structure:
-    - event.data.delta_content for text deltas
-    - Direct string content as fallback
-
-    Args:
-        sdk_event: SDK SessionEvent object
-
-    Returns:
-        Extracted text delta or None if not found
-    """
-    # Try nested data structure first (SDK v0.2.0+)
-    sdk_data = getattr(sdk_event, "data", None)
-    if sdk_data is not None:
-        delta_content = getattr(sdk_data, "delta_content", None)
-        if delta_content and isinstance(delta_content, str):
-            return delta_content
-
-    # Fallback: check direct delta_content attribute
-    delta_content = getattr(sdk_event, "delta_content", None)
-    if delta_content and isinstance(delta_content, str):
-        return delta_content
-
-    return None
 
 
 class GitHubCopilotProvider:
@@ -298,11 +267,12 @@ class GitHubCopilotProvider:
         """
         # Tier 1: Try SDK first (dynamic, authoritative)
         try:
-            models = await fetch_and_map_models(self._client)
+            # Bug fix: fetch_and_map_models returns both mapped models AND raw SDK models
+            # for caching, eliminating the redundant fetch_models() call
+            models, copilot_models = await fetch_and_map_models(self._client)
 
             # Cache successful result for future use
             try:
-                copilot_models = await fetch_models(self._client)
                 write_cache(copilot_models)
             except Exception as cache_err:
                 logger.warning("Failed to cache models: %s", cache_err)
@@ -348,9 +318,6 @@ class GitHubCopilotProvider:
             default_model=self._effective_default_model,
         )
 
-        # Use the SDK client wrapper for real SDK path
-        accumulator = StreamingAccumulator()
-
         # Load configs
         event_config = load_event_config()
         obs_config = load_observability_config()
@@ -378,7 +345,14 @@ class GitHubCopilotProvider:
                 timeout=timeout_seconds,
             )
 
+            # Initialize accumulator before loop (for type checker)
+            # Reset at start of each iteration to prevent content corruption on retry
+            accumulator = StreamingAccumulator()
+
             for attempt in range(retry_config.max_attempts):
+                # Bug fix: Reset accumulator for each attempt to prevent corruption
+                # If first attempt partially streams then fails, retry must start fresh
+                accumulator = StreamingAccumulator()
                 try:
                     await self._execute_sdk_completion(
                         client=self._client,
@@ -389,6 +363,7 @@ class GitHubCopilotProvider:
                         accumulator=accumulator,
                         tools=internal_request.tools or None,
                         attachments=internal_request.attachments or None,
+                        system_message=internal_request.system_message,
                     )
                     break  # Success
 
@@ -507,6 +482,7 @@ class GitHubCopilotProvider:
                         accumulator=accumulator,
                         tools=internal_request.tools or None,
                         attachments=None,
+                        system_message=internal_request.system_message,
                     )
                 except Exception:
                     log_exhausted(ftd_config, correction_attempt + 1)
@@ -517,6 +493,16 @@ class GitHubCopilotProvider:
             # Build response and emit success event
             response = accumulator.to_chat_response()
             response_tool_calls = len(response.tool_calls) if response.tool_calls else 0
+
+            # DEBUG: Log response details before returning to orchestrator
+            logger.debug(
+                "[COMPLETE] Returning response: finish_reason=%s, tool_calls=%d, "
+                "content_blocks=%d, text_len=%d",
+                response.finish_reason,
+                response_tool_calls,
+                len(response.content) if response.content else 0,
+                len(response.text) if response.text else 0,
+            )
 
             await ctx.emit_response_ok(
                 usage_input=response.usage.input_tokens if response.usage else 0,
@@ -558,6 +544,7 @@ class GitHubCopilotProvider:
         accumulator: StreamingAccumulator,
         tools: list[Any] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        system_message: str | None = None,
     ) -> None:
         """Execute a single SDK completion, draining events to accumulator.
 
@@ -571,6 +558,18 @@ class GitHubCopilotProvider:
         Contract: sdk-protection:Session:MUST:3,4 (explicit_abort, abort_timeout)
         Contract: behaviors:Streaming:MUST:1 (TTFT warning)
         """
+        # DEBUG: Log entry point with key parameters
+        logger.debug(
+            "[SDK_COMPLETION] Starting: model=%s, prompt_len=%d, timeout=%.1f, "
+            "tools=%d, attachments=%d, idle_events=%s, system_message_len=%d",
+            model,
+            len(prompt),
+            timeout,
+            len(tools) if tools else 0,
+            len(attachments) if attachments else 0,
+            event_config.idle_event_types,
+            len(system_message) if system_message else 0,
+        )
         # Load SDK protection config for tool capture and session management
         sdk_protection = load_sdk_protection_config()
         # Load streaming config for TTFT warning and bounded queue
@@ -578,7 +577,9 @@ class GitHubCopilotProvider:
         streaming_config = load_streaming_config()
 
         async with asyncio.timeout(timeout):
-            async with client.session(model=model, tools=tools) as sdk_session:
+            async with client.session(
+                model=model, tools=tools, system_message=system_message
+            ) as sdk_session:
                 # Contract: behaviors:Streaming:MUST:4 — bounded queue, drop on full
                 event_queue: asyncio.Queue[Any] = asyncio.Queue(
                     maxsize=streaming_config.event_queue_size
@@ -588,6 +589,10 @@ class GitHubCopilotProvider:
                 # TTFT tracking state (mutable container for closure)
                 # Contract: behaviors:Streaming:MUST:1
                 ttft_state: dict[str, Any] = {"checked": False, "start_time": 0.0}
+                # Usage holder: captures usage directly to avoid race condition
+                # SDK may send assistant.usage AFTER session.idle
+                # Contract: streaming-contract:usage:MUST:1
+                usage_holder: list[dict[str, int]] = []
                 # Use extracted ToolCaptureHandler for tool capture
                 # Contract: sdk-protection:ToolCapture:MUST:1,2
                 tool_capture_handler = ToolCaptureHandler(
@@ -596,104 +601,21 @@ class GitHubCopilotProvider:
                     config=sdk_protection.tool_capture,
                 )
 
-                # Create closure for progressive streaming emission
-                # Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
-                provider_self = self
-
-                def event_handler(
-                    sdk_event: Any,
-                    *,
-                    queue: asyncio.Queue[Any] = event_queue,
-                    idle: asyncio.Event = idle_event,
-                    errors: list[Exception] = error_holder,
-                    capture_handler: ToolCaptureHandler = tool_capture_handler,
-                    ttft: dict[str, Any] = ttft_state,
-                    ttft_threshold_ms: int = streaming_config.ttft_warning_ms,
-                    provider: Any = provider_self,
-                    evt_config: EventConfig = event_config,
-                ) -> None:
-                    """Push SDK events to queue for async processing.
-
-                    Tool capture delegated to ToolCaptureHandler.
-                    B023: Loop variables bound via default args.
-                    Contract: streaming-contract:abort-on-capture:MUST:1
-                    Contract: behaviors:Streaming:MUST:1 (TTFT warning)
-                    Contract: behaviors:Streaming:MUST:4 (bounded queue, drop on full)
-                    """
-                    # ALWAYS check for idle event first - critical for session completion
-                    # This ensures idle signal is set even if queue is full
-                    event_type = extract_event_type(sdk_event)
-                    if is_idle_event(event_type):
-                        idle.set()
-                        # Still try to queue it for completeness
-
-                    try:
-                        queue.put_nowait(sdk_event)
-                    except asyncio.QueueFull:
-                        # Contract: behaviors:Streaming:MUST:4 — drop on full, don't block
-                        # Debug level: deltas are internal (final message has complete text)
-                        # Aligns with OpenAI/Anthropic providers that don't expose deltas
-                        logger.debug(
-                            "[STREAMING] Event queue full, dropping delta: %s",
-                            event_type,
-                        )
-                        return  # Don't process dropped events further
-
-                    # TTFT check on first content event
-                    # Contract: behaviors:Streaming:MUST:1
-                    # Three-Medium Architecture: content event types loaded from YAML
-                    if not ttft["checked"]:
-                        if event_type in evt_config.content_event_types:
-                            ttft["checked"] = True
-                            elapsed_ms = (time.time() - ttft["start_time"]) * 1000
-                            if elapsed_ms > ttft_threshold_ms:
-                                logger.warning(
-                                    "[TTFT] Slow time to first token: %.0fms (threshold: %dms)",
-                                    elapsed_ms,
-                                    ttft_threshold_ms,
-                                )
-
-                    # Progressive streaming: emit content deltas for real-time UI
-                    # Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
-                    # Three-Medium Architecture: emission types loaded from YAML
-                    if event_type in evt_config.text_content_types:
-                        # Extract text delta from SDK event
-                        delta_text = _extract_delta_text(sdk_event)
-                        if delta_text:
-                            from amplifier_core import TextContent
-
-                            provider._emit_streaming_content(TextContent(text=delta_text))
-                    elif event_type in evt_config.thinking_content_types:
-                        # Extract thinking delta from SDK event
-                        delta_text = _extract_delta_text(sdk_event)
-                        if delta_text:
-                            from amplifier_core import ThinkingContent
-
-                            provider._emit_streaming_content(ThinkingContent(text=delta_text))
-
-                    if is_error_event(event_type):
-                        sdk_event_str = str(sdk_event)
-                        data: Any
-                        if isinstance(sdk_event, dict):
-                            typed_evt = cast(dict[str, Any], sdk_event)
-                            data = typed_evt.get("data")
-                        else:
-                            data = getattr(sdk_event, "data", None)
-                        error_msg: str
-                        if data is None:
-                            error_msg = sdk_event_str
-                        elif isinstance(data, dict):
-                            typed_data = cast(dict[str, Any], data)
-                            msg_val = typed_data.get("message")
-                            error_msg = str(msg_val) if msg_val is not None else sdk_event_str
-                        else:
-                            error_msg = str(getattr(data, "message", sdk_event_str))
-                        err = Exception(f"Session error: {error_msg}")
-                        errors.append(err)
-                        idle.set()
-                    elif not is_idle_event(event_type):
-                        # Delegate tool capture to handler (for non-idle events)
-                        capture_handler.on_event(sdk_event)
+                # Create EventRouter for SDK event handling
+                # Extracted from inline closure per Comprehensive Review P1.6
+                # Contract: streaming-contract:abort-on-capture:MUST:1
+                # Contract: behaviors:Streaming:MUST:1,4
+                event_handler = EventRouter(
+                    queue=event_queue,
+                    idle_event=idle_event,
+                    error_holder=error_holder,
+                    usage_holder=usage_holder,
+                    capture_handler=tool_capture_handler,
+                    ttft_state=ttft_state,
+                    ttft_threshold_ms=streaming_config.ttft_warning_ms,
+                    event_config=event_config,
+                    emit_streaming_content=self._emit_streaming_content,
+                )
 
                 unsubscribe = sdk_session.on(event_handler)
                 try:
@@ -702,8 +624,14 @@ class GitHubCopilotProvider:
                     ttft_state["start_time"] = time.time()
                     # SDK v0.2.0: send(prompt, attachments=...) replaces send({"prompt": ...})
                     # Contract: sdk-boundary:ImagePassthrough:MUST:7
+                    logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
                     await sdk_session.send(prompt, attachments=attachments)
+                    logger.debug("[SDK_COMPLETION] Prompt sent, waiting for idle_event...")
+                    # Use caller's timeout for idle wait - SDK API calls can take 60+ seconds
+                    # for complex operations like delegation. The sdk_protection idle_timeout
+                    # is too short (30s) and caused LLMTimeoutError regression.
                     await asyncio.wait_for(idle_event.wait(), timeout=timeout)
+                    logger.debug("[SDK_COMPLETION] idle_event received, draining queue...")
 
                     if error_holder:
                         raise error_holder[0]
@@ -756,6 +684,33 @@ class GitHubCopilotProvider:
                         domain_event = translate_event(event_dict, event_config)
                         if domain_event is not None:
                             accumulator.add(domain_event)
+
+                    # Inject captured usage if accumulator doesn't have it
+                    # This handles race condition where assistant.usage arrives
+                    # after session.idle but before we finish draining the queue
+                    # Contract: streaming-contract:usage:MUST:1
+                    if not accumulator.usage and usage_holder:
+                        usage_data = usage_holder[0]
+                        accumulator.add(
+                            DomainEvent(
+                                type=DomainEventType.USAGE_UPDATE,
+                                data=usage_data,
+                            )
+                        )
+                        logger.debug(
+                            "[provider] Injected captured usage: %s",
+                            usage_data,
+                        )
+
+                    # DEBUG: Log completion summary
+                    logger.debug(
+                        "[SDK_COMPLETION] Complete: text_len=%d, tool_calls=%d, "
+                        "usage=%s, finish_reason=%s",
+                        len(accumulator.text_content),
+                        len(accumulator.tool_calls),
+                        accumulator.usage,
+                        accumulator.finish_reason,
+                    )
                 finally:
                     unsubscribe()
 
@@ -805,11 +760,26 @@ class GitHubCopilotProvider:
         if self.coordinator is None:
             return
         try:
+            # Serialize content to JSON-compatible dict
+            # TextContent/ThinkingContent from amplifier_core have __dict__ with enum fields
+            content_data: dict[str, Any]
+            if hasattr(content, "__dict__"):
+                content_data = {}
+                content_vars = cast(dict[str, Any], vars(content))
+                for k, v in content_vars.items():
+                    # Convert enums to their value for JSON serialization
+                    if hasattr(v, "value"):
+                        content_data[k] = v.value
+                    else:
+                        content_data[k] = v
+            else:
+                content_data = {"value": content}
+
             await self.coordinator.hooks.emit(
                 "llm:content_block",
                 {
                     "provider": self.name,
-                    "content": content,
+                    "content": content_data,
                 },
             )
         except Exception as e:

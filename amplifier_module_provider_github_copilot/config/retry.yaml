@@ -13,7 +13,7 @@ retry:
     jitter_factor: 0.1
 
 streaming:
-  event_queue_size: 1024
+  event_queue_size: 10000
   ttft_warning_ms: 15000
   max_gap_warning_ms: 10000
   max_gap_error_ms: 30000

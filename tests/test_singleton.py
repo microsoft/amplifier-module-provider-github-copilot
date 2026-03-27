@@ -747,3 +747,193 @@ class TestMountExceptionPaths:
             result = await m.mount(coordinator)
 
         assert result is None
+
+
+# ============================================================================
+# Test: Session Isolation
+# P3.19: Verify no cross-session state bleed
+# ============================================================================
+
+
+class TestSessionIsolation:
+    """Tests verifying session isolation — no cross-session state bleed.
+
+    Contract: sdk-boundary:Membrane:MUST:1 — Each provider instance isolates state.
+
+    Despite sharing a singleton CopilotClientWrapper, each mount() should:
+    - Create an independent GitHubCopilotProvider instance
+    - Have independent Session state
+    - Not share accumulated response state
+    - Cleanup independently
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_singleton_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reset module-level singleton state before each test."""
+        import amplifier_module_provider_github_copilot as provider_module
+
+        monkeypatch.setattr(provider_module, "_shared_client", None)
+        monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
+        monkeypatch.setattr(provider_module, "_shared_client_lock", None)
+
+    @pytest.mark.asyncio
+    async def test_provider_instances_are_independent(self) -> None:
+        """Two mount() calls create independent GitHubCopilotProvider instances.
+
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
+        import amplifier_module_provider_github_copilot as provider_module
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        captured_providers: list[GitHubCopilotProvider] = []
+
+        # Capture provider instances during coordinator.mount()
+        async def capture_mount(
+            namespace: str, provider: GitHubCopilotProvider, *, name: str
+        ) -> None:
+            captured_providers.append(provider)
+
+        mock_coordinator1 = MagicMock()
+        mock_coordinator1.mount = AsyncMock(side_effect=capture_mount)
+        mock_coordinator2 = MagicMock()
+        mock_coordinator2.mount = AsyncMock(side_effect=capture_mount)
+
+        mock_client = MagicMock(spec=CopilotClientWrapper)
+        mock_client.is_healthy.return_value = True
+        mock_client.close = AsyncMock()
+
+        with patch(
+            "amplifier_module_provider_github_copilot.CopilotClientWrapper",
+            return_value=mock_client,
+        ):
+            cleanup1 = await provider_module.mount(mock_coordinator1)
+            cleanup2 = await provider_module.mount(mock_coordinator2)
+
+        # Both cleanups should exist
+        assert cleanup1 is not None
+        assert cleanup2 is not None
+
+        # Two independent providers should have been created
+        assert len(captured_providers) == 2
+        provider1, provider2 = captured_providers
+
+        # Different provider instances (key assertion)
+        assert provider1 is not provider2
+
+        # Both share the same underlying client (memory efficiency)
+        assert provider1._client is provider2._client
+
+        # Cleanup both
+        await cleanup1()
+        await cleanup2()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_for_one_session_does_not_affect_other(self) -> None:
+        """Cleanup from first mount() doesn't affect second mount().
+
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
+        import amplifier_module_provider_github_copilot as provider_module
+
+        mock_coordinator1 = MagicMock()
+        mock_coordinator1.mount = AsyncMock()
+        mock_coordinator2 = MagicMock()
+        mock_coordinator2.mount = AsyncMock()
+
+        mock_client = MagicMock(spec=CopilotClientWrapper)
+        mock_client.is_healthy.return_value = True
+        mock_client.close = AsyncMock()
+
+        with patch(
+            "amplifier_module_provider_github_copilot.CopilotClientWrapper",
+            return_value=mock_client,
+        ):
+            cleanup1 = await provider_module.mount(mock_coordinator1)
+            cleanup2 = await provider_module.mount(mock_coordinator2)
+
+            assert provider_module._shared_client_refcount == 2
+
+            # Cleanup first session
+            assert cleanup1 is not None
+            await cleanup1()
+
+            # Client should still be alive (refcount > 0)
+            assert provider_module._shared_client is mock_client
+            assert provider_module._shared_client_refcount == 1
+            mock_client.close.assert_not_called()
+
+            # Second session cleanup releases last reference
+            assert cleanup2 is not None
+            await cleanup2()
+
+            # Now client should be closed
+            assert provider_module._shared_client_refcount == 0
+            mock_client.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_session_state_not_shared_between_providers(self) -> None:
+        """Provider-level state (config, pending_tasks) is not shared.
+
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        mock_client = MagicMock(spec=CopilotClientWrapper)
+
+        # Create two providers with injected client but different configs
+        provider1 = GitHubCopilotProvider(
+            config={"default_model": "gpt-4o"}, coordinator=None, client=mock_client
+        )
+        provider2 = GitHubCopilotProvider(
+            config={"default_model": "claude-sonnet-4"}, coordinator=None, client=mock_client
+        )
+
+        # Same shared client
+        assert provider1._client is provider2._client
+
+        # But independent instances
+        assert provider1 is not provider2
+
+        # Independent config
+        assert provider1.config["default_model"] == "gpt-4o"
+        assert provider2.config["default_model"] == "claude-sonnet-4"
+
+        # Independent pending task sets
+        assert provider1._pending_emit_tasks is not provider2._pending_emit_tasks
+
+    @pytest.mark.asyncio
+    async def test_idempotent_cleanup_calls_safe(self) -> None:
+        """Calling cleanup() multiple times on same session is safe.
+
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
+        import amplifier_module_provider_github_copilot as provider_module
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.mount = AsyncMock()
+
+        mock_client = MagicMock(spec=CopilotClientWrapper)
+        mock_client.is_healthy.return_value = True
+        mock_client.close = AsyncMock()
+
+        with patch(
+            "amplifier_module_provider_github_copilot.CopilotClientWrapper",
+            return_value=mock_client,
+        ):
+            cleanup = await provider_module.mount(mock_coordinator)
+            assert cleanup is not None
+
+            # First cleanup
+            await cleanup()
+            assert provider_module._shared_client_refcount == 0
+
+            # Redundant cleanups should be safe (no negative refcount)
+            await cleanup()
+            await cleanup()
+
+            # Refcount should never go negative
+            assert provider_module._shared_client_refcount == 0

@@ -43,7 +43,6 @@ from tests.fixtures.sdk_mocks import (
     usage_event,
 )
 
-
 # =============================================================================
 # Helper Factories
 # =============================================================================
@@ -670,9 +669,9 @@ class TestDeltaTextExtraction:
     def test_extract_delta_text_from_nested_data(self) -> None:
         """Extract delta_content from nested SDK event structure.
 
-        Covers: provider.py lines 180-186 (nested data path)
+        Covers: event_router.py _extract_delta_text (nested data path)
         """
-        from amplifier_module_provider_github_copilot.provider import (
+        from amplifier_module_provider_github_copilot.event_router import (
             _extract_delta_text,  # pyright: ignore[reportPrivateUsage]
         )
 
@@ -688,9 +687,9 @@ class TestDeltaTextExtraction:
     def test_extract_delta_text_from_direct_attribute(self) -> None:
         """Extract delta_content from direct event attribute.
 
-        Covers: provider.py line 188 (fallback path)
+        Covers: event_router.py _extract_delta_text (fallback path)
         """
-        from amplifier_module_provider_github_copilot.provider import (
+        from amplifier_module_provider_github_copilot.event_router import (
             _extract_delta_text,  # pyright: ignore[reportPrivateUsage]
         )
 
@@ -706,9 +705,9 @@ class TestDeltaTextExtraction:
     def test_extract_delta_text_returns_none_when_missing(self) -> None:
         """Returns None when no delta_content found.
 
-        Covers: provider.py all branches return None fallback
+        Covers: event_router.py _extract_delta_text all branches return None fallback
         """
-        from amplifier_module_provider_github_copilot.provider import (
+        from amplifier_module_provider_github_copilot.event_router import (
             _extract_delta_text,  # pyright: ignore[reportPrivateUsage]
         )
 
@@ -865,7 +864,7 @@ class TestFakeToolDetectionRetry:
 
         attempt = 0
         # Use pattern from fake_tool_detection: <tool_used name=
-        fake_tool_response = "I'll use <tool_used name=\"search\"> to find it"
+        fake_tool_response = 'I\'ll use <tool_used name="search"> to find it'
 
         class FakeToolThenErrorSession(MockSDKSession):
             """Session that returns fake tool, then errors on correction."""

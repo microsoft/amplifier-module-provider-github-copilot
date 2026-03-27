@@ -50,7 +50,7 @@ event_classifications:
     - sdk_type: usage_update  # Legacy underscore alias
       domain_type: USAGE_UPDATE
     - sdk_type: session.idle
-      domain_type: SESSION_IDLE
+      domain_type: TURN_COMPLETE  # session.idle triggers TURN_COMPLETE per contract
     - sdk_type: session.error
       domain_type: ERROR
 
@@ -108,3 +108,19 @@ finish_reason_map:
   content_filter: CONTENT_FILTER
   "": STOP  # SDK often sends empty/missing finish_reason for normal completion
   _default: STOP  # Normal completion when SDK doesn't specify
+
+# Session lifecycle event classification
+# Used by event_helpers.py for SDK event type detection
+session_lifecycle:
+  idle_events:
+    - session.idle
+    - session_idle
+    - idle
+  error_events:
+    - error
+    - session.error
+    - session_error
+    - sdk_error
+  usage_events:
+    - assistant.usage
+    - usage_update

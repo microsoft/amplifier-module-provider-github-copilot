@@ -78,11 +78,15 @@ class TestProtocolListModels:
 
 
 class TestProtocolComplete:
-    """provider-protocol:complete:MUST:1-4"""
+    """Tests for complete() method signature.
+
+    Note: Core complete() behavior (MUST:1-4) is tested in test_behaviors.py.
+    This class tests signature requirements only.
+    """
 
     @pytest.mark.asyncio
     async def test_accepts_kwargs(self, provider: GitHubCopilotProvider) -> None:
-        """provider-protocol:complete - Uses **kwargs, not named streaming callback."""
+        """provider-protocol:complete signature — Uses **kwargs for extensibility."""
         import inspect
 
         sig = inspect.signature(provider.complete)

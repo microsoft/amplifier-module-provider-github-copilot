@@ -52,7 +52,9 @@ def create_mock_session_ctx(
 
     @asynccontextmanager
     async def session_ctx(
-        model: str, tools: list[dict[str, Any]] | None = None
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
+        system_message: str | None = None,
     ) -> AsyncIterator[MagicMock]:
         mock_session = MagicMock()
         mock_session.disconnect = AsyncMock()

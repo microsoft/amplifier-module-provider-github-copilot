@@ -179,7 +179,7 @@ def translate_sdk_error(
 3. **MUST** set `provider="github-copilot"` on all errors
 4. **MUST** preserve original exception via chaining (`raise X from original`)
 5. **MUST** use config-driven pattern matching
-6. **MUST** fall through to `ProviderUnavailableError(retryable=True)` for unknown errors
+6. **MUST** fall through to `ProviderUnavailableError(retryable=False)` for unknown errors (conservative non-retry per Golden Vision V2)
 
 ---
 

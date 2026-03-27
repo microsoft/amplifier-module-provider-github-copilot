@@ -15,18 +15,27 @@ import pytest
 
 
 class TestMount:
-    """Tests for AC-1: mount() entry point."""
+    """Tests for AC-1: mount() entry point.
+
+    Contract: provider-protocol.md (mount section)
+    """
 
     @pytest.mark.asyncio
     async def test_mount_exists(self) -> None:
-        """AC-1: mount() function exists and is importable."""
+        """provider-protocol:mount:MUST:1 — mount() accepts ModuleCoordinator type.
+
+        Verifies mount() is importable and callable.
+        """
         from amplifier_module_provider_github_copilot import mount
 
         assert callable(mount)
 
     @pytest.mark.asyncio
     async def test_mount_registers_provider(self) -> None:
-        """AC-1: mount() registers provider with coordinator."""
+        """provider-protocol:mount:MUST:3 — Registers provider on coordinator.
+
+        Verifies mount() calls coordinator.mount() with correct arguments.
+        """
         from amplifier_module_provider_github_copilot import mount
 
         # Mock coordinator
@@ -44,7 +53,10 @@ class TestMount:
 
     @pytest.mark.asyncio
     async def test_mount_returns_cleanup_callable(self) -> None:
-        """AC-1: mount() returns a cleanup callable."""
+        """provider-protocol:mount:MUST:2 — Returns cleanup callable.
+
+        Verifies mount() returns a callable for resource cleanup.
+        """
         from amplifier_module_provider_github_copilot import mount
 
         coordinator = MagicMock()
@@ -57,7 +69,10 @@ class TestMount:
 
     @pytest.mark.asyncio
     async def test_mount_cleanup_calls_provider_close(self) -> None:
-        """AC-1: cleanup() calls provider.close()."""
+        """provider-protocol:mount:MUST:2 — Cleanup callable releases resources.
+
+        Verifies the cleanup function returned by mount() is awaitable.
+        """
         from amplifier_module_provider_github_copilot import mount
 
         coordinator = MagicMock()

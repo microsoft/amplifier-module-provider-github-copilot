@@ -168,7 +168,7 @@ class TestErrorConfigFile:
             / "config"
             / "errors.yaml"
         )
-        content = yaml.safe_load(config_path.read_text())
+        content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         assert content is not None
         assert "error_mappings" in content or "mappings" in content
@@ -182,6 +182,6 @@ class TestErrorConfigFile:
             / "config"
             / "errors.yaml"
         )
-        content = yaml.safe_load(config_path.read_text())
+        content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         assert "version" in content, "errors.yaml should have version field"

@@ -19,7 +19,8 @@ from amplifier_core import (
     ToolCallContent,
 )
 
-from .error_translation import ConfigurationError
+# Use _compat.py for consistent ConfigurationError import (W-03 code review)
+from ._compat import ConfigurationError
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import extract_event_fields
@@ -64,10 +65,11 @@ class DomainEventType(Enum):
     """Domain event types per event-vocabulary.md."""
 
     CONTENT_DELTA = "CONTENT_DELTA"
+    THINKING_DELTA = "THINKING_DELTA"  # Reasoning/thinking content
     TOOL_CALL = "TOOL_CALL"
     USAGE_UPDATE = "USAGE_UPDATE"
     TURN_COMPLETE = "TURN_COMPLETE"
-    SESSION_IDLE = "SESSION_IDLE"
+    SESSION_IDLE = "SESSION_IDLE"  # Reserved for future extensibility
     ERROR = "ERROR"
 
 
@@ -116,10 +118,19 @@ class StreamingAccumulator:
     def add(self, event: DomainEvent) -> None:
         """Add domain event to accumulator.
 
-        Events after completion (TURN_COMPLETE or ERROR) are ignored.
+        Usage events are processed even after completion since SDK may send
+        ASSISTANT_USAGE after TURN_COMPLETE.
         Contract: streaming-contract:completion:MUST:1
         """
-        # Guard against events after completion
+        # USAGE_UPDATE events must be processed even after completion.
+        # SDK sends assistant.usage AFTER assistant.turn_end, so we can't
+        # block usage events with the is_complete guard.
+        # Bug fix: Zero usage reported when no tool calls
+        if event.type == DomainEventType.USAGE_UPDATE:
+            self.usage = event.data
+            return
+
+        # Guard against other events after completion
         if self.is_complete:
             return
 
@@ -131,8 +142,6 @@ class StreamingAccumulator:
                 self.text_content += text
         elif event.type == DomainEventType.TOOL_CALL:
             self.tool_calls.append(event.data)
-        elif event.type == DomainEventType.USAGE_UPDATE:
-            self.usage = event.data
         elif event.type == DomainEventType.TURN_COMPLETE:
             self.finish_reason = event.data.get("finish_reason", "stop")
             self.is_complete = True
@@ -234,7 +243,9 @@ class StreamingAccumulator:
         if tool_calls:
             # Tool calls present: orchestrator must execute them
             # Overrides any SDK-provided finish_reason
-            normalized_finish_reason = "tool_use"
+            # Valid values per amplifier-core proto:
+            #   "stop", "tool_calls", "length", "content_filter"
+            normalized_finish_reason = "tool_calls"
         elif not self.finish_reason:
             # No tool calls and no SDK finish_reason: normal completion
             normalized_finish_reason = "end_turn"
@@ -282,6 +293,10 @@ class EventConfig:
     # Streaming emission types (streaming-contract:ProgressiveStreaming:SHOULD:1)
     text_content_types: set[str] = field(default_factory=_empty_str_set)
     thinking_content_types: set[str] = field(default_factory=_empty_str_set)
+    # Session lifecycle event types (loaded from events.yaml session_lifecycle)
+    idle_event_types: set[str] = field(default_factory=_empty_str_set)
+    error_event_types: set[str] = field(default_factory=_empty_str_set)
+    usage_event_types: set[str] = field(default_factory=_empty_str_set)
 
 
 def _validate_no_classification_overlap(
@@ -435,6 +450,25 @@ def _load_event_config_cached(config_path_str: str) -> EventConfig:
     text_content_types = set(streaming_emission.get("text_content_types", []))
     thinking_content_types = set(streaming_emission.get("thinking_content_types", []))
 
+    # Load session lifecycle event types (Three-Medium: policy from YAML)
+    # Used by event_helpers.py for SDK event type detection
+    session_lifecycle = raw.get("session_lifecycle", {})
+    idle_event_types = set(session_lifecycle.get("idle_events", []))
+    error_event_types = set(session_lifecycle.get("error_events", []))
+    usage_event_types = set(session_lifecycle.get("usage_events", []))
+
+    # CORE CONFIG VALIDATION: session_lifecycle is structural, not observability
+    # Contract: streaming-contract:SessionLifecycle:MUST:1
+    # If idle_events is empty, provider cannot detect session completion → infinite hang
+    # This is fail-fast at load time, not silent degradation
+    if not idle_event_types:
+        raise ConfigurationError(
+            "session_lifecycle.idle_events is empty or missing in events.yaml. "
+            "Provider cannot detect session completion without this configuration. "
+            "Expected: ['session.idle', 'idle'] or similar.",
+            provider="github-copilot",
+        )
+
     # Validate no overlap between BRIDGE, CONSUME, and DROP categories
     # Contract: event-vocabulary:Classification:MUST:1
     # Each event type has exactly one classification
@@ -448,6 +482,9 @@ def _load_event_config_cached(config_path_str: str) -> EventConfig:
         content_event_types=content_event_types,
         text_content_types=text_content_types,
         thinking_content_types=thinking_content_types,
+        idle_event_types=idle_event_types,
+        error_event_types=error_event_types,
+        usage_event_types=usage_event_types,
     )
 
 
@@ -461,7 +498,16 @@ def load_event_config(config_path: str | Path | None = None) -> EventConfig:
         config_path = str(Path(__file__).parent / "config" / "events.yaml")
     else:
         config_path = str(config_path)
-    return _load_event_config_cached(config_path)
+    config = _load_event_config_cached(config_path)
+    # DEBUG: Log config loading for diagnostics
+    logger.debug(
+        "[EVENT_CONFIG] Loaded from %s: idle_events=%s, error_events=%s, usage_events=%s",
+        config_path,
+        config.idle_event_types,
+        config.error_event_types,
+        config.usage_event_types,
+    )
+    return config
 
 
 def _matches_pattern(event_type: str, patterns: list[str]) -> bool:
@@ -477,7 +523,7 @@ def classify_event(sdk_event_type: str, config: EventConfig) -> EventClassificat
         return EventClassification.CONSUME
     if _matches_pattern(sdk_event_type, config.drop_patterns):
         return EventClassification.DROP
-    logger.warning(f"Unknown SDK event type: {sdk_event_type}")
+    logger.warning("Unknown SDK event type: %s", sdk_event_type)
     return EventClassification.DROP
 
 

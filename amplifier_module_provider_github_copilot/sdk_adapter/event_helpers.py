@@ -7,11 +7,16 @@ Contract: contracts/sdk-boundary.md
 These helpers handle two SDK event shapes:
 - Dict events: {"type": "session.idle"}  (used in tests)
 - Object events: event.type.value or str(event.type)  (real SDK)
+
+Three-Medium Architecture: Event type sets loaded from events.yaml session_lifecycle.
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Set
 
 
 def extract_event_type(sdk_event: Any) -> str | None:
@@ -35,11 +40,16 @@ def extract_event_type(sdk_event: Any) -> str | None:
     return str(event_type)
 
 
-def is_idle_event(event_type: str | None) -> bool:
+def is_idle_event(event_type: str | None, *, idle_events: Set[str] | None = None) -> bool:
     """Check if event signals session idle.
 
-    SDK uses "session.idle", tests may use "SESSION_IDLE".
+    SDK uses "session.idle", tests may use "idle".
     Per contracts/event-vocabulary.md: session.idle -> TURN_COMPLETE
+
+    Args:
+        event_type: The event type string to check
+        idle_events: Optional set of idle event types (from EventConfig.idle_event_types).
+                     If not provided, uses fallback set for backward compatibility.
 
     IMPORTANT: Uses explicit set matching, NOT substring matching.
     Substring matching would misclassify "session.idle_timeout" as idle.
@@ -48,18 +58,23 @@ def is_idle_event(event_type: str | None) -> bool:
     if event_type is None:
         return False
     type_lower = event_type.lower()
-    # Explicit set of valid idle event types (exact match only)
-    # SDK format: "session.idle" (dot-separated)
-    # Config format: "session_idle" (underscore)
-    # Domain format: "SESSION_IDLE" (uppercase, lowered by comparison)
-    idle_events = {"session.idle", "session_idle"}
-    return type_lower in idle_events
+    # Use provided set or fallback (Three-Medium: prefer caller-provided YAML-backed set)
+    # Note: 'if idle_events' checks for both None AND empty set - empty set must fallback
+    if idle_events:
+        return type_lower in {e.lower() for e in idle_events}
+    # Fallback for backward compatibility (matches events.yaml session_lifecycle.idle_events)
+    return type_lower in {"session.idle", "session_idle", "idle"}
 
 
-def is_error_event(event_type: str | None) -> bool:
+def is_error_event(event_type: str | None, *, error_events: Set[str] | None = None) -> bool:
     """Check if event signals an error.
 
     Handles various error event formats.
+
+    Args:
+        event_type: The event type string to check
+        error_events: Optional set of error event types (from EventConfig.error_event_types).
+                      If not provided, uses fallback set for backward compatibility.
 
     IMPORTANT: Uses explicit set matching, NOT substring matching.
     Substring matching would misclassify "tool_error_recovered" as error.
@@ -68,9 +83,12 @@ def is_error_event(event_type: str | None) -> bool:
     if event_type is None:
         return False
     type_lower = event_type.lower()
-    # Explicit set of valid error event types (exact match only)
-    error_events = {"error", "session.error", "session_error"}
-    return type_lower in error_events
+    # Use provided set or fallback (Three-Medium: prefer caller-provided YAML-backed set)
+    # Note: 'if error_events' checks for both None AND empty set - empty set must fallback
+    if error_events:
+        return type_lower in {e.lower() for e in error_events}
+    # Fallback for backward compatibility (matches events.yaml session_lifecycle.error_events)
+    return type_lower in {"error", "session.error", "session_error", "sdk_error"}
 
 
 def is_assistant_message(event_type: str | None) -> bool:
@@ -85,6 +103,73 @@ def is_assistant_message(event_type: str | None) -> bool:
     # SDK format: "assistant.message"
     # Legacy format: "assistant_message", "ASSISTANT_MESSAGE"
     return "assistant" in type_lower and "message" in type_lower and "delta" not in type_lower
+
+
+def is_usage_event(event_type: str | None, *, usage_events: Set[str] | None = None) -> bool:
+    """Check if event contains usage data (token counts).
+
+    SDK sends assistant.usage event with input_tokens and output_tokens.
+    This event may arrive AFTER session.idle, causing race conditions
+    if we rely solely on queue draining.
+
+    Args:
+        event_type: The event type string to check
+        usage_events: Optional set of usage event types (from EventConfig.usage_event_types).
+                      If not provided, uses fallback set for backward compatibility.
+
+    Contract: streaming-contract:usage:MUST:1
+    """
+    if event_type is None:
+        return False
+    type_lower = event_type.lower()
+    # Use provided set or fallback (Three-Medium: prefer caller-provided YAML-backed set)
+    # Note: 'if usage_events' checks for both None AND empty set - empty set must fallback
+    if usage_events:
+        return type_lower in {e.lower() for e in usage_events}
+    # Fallback for backward compatibility (matches events.yaml session_lifecycle.usage_events)
+    return type_lower in {"assistant.usage", "usage_update"}
+
+
+def extract_usage_data(sdk_event: Any) -> dict[str, int] | None:
+    """Extract usage data (input_tokens, output_tokens) from SDK event.
+
+    Args:
+        sdk_event: SDK event (dict or object with .data attribute)
+
+    Returns:
+        Dict with input_tokens and output_tokens, or None if not a usage event.
+
+    Note:
+        This function handles dynamic SDK data with unknown structure.
+        Type ignores are used for dict access on dynamic data.
+    """
+    # Handle dict events (tests)
+    if isinstance(sdk_event, dict):
+        typed_dict = cast(dict[str, Any], sdk_event)
+        data = typed_dict.get("data", typed_dict)
+        if isinstance(data, dict):
+            typed_data = cast(dict[str, Any], data)
+            input_tokens: Any = typed_data.get("input_tokens")
+            output_tokens: Any = typed_data.get("output_tokens")
+            if input_tokens is not None or output_tokens is not None:
+                return {
+                    "input_tokens": int(input_tokens) if input_tokens else 0,
+                    "output_tokens": int(output_tokens) if output_tokens else 0,
+                }
+        return None
+
+    # Handle object events (real SDK)
+    data = getattr(sdk_event, "data", None)
+    if data is not None:
+        input_tokens = getattr(data, "input_tokens", None)
+        output_tokens = getattr(data, "output_tokens", None)
+        if input_tokens is not None or output_tokens is not None:
+            return {
+                "input_tokens": int(input_tokens) if input_tokens else 0,
+                "output_tokens": int(output_tokens) if output_tokens else 0,
+            }
+
+    return None
 
 
 def extract_tool_requests(sdk_event: Any) -> list[Any]:

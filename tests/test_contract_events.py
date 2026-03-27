@@ -33,14 +33,14 @@ class TestEventConfigCompliance:
     def test_events_yaml_valid_yaml(self) -> None:
         """Config file must be valid YAML."""
         config_path = self._get_config_path()
-        content = yaml.safe_load(config_path.read_text())
+        content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         assert content is not None
 
     def test_has_bridge_events(self) -> None:
         """event-vocabulary:Bridge:MUST:1 — Must define BRIDGE events."""
         config_path = self._get_config_path()
-        content = yaml.safe_load(config_path.read_text())
+        content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         # Check for bridge classification
         has_bridge = (
@@ -62,7 +62,7 @@ class TestEventConfigCompliance:
     def test_has_drop_events(self) -> None:
         """event-vocabulary:Drop:MUST:1 — Must define DROP events."""
         config_path = self._get_config_path()
-        content = yaml.safe_load(config_path.read_text())
+        content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         if isinstance(content.get("event_classifications"), dict):
             has_drop = "drop" in content["event_classifications"]
@@ -71,7 +71,7 @@ class TestEventConfigCompliance:
     def test_has_finish_reason_map(self) -> None:
         """event-vocabulary:FinishReason:MUST:1 — Must have finish_reason mapping."""
         config_path = self._get_config_path()
-        content = yaml.safe_load(config_path.read_text())
+        content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         assert "finish_reason_map" in content, "Must have finish_reason_map"
 

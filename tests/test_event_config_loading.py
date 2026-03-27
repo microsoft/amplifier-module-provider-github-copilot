@@ -41,6 +41,11 @@ class TestDefensiveEventConfigLoading:
                 "drop": ["heartbeat"],
             },
             "finish_reason_map": {"stop": "STOP"},
+            "session_lifecycle": {
+                "idle_events": ["session.idle"],
+                "error_events": [],
+                "usage_events": [],
+            },
         }
 
         with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:

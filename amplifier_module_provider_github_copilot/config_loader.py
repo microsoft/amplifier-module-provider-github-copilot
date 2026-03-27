@@ -25,27 +25,9 @@ import yaml
 if TYPE_CHECKING:
     pass
 
-# Import ConfigurationError from amplifier_core at runtime
-# (amplifier_core is provided by Amplifier runtime, not installed as dependency)
-try:
-    from amplifier_core.llm_errors import (
-        ConfigurationError,  # pyright: ignore[reportAssignmentType]
-    )
-except ImportError:
-    # Fallback for standalone testing without amplifier_core
-    class ConfigurationError(Exception):  # type: ignore[no-redef]
-        """Fallback ConfigurationError when amplifier_core unavailable."""
-
-        def __init__(
-            self,
-            message: str,
-            *,
-            provider: str = "github-copilot",
-            **kwargs: object,
-        ) -> None:
-            super().__init__(message)
-            self.provider = provider
-
+# Single import point for ConfigurationError (Three-Medium Architecture)
+# Contract: sdk-boundary:Membrane:MUST:1 — Single import point for runtime dependencies
+from amplifier_module_provider_github_copilot._compat import ConfigurationError
 
 # Three-Medium Architecture: All policy values come from YAML. No Python fallbacks.
 # If YAML is missing required keys, fail fast with ConfigurationError.
@@ -64,6 +46,9 @@ __all__ = [
     "calculate_backoff_delay",
     "is_retryable_error",
     "get_retry_after",
+    # Model fallbacks (moved here to avoid circular import A-03)
+    "get_default_context_window",
+    "get_default_max_output_tokens",
 ]
 
 
@@ -406,10 +391,14 @@ class ToolCaptureConfig:
 
 
 @dataclass
-class SessionConfig:
-    """Session management policy from config/sdk_protection.yaml.
+class SessionProtectionConfig:
+    """Session protection policy from config/sdk_protection.yaml.
 
     Contract: sdk-protection:Session:MUST:3,4
+
+    Note: Named SessionProtectionConfig (not SessionConfig) to avoid collision
+    with sdk_adapter.types.SessionConfig which configures SDK session creation.
+    This class configures session lifecycle protection (abort, idle timeouts).
     """
 
     explicit_abort: bool
@@ -425,7 +414,7 @@ class SdkProtectionConfig:
     """
 
     tool_capture: ToolCaptureConfig
-    session: SessionConfig
+    session: SessionProtectionConfig
 
 
 @functools.lru_cache(maxsize=1)
@@ -496,7 +485,7 @@ def load_sdk_protection_config() -> SdkProtectionConfig:
         log_capture_events=tc["log_capture_events"],
     )
 
-    session = SessionConfig(
+    session = SessionProtectionConfig(
         explicit_abort=sess["explicit_abort"],
         abort_timeout_seconds=float(sess["abort_timeout_seconds"]),
         idle_timeout_seconds=float(sess["idle_timeout_seconds"]),
@@ -506,3 +495,85 @@ def load_sdk_protection_config() -> SdkProtectionConfig:
         tool_capture=tool_capture,
         session=session,
     )
+
+
+# =============================================================================
+# Model Fallback Values (moved from models.py to avoid circular import A-03)
+# Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config
+# =============================================================================
+
+
+@functools.lru_cache(maxsize=1)
+def _load_model_fallback_values() -> dict[str, int]:
+    """Load fallback values from config/models.yaml.
+
+    Three-Medium Architecture: Python loads policy from YAML.
+    Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config.
+
+    Returns:
+        Dict with context_window and max_output_tokens from YAML.
+
+    Raises:
+        ConfigurationError: If models.yaml is missing or lacks required keys.
+    """
+    import importlib.resources
+
+    try:
+        files = importlib.resources.files("amplifier_module_provider_github_copilot.config")
+        content = (files / "models.yaml").read_text()
+    except (FileNotFoundError, TypeError) as exc:
+        raise ConfigurationError(
+            "models.yaml not found in config/. "
+            "Three-Medium Architecture: YAML is authoritative for fallback values."
+        ) from exc
+
+    try:
+        data = yaml.safe_load(content)
+    except yaml.YAMLError as exc:
+        raise ConfigurationError(f"Failed to parse models.yaml: {exc}") from exc
+
+    if data is None or "fallbacks" not in data:
+        raise ConfigurationError(
+            "models.yaml must contain 'fallbacks' section with context_window "
+            "and max_output_tokens. "
+            "Three-Medium Architecture: YAML is authoritative for policy values."
+        )
+
+    fallbacks = data["fallbacks"]
+    required_keys = ["context_window", "max_output_tokens"]
+    missing = [k for k in required_keys if k not in fallbacks]
+    if missing:
+        raise ConfigurationError(
+            f"models.yaml fallbacks section missing required keys: {missing}. "
+            "Three-Medium Architecture: YAML is authoritative for policy values."
+        )
+
+    return fallbacks
+
+
+def get_default_context_window() -> int:
+    """Get default context window from YAML config.
+
+    Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config.
+
+    Returns:
+        Default context window value from models.yaml.
+
+    Raises:
+        ConfigurationError: If models.yaml is missing or lacks required keys.
+    """
+    return _load_model_fallback_values()["context_window"]
+
+
+def get_default_max_output_tokens() -> int:
+    """Get default max output tokens from YAML config.
+
+    Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config.
+
+    Returns:
+        Default max_output_tokens value from models.yaml.
+
+    Raises:
+        ConfigurationError: If models.yaml is missing or lacks required keys.
+    """
+    return _load_model_fallback_values()["max_output_tokens"]

@@ -19,12 +19,13 @@ class TestFourWayGate:
     def _get_contract_events(self) -> set[str]:
         """Parse domain events from contracts/event-vocabulary.md."""
         contract_path = Path(__file__).parent.parent / "contracts" / "event-vocabulary.md"
-        content = contract_path.read_text()
+        content = contract_path.read_text(encoding="utf-8")
 
         # Only scan the "Domain Events" table section — stop before finish reason mapping
         # to avoid capturing finish reason values (STOP, TOOL_USE, etc.)
+        # Flexible regex: "Five" or "Six" to accommodate THINKING_DELTA lifecycle
         domain_section_match = re.search(
-            r"## The Six Domain Events.*?(?=^##|\Z)", content, re.DOTALL | re.MULTILINE
+            r"## The (?:Five|Six) Domain Events.*?(?=^##|\Z)", content, re.DOTALL | re.MULTILINE
         )
         if not domain_section_match:
             return set()

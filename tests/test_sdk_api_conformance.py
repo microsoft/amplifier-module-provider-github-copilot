@@ -30,7 +30,7 @@ class TestSdkMethodUsage:
         violations: list[str] = []
 
         for py_file in src_dir.rglob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
             if forbidden_pattern in content:
                 for i, line in enumerate(content.split("\n"), 1):
                     stripped = line.strip()
@@ -57,7 +57,7 @@ class TestSdkMethodUsage:
         violations: list[str] = []
 
         for py_file in src_dir.rglob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
             if forbidden_pattern in content:
                 # Find line numbers, excluding comments and docstrings
                 in_docstring = False
@@ -131,7 +131,7 @@ class TestStreamingPatternUsage:
         from pathlib import Path
 
         provider_py = Path("amplifier_module_provider_github_copilot/provider.py")
-        content = provider_py.read_text()
+        content = provider_py.read_text(encoding="utf-8")
 
         # Check for send() method (not send_message)
         # The implementation should use sdk_session.send() or similar
@@ -154,7 +154,7 @@ class TestSessionConfigShape:
         from pathlib import Path
 
         client_py = Path("amplifier_module_provider_github_copilot/sdk_adapter/client.py")
-        content = client_py.read_text()
+        content = client_py.read_text(encoding="utf-8")
 
         # Session config should include hooks for deny hook
         # Look for session_config["hooks"] or session_config.update({"hooks": ...})
@@ -185,7 +185,7 @@ class TestNoHallucinatedMethods:
         violations: list[str] = []
 
         for py_file in src_dir.rglob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
             if ".send_message(" in content:
                 for i, line in enumerate(content.split("\n"), 1):
                     if ".send_message(" in line and not line.strip().startswith("#"):

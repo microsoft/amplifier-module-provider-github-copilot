@@ -24,7 +24,7 @@ class TestDeferredImportsRemoved:
         if not PROVIDER_FILE.exists():
             pytest.skip("provider.py not found")
 
-        content = PROVIDER_FILE.read_text()
+        content = PROVIDER_FILE.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
         deferred_imports: list[str] = []
@@ -57,7 +57,7 @@ class TestDeferredImportsRemoved:
         if not PROVIDER_FILE.exists():
             pytest.skip("provider.py not found")
 
-        content = PROVIDER_FILE.read_text()
+        content = PROVIDER_FILE.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
         # Find top-level imports (not inside functions)

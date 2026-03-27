@@ -42,17 +42,20 @@ These constraints are extracted from GOLDEN_VISION_V2.md and are **NEVER configu
 
 ### 4. SDK Built-in Tool Handling
 
-The SDK exposes built-in tools (bash, view, edit, etc.) to the LLM by default.
-These tools crash the Copilot CLI when called because they are handled by
+The SDK exposes built-in tools (list_agents, bash, view, edit, etc.) to the LLM by default.
+These tools crash or cause infinite loops when called because they are handled by
 Node.js runtime code that expects a different calling convention.
 
-- **MUST NOT:** Set `available_tools=[]` (SDK treats this as whitelist—empty list disables ALL tools)
+- **MUST:** Set `available_tools` to the list of Amplifier tool names (whitelist strategy)
 - **MUST:** Set `overrides_built_in_tool=True` on all user tools (excludes SDK built-ins with same name)
+- **MUST NOT:** Set `available_tools=[]` (empty list disables ALL tools including Amplifier's)
+- **MUST NOT:** Omit `available_tools` (allows SDK built-ins like `list_agents` to appear)
 
-This is the THIRD line of defense in the Deny+Destroy pattern:
+This is FOUR lines of defense in the Deny+Destroy pattern:
 1. **on_permission_request** → deny all permission requests (first barrier)
 2. **preToolUse hook** → deny all tool execution (second barrier)
-3. **overrides_built_in_tool=True** → user tools override conflicting SDK built-ins (naming conflict prevention)
+3. **available_tools whitelist** → only Amplifier tools visible to model (third barrier)
+4. **overrides_built_in_tool=True** → user tools override conflicting SDK built-ins (naming conflict prevention)
 
 ---
 
@@ -115,8 +118,15 @@ From GOLDEN_VISION_V2.md:
 
 | Anchor | Clause |
 |--------|--------|
-| `deny-destroy:ToolSuppression:MUST:1` | available_tools NOT set in session config |
+| `deny-destroy:ToolSuppression:MUST:1` | available_tools set to Amplifier tool names (whitelist) |
 | `deny-destroy:ToolSuppression:MUST:2` | overrides_built_in_tool=True (see sdk-boundary:ToolForwarding:MUST:2) |
+
+### Whitelist
+
+| Anchor | Clause |
+|--------|--------|
+| `deny-destroy:Whitelist:MUST:1` | available_tools = list of Amplifier tool names |
+| `deny-destroy:Whitelist:MUST:2` | SDK built-ins (list_agents, bash, edit) not in whitelist |
 
 ### PermissionRequest
 

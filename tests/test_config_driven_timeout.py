@@ -24,7 +24,7 @@ class TestModuleLevelCompleteTimeout:
             / "amplifier_module_provider_github_copilot"
             / "provider.py"
         )
-        content = provider_path.read_text()
+        content = provider_path.read_text(encoding="utf-8")
 
         # Check for hardcoded 120.0 timeout patterns
         assert "timeout=120.0" not in content, (
@@ -43,7 +43,7 @@ class TestModuleLevelCompleteTimeout:
             / "amplifier_module_provider_github_copilot"
             / "provider.py"
         )
-        content = provider_path.read_text()
+        content = provider_path.read_text(encoding="utf-8")
 
         # Find that load_models_config is used (either directly or via _load_models_config alias)
         # The provider uses load_models_config() in __init__ and exposes _load_models_config alias

@@ -119,7 +119,11 @@ class TestSdkProtectionConfigValues:
         assert 1.0 <= config.session.abort_timeout_seconds <= 60.0
 
     def test_idle_timeout_is_reasonable(self) -> None:
-        """Idle timeout is reasonable as safety bound.
+        """Idle timeout is reasonable for abort/cleanup operations.
+
+        NOTE: This config is NOT used for main SDK wait (uses caller's timeout).
+        SDK API calls can take 60+ seconds for complex operations like delegation.
+        This value is retained for abort/cleanup operations only.
 
         Contract: sdk-protection:Session:SHOULD:2
         """

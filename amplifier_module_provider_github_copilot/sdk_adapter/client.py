@@ -157,9 +157,14 @@ class CopilotClientWrapper:
     def is_healthy(self) -> bool:
         """Check if the client is healthy and usable.
 
+        Note: This performs a lightweight check without network probes.
+        A True return indicates the client is not stopped and can attempt
+        SDK operations. Actual network connectivity is verified during
+        session creation, not here.
+
         Returns:
-            True if the client is usable (not stopped, no owned client issues).
-            False if the client has been stopped or is otherwise unhealthy.
+            True if the client is usable (not stopped).
+            False if the client has been explicitly stopped.
 
         Contract: sdk-boundary:Config:MUST:1
 
@@ -281,11 +286,12 @@ class CopilotClientWrapper:
 
         session_config: dict[str, Any] = {}
         # Contract: deny-destroy:ToolSuppression:MUST:1
-        # NOTE: Do NOT use available_tools=[] here!
-        # The SDK treats available_tools as a whitelist: empty list = no tools visible.
-        # Instead, use overrides_built_in_tool=True on user tools to override built-ins.
+        # WHITELIST APPROACH: Set available_tools to Amplifier tool names only.
+        # This blocks ALL SDK built-ins (list_agents, bash, edit, etc.) proactively.
+        # The model never sees them, so it can't call them.
         #
-        # Built-ins that share names with user tools are excluded via overrides_built_in_tool=True.
+        # Also set overrides_built_in_tool=True on tools (in convert_tools_for_sdk)
+        # to handle name conflicts if an Amplifier tool shares a name with a built-in.
         if model:
             session_config["model"] = model
         if system_message:
@@ -296,8 +302,20 @@ class CopilotClientWrapper:
         if tools:
             from .types import convert_tools_for_sdk
 
-            session_config["tools"] = convert_tools_for_sdk(tools)
+            sdk_tools = convert_tools_for_sdk(tools)
+            session_config["tools"] = sdk_tools
+
+            # WHITELIST: Only Amplifier tools visible to model
+            # SDK built-ins (list_agents, bash, edit, etc.) are blocked because
+            # they're not in the whitelist. This is Layer 1 of defense-in-depth.
+            tool_names = [t.name for t in sdk_tools]
+            session_config["available_tools"] = tool_names
+
             logger.debug("[CLIENT] Forwarding %d tool(s) to SDK session", len(tools))
+            logger.debug("[CLIENT] available_tools WHITELIST set: %s", tool_names)
+            logger.debug(
+                "[CLIENT] SDK built-ins (list_agents, bash, edit, etc.) blocked by whitelist"
+            )
         # Streaming MUST always be enabled for event-based tool capture
         session_config["streaming"] = True
         # SDK v0.2.0: on_permission_request passed to create_session (not client constructor)

@@ -33,6 +33,10 @@ event_classifications:
   consume:
     - assistant.message_delta  # OVERLAP -- same as bridge entry
   drop: []
+session_lifecycle:
+  idle_events: [session.idle]
+  error_events: []
+  usage_events: []
 """
         )
 
@@ -59,6 +63,10 @@ event_classifications:
   consume: []
   drop:
     - error  # OVERLAP -- same as bridge entry
+session_lifecycle:
+  idle_events: [session.idle]
+  error_events: []
+  usage_events: []
 """
         )
 
@@ -81,6 +89,10 @@ event_classifications:
     - session_created
   drop:
     - session_created  # OVERLAP -- same as consume entry
+session_lifecycle:
+  idle_events: [session.idle]
+  error_events: []
+  usage_events: []
 """
         )
 
@@ -104,6 +116,10 @@ event_classifications:
   consume: []
   drop:
     - tool_result_*  # WILDCARD -- matches tool_result_success in bridge
+session_lifecycle:
+  idle_events: [session.idle]
+  error_events: []
+  usage_events: []
 """
         )
 
@@ -133,6 +149,10 @@ event_classifications:
   drop:
     - heartbeat
     - debug_*
+session_lifecycle:
+  idle_events: [session.idle]
+  error_events: []
+  usage_events: []
 """
         )
 
@@ -171,6 +191,10 @@ event_classifications:
   consume:
     - usage_update
   drop: []
+session_lifecycle:
+  idle_events: [session.idle]
+  error_events: []
+  usage_events: []
 """
         )
 
@@ -244,6 +268,63 @@ class TestEventPredicateExactMatching:
         assert is_error_event("error_recovery") is False
         assert is_error_event("error_cleared") is False
         assert is_error_event("session.error_handled") is False
+
+
+class TestEmptySetFallback:
+    """Tests for empty set fallback behavior in event helpers.
+
+    DEFENSIVE SAFETY NET - NOT PRIMARY BEHAVIOR.
+
+    Primary behavior: load_event_config() raises ConfigurationError if
+    session_lifecycle.idle_events is empty (fail-fast at load time).
+
+    These fallbacks exist for defense in depth:
+    - If config validation is somehow bypassed
+    - If tests call helpers directly without config
+    - Historical edge cases
+
+    Bug discovered: Session hung forever because is_idle_event(evt, idle_events=set())
+    used `if idle_events is not None` which is True for empty set, causing it to check
+    `type_lower in set()` which is always False => idle never detected => infinite hang.
+
+    Fix: Changed to `if idle_events:` which is False for empty set, triggering fallback.
+    Prevention: Added fail-fast validation in load_event_config() at load time.
+    """
+
+    def test_is_idle_event_empty_set_uses_fallback(self) -> None:
+        """is_idle_event MUST use fallback when empty set is passed.
+
+        Critical regression test: If EventConfig has empty idle_event_types,
+        the helper must fall back to hardcoded defaults, not hang forever.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            is_idle_event,
+        )
+
+        # Empty set MUST fall back to hardcoded defaults
+        assert is_idle_event("session.idle", idle_events=set()) is True
+        assert is_idle_event("idle", idle_events=set()) is True
+        assert is_idle_event("session_idle", idle_events=set()) is True
+
+    def test_is_error_event_empty_set_uses_fallback(self) -> None:
+        """is_error_event MUST use fallback when empty set is passed."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            is_error_event,
+        )
+
+        # Empty set MUST fall back to hardcoded defaults
+        assert is_error_event("session.error", error_events=set()) is True
+        assert is_error_event("error", error_events=set()) is True
+
+    def test_is_usage_event_empty_set_uses_fallback(self) -> None:
+        """is_usage_event MUST use fallback when empty set is passed."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            is_usage_event,
+        )
+
+        # Empty set MUST fall back to hardcoded defaults
+        assert is_usage_event("assistant.usage", usage_events=set()) is True
+        assert is_usage_event("usage_update", usage_events=set()) is True
 
 
 class TestEventHelpersEdgeCases:
@@ -395,3 +476,106 @@ class TestEventHelpersEdgeCases:
         # Should NOT match (delta events)
         assert is_assistant_message("assistant.message_delta") is False
         assert is_assistant_message("ASSISTANT_MESSAGE_DELTA") is False
+
+
+class TestUsageEventHelpers:
+    """Tests for usage event helpers.
+
+    Contract: streaming-contract:usage:MUST:1 — usage events must be captured.
+    Bug: Session 65131f78 showed zero usage when SDK sent assistant.usage after session.idle.
+    """
+
+    def test_is_usage_event_matches_assistant_usage(self) -> None:
+        """is_usage_event MUST match assistant.usage."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            is_usage_event,
+        )
+
+        # These MUST match
+        assert is_usage_event("assistant.usage") is True
+        assert is_usage_event("usage_update") is True  # Legacy format
+        assert is_usage_event("ASSISTANT.USAGE") is True  # Case insensitive
+
+    def test_is_usage_event_returns_false_for_none(self) -> None:
+        """is_usage_event MUST return False for None input."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            is_usage_event,
+        )
+
+        assert is_usage_event(None) is False
+
+    def test_is_usage_event_does_not_match_unrelated(self) -> None:
+        """is_usage_event MUST NOT match unrelated events."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            is_usage_event,
+        )
+
+        assert is_usage_event("session.idle") is False
+        assert is_usage_event("assistant.message") is False
+        assert is_usage_event("usage_report") is False  # Different event
+
+    def test_extract_usage_data_from_dict_event(self) -> None:
+        """extract_usage_data extracts usage from dict events."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {"data": {"input_tokens": 100, "output_tokens": 50}}
+        result = extract_usage_data(event)
+        assert result is not None
+        assert result["input_tokens"] == 100
+        assert result["output_tokens"] == 50
+
+    def test_extract_usage_data_from_object_event(self) -> None:
+        """extract_usage_data extracts usage from object events."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        class MockData:
+            input_tokens = 200
+            output_tokens = 100
+
+        class MockEvent:
+            data = MockData()
+
+        result = extract_usage_data(MockEvent())
+        assert result is not None
+        assert result["input_tokens"] == 200
+        assert result["output_tokens"] == 100
+
+    def test_extract_usage_data_returns_none_for_missing_data(self) -> None:
+        """extract_usage_data returns None when no usage data present."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        # Dict without usage fields
+        assert extract_usage_data({"data": {}}) is None
+        assert extract_usage_data({"data": {"other": "field"}}) is None
+
+        # Object without usage fields
+        class MockEvent:
+            data = None
+
+        assert extract_usage_data(MockEvent()) is None
+
+    def test_extract_usage_data_handles_partial_usage(self) -> None:
+        """extract_usage_data handles events with only one token field."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        # Only input_tokens
+        event = {"data": {"input_tokens": 100}}
+        result = extract_usage_data(event)
+        assert result is not None
+        assert result["input_tokens"] == 100
+        assert result["output_tokens"] == 0  # Defaults to 0
+
+        # Only output_tokens
+        event2 = {"data": {"output_tokens": 50}}
+        result2 = extract_usage_data(event2)
+        assert result2 is not None
+        assert result2["input_tokens"] == 0  # Defaults to 0
+        assert result2["output_tokens"] == 50

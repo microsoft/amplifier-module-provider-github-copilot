@@ -313,8 +313,9 @@ class TestToolForwardingContract:
 
         Contract: sdk-boundary:ToolForwarding:MUST:4
 
-        Note: available_tools is NOT set (Bug #1 fix) to avoid SDK whitelist
-        behavior that would prevent the model from suggesting any tools.
+        available_tools IS set to Amplifier tool names to whitelist only those
+        tools, preventing SDK built-in tools (like list_agents) from being
+        visible to the model.
         """
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
@@ -327,8 +328,11 @@ class TestToolForwardingContract:
             pass
 
         config = mock_client.last_config
-        # available_tools should NOT be set (Bug #1 fix)
-        assert "available_tools" not in config, "available_tools MUST NOT be set"
+        # available_tools SHOULD be set to just the Amplifier tool names
+        assert "available_tools" in config, "available_tools MUST be set to whitelist"
+        assert config["available_tools"] == ["bash"], (
+            "available_tools must equal Amplifier tool names"
+        )
         # tools should be custom tools (converted to SDK-compatible format)
         sdk_tools = config["tools"]
         assert len(sdk_tools) == len(tools), "All custom tools MUST be forwarded"

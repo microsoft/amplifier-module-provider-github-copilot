@@ -60,7 +60,7 @@ class TestDenyHookNotConfigurable:
         assert config_files, f"No config files found in {config_dir}"
 
         for config_file in config_files:
-            content = yaml.safe_load(config_file.read_text())
+            content = yaml.safe_load(config_file.read_text(encoding="utf-8"))
             if content is None:
                 continue
 
@@ -110,7 +110,7 @@ class TestArchitectureFitness:
                 continue
 
             try:
-                tree = ast.parse(py_file.read_text())
+                tree = ast.parse(py_file.read_text(encoding="utf-8"))
             except SyntaxError:
                 continue
 
@@ -147,10 +147,14 @@ class TestArchitectureFitness:
 
 
 class TestSessionEphemerality:
-    """deny-destroy:Ephemeral:MUST:1,2,3"""
+    """Tests for session config structure.
+
+    Note: Actual ephemeral session behavior (MUST:1-3) is tested in test_behaviors.py.
+    This class verifies supporting types exist.
+    """
 
     def test_session_config_exists(self) -> None:
-        """deny-destroy:Ephemeral:MUST:1 - SessionConfig type exists."""
+        """SessionConfig type exists for ephemeral session configuration."""
         from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionConfig
 
         # SessionConfig should be a valid type
@@ -179,10 +183,15 @@ def _is_sdk_import(module_name: str) -> bool:
     """Check if module name is a DIRECT GitHub Copilot SDK import.
 
     Imports from our sdk_adapter/ membrane are ALLOWED - that's the correct pattern.
+    Imports from our own package (amplifier_module_provider_github_copilot) are ALLOWED.
     Only flag direct SDK imports like `import copilot` or `from copilot import X`.
     """
     # Allow imports from our own sdk_adapter (that's the membrane)
     if "sdk_adapter" in module_name:
+        return False
+
+    # Allow imports from our own package (includes "copilot" in name but is not SDK)
+    if module_name.startswith("amplifier_module_provider_github_copilot"):
         return False
 
     # These are the actual SDK package names that should only appear in sdk_adapter/

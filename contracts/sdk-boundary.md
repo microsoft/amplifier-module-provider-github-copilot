@@ -248,7 +248,7 @@ The SDK has **three separate parameters** for tool configuration:
 
 1. **MUST** forward `ChatRequest.tools` to SDK session via `session_config["tools"]`
 2. **MUST** convert Amplifier `ToolSpec` objects to SDK-compatible objects with required attributes
-3. **MUST NOT** set `available_tools` parameter (per deny-destroy:ToolSuppression:MUST:1) — empty list disables ALL tools including user tools
+3. **MUST** set `available_tools` to the list of Amplifier tool names (whitelist strategy per deny-destroy:Whitelist:MUST:1)
 4. **MUST** set `overrides_built_in_tool=True` on all user tools (per deny-destroy:ToolSuppression:MUST:2)
 5. **MUST NOT** confuse `tools` (custom definitions) with `available_tools` (built-in allowlist)
 
@@ -350,7 +350,7 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 
 ### MUST Constraints
 
-1. **MUST** set `available_tools: []` to disable SDK built-in tools
+1. **MUST** set `available_tools` to the list of Amplifier tool names (whitelist)
 2. **MUST** use `system_message.mode: "replace"` when system_message is provided
 3. **MUST** set `on_permission_request` handler on every session
 4. **MUST** set `streaming: true` for event-based tool capture
@@ -359,7 +359,7 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 
 ### Rationale
 
-- **available_tools=[]**: SDK exposes bash/view/edit by default. These crash the Copilot CLI when called because they expect a different calling convention. Disabling them prevents the LLM from ever requesting them.
+- **available_tools=<tool_names>**: SDK exposes built-in tools (list_agents, bash, view, edit) by default. Setting `available_tools` to the list of Amplifier tool names creates a whitelist—only those tools are visible to the model. This prevents SDK built-ins from appearing in completions. Note: `available_tools=[]` would disable ALL tools including Amplifier's, so we use a non-empty whitelist.
 - **mode="replace"**: With "append", SDK injects "You are GitHub Copilot CLI..." before our system message. With "replace", our bundle persona takes precedence.
 - **on_permission_request**: SDK v0.1.33+ requires this handler. We deny all permission requests as the first line of defense.
 - **streaming=true**: Required for event-based tool capture. Non-streaming mode cannot capture tool calls.

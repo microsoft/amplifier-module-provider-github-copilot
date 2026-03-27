@@ -183,7 +183,11 @@ class TestE2ECompletionWithRealisticData:
         ]
 
         @asynccontextmanager
-        async def session_ctx(model: str, tools: list[dict[str, Any]] | None = None):
+        async def session_ctx(
+            model: str,
+            tools: list[dict[str, Any]] | None = None,
+            system_message: str | None = None,
+        ):
             # Use correct SDK API pattern (send + on)
             mock_session = MagicMock()
             handlers: list[Any] = []

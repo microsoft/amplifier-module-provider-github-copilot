@@ -14,7 +14,6 @@ Type Translation Chain:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,194 +53,38 @@ except ImportError:
 # Contract: behaviors:ConfigLoading:MUST:1 — YAML authoritative, fail-fast on missing
 # =============================================================================
 
-import functools
-import importlib.resources
 
+# Single import point for ConfigurationError (Three-Medium Architecture)
+# Contract: sdk-boundary:Membrane:MUST:1 — Single import point for runtime dependencies
+from amplifier_module_provider_github_copilot._compat import ConfigurationError
 
-class ConfigurationError(Exception):
-    """Raised when required configuration is missing or invalid.
-
-    Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config.
-    """
-
-    pass
-
-
-@functools.lru_cache(maxsize=1)
-def _load_fallback_values() -> dict[str, int]:
-    """Load fallback values from config/models.yaml.
-
-    Three-Medium Architecture: Python loads policy from YAML.
-    Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config.
-
-    Returns:
-        Dict with context_window and max_output_tokens from YAML.
-
-    Raises:
-        ConfigurationError: If models.yaml is missing or lacks required keys.
-    """
-    import yaml
-
-    try:
-        files = importlib.resources.files("amplifier_module_provider_github_copilot.config")
-        content = (files / "models.yaml").read_text()
-    except (FileNotFoundError, TypeError) as exc:
-        raise ConfigurationError(
-            "models.yaml not found in config/. "
-            "Three-Medium Architecture: YAML is authoritative for fallback values."
-        ) from exc
-
-    try:
-        data = yaml.safe_load(content)
-    except yaml.YAMLError as exc:
-        raise ConfigurationError(f"Failed to parse models.yaml: {exc}") from exc
-
-    if data is None or "fallbacks" not in data:
-        raise ConfigurationError(
-            "models.yaml must contain 'fallbacks' section with context_window "
-            "and max_output_tokens. "
-            "Three-Medium Architecture: YAML is authoritative for policy values."
-        )
-
-    fallbacks = data["fallbacks"]
-    required_keys = ["context_window", "max_output_tokens"]
-    missing = [k for k in required_keys if k not in fallbacks]
-    if missing:
-        raise ConfigurationError(
-            f"models.yaml fallbacks section missing required keys: {missing}. "
-            "Three-Medium Architecture: YAML is authoritative for policy values."
-        )
-
-    return fallbacks
-
-
-def get_default_context_window() -> int:
-    """Get default context window from YAML config.
-
-    Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config.
-
-    Returns:
-        Default context window value from models.yaml.
-
-    Raises:
-        ConfigurationError: If models.yaml is missing or lacks required keys.
-    """
-    return _load_fallback_values()["context_window"]
-
-
-def get_default_max_output_tokens() -> int:
-    """Get default max output tokens from YAML config.
-
-    Contract: behaviors:ConfigLoading:MUST:1 — fail-fast on missing config.
-
-    Returns:
-        Default max_output_tokens value from models.yaml.
-
-    Raises:
-        ConfigurationError: If models.yaml is missing or lacks required keys.
-    """
-    return _load_fallback_values()["max_output_tokens"]
-
+# Re-export fallback functions from config_loader for backward compatibility
+# (They were moved there to fix circular import A-03)
+from amplifier_module_provider_github_copilot.config_loader import (
+    get_default_context_window,
+    get_default_max_output_tokens,
+)
 
 # =============================================================================
-# Domain Type: CopilotModelInfo (Isolation Layer)
+# Re-export from sdk_adapter for backward compatibility
+# The actual implementation is now in sdk_adapter/model_translation.py
 # Contract: sdk-boundary:ModelDiscovery:MUST:2
 # =============================================================================
+from .sdk_adapter.model_translation import (  # noqa: E402
+    CopilotModelInfo,
+    sdk_model_to_copilot_model,
+)
 
-
-@dataclass(frozen=True)
-class CopilotModelInfo:
-    """Internal representation between SDK and Amplifier domains.
-
-    Isolates SDK type structure from Amplifier ModelInfo.
-    Enables independent evolution of both interfaces.
-
-    Contract: sdk-boundary:ModelDiscovery:MUST:2
-    - MUST translate SDK ModelInfo to domain CopilotModelInfo (isolation layer)
-
-    Attributes:
-        id: Model identifier (e.g., "claude-opus-4.5")
-        name: Human-readable display name
-        context_window: Maximum context window in tokens
-        max_output_tokens: Maximum output tokens per response
-        supports_vision: Whether the model supports image inputs
-        supports_reasoning_effort: Whether the model supports reasoning effort
-        supported_reasoning_efforts: Tuple of supported reasoning effort levels
-        default_reasoning_effort: Default reasoning effort level
-    """
-
-    id: str
-    name: str
-    context_window: int
-    max_output_tokens: int
-    supports_vision: bool = False
-    supports_reasoning_effort: bool = False
-    supported_reasoning_efforts: tuple[str, ...] = ()
-    default_reasoning_effort: str | None = None
-
-
-# =============================================================================
-# SDK ModelInfo → CopilotModelInfo Translation
-# Contract: sdk-boundary:ModelDiscovery:MUST:2
-# =============================================================================
-
-
-def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
-    """Translate SDK ModelInfo to domain CopilotModelInfo.
-
-    Contract: sdk-boundary:ModelDiscovery:MUST:2
-    - MUST extract context_window from SDK capabilities.limits.max_context_window_tokens
-    - MUST derive max_output_tokens as context_window - max_prompt_tokens
-
-    Args:
-        sdk_model: SDK ModelInfo object (from copilot.types)
-
-    Returns:
-        CopilotModelInfo domain type
-
-    Note:
-        Uses duck-typing for SDK type access (no SDK import outside sdk_adapter/).
-        Fallback values from policy config when SDK returns None.
-    """
-    # Extract capabilities using duck-typing (SDK type structure)
-    capabilities = sdk_model.capabilities
-    limits = capabilities.limits
-    supports = capabilities.supports
-
-    # Extract limits with fallback to policy defaults from YAML
-    # Contract: behaviors:ConfigLoading:MUST:1 — YAML authoritative
-    context_window = limits.max_context_window_tokens
-    max_prompt_tokens = limits.max_prompt_tokens
-
-    if context_window is None:
-        context_window = get_default_context_window()
-
-    # Derive max_output_tokens: context_window - max_prompt_tokens
-    if max_prompt_tokens is not None:
-        max_output_tokens = context_window - max_prompt_tokens
-    else:
-        max_output_tokens = get_default_max_output_tokens()
-
-    # Ensure max_output_tokens is positive (safety check)
-    if max_output_tokens <= 0:
-        max_output_tokens = get_default_max_output_tokens()
-
-    # Extract reasoning effort fields
-    supported_efforts = sdk_model.supported_reasoning_efforts
-    supported_reasoning_efforts: tuple[str, ...] = ()
-    if supported_efforts is not None:
-        supported_reasoning_efforts = tuple(supported_efforts)
-
-    return CopilotModelInfo(
-        id=sdk_model.id,
-        name=sdk_model.name,
-        context_window=context_window,
-        max_output_tokens=max_output_tokens,
-        supports_vision=supports.vision,
-        supports_reasoning_effort=supports.reasoning_effort,
-        supported_reasoning_efforts=supported_reasoning_efforts,
-        default_reasoning_effort=sdk_model.default_reasoning_effort,
-    )
+# Re-export for backward compatibility
+__all__ = [
+    "CopilotModelInfo",
+    "sdk_model_to_copilot_model",
+    "copilot_model_to_amplifier_model",
+    "fetch_models",
+    "get_default_context_window",
+    "get_default_max_output_tokens",
+    "ConfigurationError",
+]
 
 
 # =============================================================================
@@ -333,17 +176,24 @@ async def fetch_models(client: Any) -> list[CopilotModelInfo]:
 # =============================================================================
 
 
-async def fetch_and_map_models(client: Any) -> list[AmplifierModelInfo]:
+async def fetch_and_map_models(
+    client: Any,
+) -> tuple[list[AmplifierModelInfo], list[CopilotModelInfo]]:
     """Fetch models from SDK and translate to amplifier_core.ModelInfo.
 
     Convenience function that chains:
         SDK ModelInfo → CopilotModelInfo → amplifier_core.ModelInfo
 
+    Also returns raw CopilotModelInfo for caching to avoid double SDK fetch.
+
     Args:
         client: SDK CopilotClient or CopilotClientWrapper
 
     Returns:
-        List of amplifier_core.ModelInfo (what kernel expects)
+        Tuple of:
+        - List of amplifier_core.ModelInfo (what kernel expects)
+        - List of CopilotModelInfo (for caching to disk)
     """
     copilot_models = await fetch_models(client)
-    return [copilot_model_to_amplifier_model(m) for m in copilot_models]
+    amplifier_models = [copilot_model_to_amplifier_model(m) for m in copilot_models]
+    return amplifier_models, copilot_models

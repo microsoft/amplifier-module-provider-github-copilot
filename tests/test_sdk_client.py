@@ -202,7 +202,7 @@ class TestSDKIsolation:
 
         for py_file in src_root.glob("*.py"):
             files_scanned += 1
-            source = py_file.read_text()
+            source = py_file.read_text(encoding="utf-8")
 
             try:
                 tree = ast.parse(source, filename=str(py_file))

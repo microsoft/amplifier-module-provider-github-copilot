@@ -1,11 +1,12 @@
 # Contract: Streaming
 
 ## Version
-- **Current:** 1.2 (Anchor-Prefix-Corrected)
+- **Current:** 1.3 (Completion-Guard-Usage-SessionLifecycle)
 - **Module Reference:** amplifier_module_provider_github_copilot/streaming.py
 - **Kernel Types:** `amplifier_core.message_models` (Pydantic, NOT content_models dataclass)
 - **Status:** Specification
 - **History:**
+  - **1.3** — Added completion guard, usage capture, session lifecycle anchors (bug fix documentation)
   - **1.2** — Fixed anchor prefix from `streaming:` to `streaming-contract:`, added missing anchors
   - **1.1** — Expert panel verified: ChatResponse.content uses message_models types
 
@@ -102,6 +103,71 @@ class StreamAccumulator:
 
 ---
 
+## Completion Guard
+
+The accumulator MUST guard against late-arriving events after completion signals.
+
+### MUST Constraints
+
+**streaming-contract:completion:MUST:1**: Events after TURN_COMPLETE MUST be ignored (except USAGE_UPDATE).
+
+**streaming-contract:completion:MUST:2**: Events after ERROR MUST be ignored (except USAGE_UPDATE).
+
+**Rationale:** SDK may send spurious events after session completion (e.g., trailing deltas, duplicate turn_end). These MUST NOT corrupt accumulated state. However, USAGE_UPDATE events are special — see Usage Capture below.
+
+---
+
+## Usage Capture
+
+The SDK sends `assistant.usage` events AFTER `session.idle` (turn completion). This creates a race condition where usage data arrives after we've marked the session complete.
+
+### MUST Constraints
+
+**streaming-contract:usage:MUST:1**: Provider MUST capture USAGE_UPDATE events even after completion.
+
+**Bug Discovery:** Session 65131f78 showed `usage={input:0, output:0}` because the completion guard blocked the usage event that arrived after TURN_COMPLETE.
+
+**Implementation:**
+```python
+def add(self, event: DomainEvent) -> None:
+    # USAGE_UPDATE bypasses completion guard
+    if event.type == DomainEventType.USAGE_UPDATE:
+        self.usage = event.data
+        return
+    
+    # All other events blocked after completion
+    if self.is_complete:
+        return
+    # ... process event
+```
+
+---
+
+## Session Lifecycle Configuration
+
+Provider MUST validate session lifecycle configuration at load time to prevent silent runtime failures.
+
+### MUST Constraints
+
+**streaming-contract:SessionLifecycle:MUST:1**: Provider MUST raise `ConfigurationError` if `session_lifecycle.idle_events` is empty or missing.
+
+**Rationale:** If `idle_events` is empty, `is_idle_event()` always returns False → session never completes → infinite hang with no error message. Developers need loud failures at startup, not 4-minute debugging sessions.
+
+**Bug Discovery:** Session hung for 4+ minutes because `load_event_config` returned empty sets, and `is_idle_event()` always returned False.
+
+**Implementation:**
+```python
+# In load_event_config()
+if not idle_event_types:
+    raise ConfigurationError(
+        "session_lifecycle.idle_events is empty or missing in events.yaml. "
+        "Provider cannot detect session completion without this configuration.",
+        provider="github-copilot",
+    )
+```
+
+---
+
 ## Internal Streaming (Provider Implementation)
 
 The provider MAY implement internal streaming callbacks for real-time UI updates. This is NOT part of the kernel protocol.
@@ -190,14 +256,14 @@ The `finish_reason` field MUST be normalized before returning to the orchestrato
 
 | Condition | finish_reason | Rationale |
 |-----------|---------------|-----------|
-| Tool calls present | `"tool_use"` | Orchestrator must execute tools (ALWAYS overrides SDK) |
+| Tool calls present | `"tool_calls"` | Orchestrator must execute tools (ALWAYS overrides SDK) |
 | No tool calls, SDK sent finish_reason | preserve SDK value | Normal completion with SDK-provided reason |
 | No tool calls, no SDK finish_reason | `"end_turn"` | Default for text-only responses |
 | Error occurred | `"error"` | Error path |
 
-**MUST-5:** Provider MUST set `finish_reason="tool_use"` when `tool_calls` is non-empty, **regardless of what the SDK sent**.
+**MUST-5:** Provider MUST set `finish_reason="tool_calls"` when `tool_calls` is non-empty, **regardless of what the SDK sent**.
 
-**Rationale:** The SDK may send `TURN_COMPLETE` with `finish_reason="stop"` even when there are tool_calls (e.g., in the deny+capture flow where the SDK completes normally after tool denial). The orchestrator relies on `finish_reason="tool_use"` to know that it should execute the captured tools and continue the agent loop. Returning "stop" causes premature exit to interactive mode.
+**Rationale:** The SDK may send `TURN_COMPLETE` with `finish_reason="stop"` even when there are tool_calls (e.g., in the deny+capture flow where the SDK completes normally after tool denial). The orchestrator relies on `finish_reason="tool_calls"` (per amplifier-core proto) to know that it should execute the captured tools and continue the agent loop. Returning "stop" causes premature exit to interactive mode.
 
 ```python
 from amplifier_core import TextBlock, ThinkingBlock, ToolCall
@@ -225,7 +291,7 @@ def assemble_response(accumulator: StreamAccumulator) -> ChatResponse:
     # CRITICAL: finish_reason normalization
     # tool_calls ALWAYS override SDK finish_reason
     if tool_calls:
-        finish_reason = "tool_use"  # Override any SDK value
+        finish_reason = "tool_calls"  # Override any SDK value (amplifier-core canonical)
     elif not accumulator.finish_reason:
         finish_reason = "end_turn"  # Default for text-only
     else:
@@ -291,10 +357,12 @@ class StreamingChatResponse(ChatResponse):
 | `streaming-contract:Accumulation:MUST:2` | Block boundaries maintained |
 | `streaming-contract:ToolCapture:MUST:1` | Tool calls captured |
 | `streaming-contract:ToolCapture:MUST:2` | Tool calls in final response |
-| `streaming-contract:FinishReason:MUST:5` | finish_reason="tool_use" when tool_calls present |
+| `streaming-contract:FinishReason:MUST:5` | finish_reason="tool_calls" when tool_calls present |
 | `streaming-contract:Response:MUST:1` | Final response uses kernel types |
-| `streaming-contract:completion:MUST:1` | First stream yields before completion |
-| `streaming-contract:completion:MUST:2` | Completion includes all content |
+| `streaming-contract:completion:MUST:1` | Events after TURN_COMPLETE are ignored (except usage) |
+| `streaming-contract:completion:MUST:2` | Events after ERROR are ignored (except usage) |
+| `streaming-contract:usage:MUST:1` | Usage events captured even after completion |
+| `streaming-contract:SessionLifecycle:MUST:1` | Provider validates idle_events config at load time |
 | `streaming-contract:ProgressiveStreaming:SHOULD:1` | Emit llm:content_block events |
 | `streaming-contract:ProgressiveStreaming:SHOULD:2` | Async fire-and-forget emission |
 | `streaming-contract:ProgressiveStreaming:SHOULD:3` | Track and clean up emit tasks |

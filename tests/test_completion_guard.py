@@ -210,3 +210,79 @@ class TestCompletionGuard:
 
         # Thinking content should NOT include the late delta
         assert accumulator.thinking_content == "Thinking..."
+
+    def test_usage_after_turn_complete_is_accepted(self):
+        """USAGE_UPDATE after TURN_COMPLETE MUST be accepted.
+
+        SDK sends assistant.usage AFTER assistant.turn_end.
+        This is a regression test for the zero-usage bug where
+        usage events were dropped by the is_complete guard.
+
+        Contract: streaming-contract:usage:MUST:1
+        Bug: Session 65131f78 showed usage={input:0, output:0} when
+             SDK sent ASSISTANT_USAGE after TURN_COMPLETE.
+        """
+        accumulator = StreamingAccumulator()
+
+        # Add content
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Response text"},
+            )
+        )
+
+        # Complete the turn FIRST (this is the SDK's actual order)
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TURN_COMPLETE,
+                data={"finish_reason": "stop"},
+            )
+        )
+
+        assert accumulator.is_complete
+
+        # Usage arrives AFTER completion (SDK actual behavior)
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.USAGE_UPDATE,
+                data={"input_tokens": 100, "output_tokens": 50},
+            )
+        )
+
+        # Usage MUST be captured even after completion
+        assert accumulator.usage is not None
+        assert accumulator.usage["input_tokens"] == 100
+        assert accumulator.usage["output_tokens"] == 50
+
+    def test_usage_after_error_is_accepted(self):
+        """USAGE_UPDATE after ERROR MUST be accepted.
+
+        Even on errors, usage data should be captured for billing/tracking.
+
+        Contract: streaming-contract:usage:MUST:1
+        """
+        accumulator = StreamingAccumulator()
+
+        # Error occurs
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.ERROR,
+                data={"message": "Rate limit exceeded"},
+            )
+        )
+
+        assert accumulator.is_complete
+
+        # Usage arrives AFTER error
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.USAGE_UPDATE,
+                data={"input_tokens": 50, "output_tokens": 0},
+            )
+        )
+
+        # Usage MUST be captured even after error
+        assert accumulator.usage is not None
+        assert accumulator.usage["input_tokens"] == 50
+        assert accumulator.usage["output_tokens"] == 0
