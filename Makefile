@@ -18,7 +18,8 @@
 .PHONY: install test smoke coverage lint format check clean help sdk-assumptions
 
 # Default Python - override with: make test PYTHON=python3.12
-PYTHON ?= python
+# Use python3 for Linux/macOS compatibility (Debian/Ubuntu lack 'python' symlink)
+PYTHON ?= python3
 
 # Package name for coverage
 PACKAGE = amplifier_module_provider_github_copilot
@@ -34,23 +35,15 @@ install:
 # Testing
 # -----------------------------------------------------------------------------
 
-# Run all tests (uses the 3-command pattern to avoid Windows asyncio issues)
+# Run all tests (simplified - let pytest handle collection)
 test:
-	@echo "Running tests (step 1/3: model naming + cache)..."
-	$(PYTHON) -m pytest tests/test_model_naming.py tests/test_model_cache.py \
-		tests/test_model_cache_integration.py -q --tb=short
-	@echo "Running tests (step 2/3: sync-heavy + SDK assumptions)..."
-	$(PYTHON) -m pytest tests/test_models.py tests/test_converters.py tests/test_client.py \
-		tests/test_exceptions.py tests/test_mount.py tests/test_mount_coverage.py \
-		tests/test_sdk_driver.py tests/test_tool_capture.py tests/test_coverage_gaps.py \
-		tests/sdk_assumptions/ -q --tb=short
-	@echo "Running tests (step 3/3: async-heavy)..."
-	$(PYTHON) -m pytest tests/test_provider.py tests/test_streaming.py -q --tb=short
+	@echo "Running all tests..."
+	$(PYTHON) -m pytest tests/ -q --tb=short -m "not live"
 	@echo "All tests passed!"
 
 # Run SDK assumption tests only (use when upgrading SDK)
 sdk-assumptions:
-	$(PYTHON) -m pytest tests/sdk_assumptions/ -v --tb=long
+	$(PYTHON) -m pytest tests/test_sdk_assumptions.py -v --tb=long
 
 # Quick smoke test - validates provider works E2E in seconds
 # Use after code changes, SDK upgrades, or to debug cross-platform issues

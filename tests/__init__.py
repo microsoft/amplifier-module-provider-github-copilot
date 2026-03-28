@@ -1,1 +1,1 @@
-"""Tests for amplifier-module-provider-copilot-sdk."""
+"""Test module for the copilot provider."""

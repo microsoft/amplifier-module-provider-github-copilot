@@ -1,167 +1,303 @@
-"""Tests for _platform.py - Cross-platform utilities.
+# pyright: reportPrivateUsage=false
+# pyright: reportUnknownMemberType=false
+# pyright: reportUntypedFunctionDecorator=false
+"""Tests for cross-platform binary discovery.
 
-This module tests the centralized platform detection and binary location
-functionality. These tests ensure the Single Source of Truth pattern
-works correctly across all platforms.
+Contract: sdk-boundary:BinaryResolution:MUST:1-8
 
-Design philosophy:
-- Test the logic, not the platform: Use mocks to test all platform paths
-- Test on actual platform: Live tests validate real behavior
-- Test the contract: Functions return expected types
+These tests verify:
+- Platform detection via sys.platform
+- Binary name resolution (copilot vs copilot.exe)
+- SDK binary path discovery via importlib.util.find_spec
+- PATH fallback for system CLI
+- Permission repair on Unix systems
 """
 
-import sys
+from __future__ import annotations
+
+import stat
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+# ============================================================================
+# Test: Platform Detection
+# ============================================================================
 
-class TestPlatformInfo:
-    """Tests for PlatformInfo dataclass and get_platform_info()."""
 
-    def test_platform_info_is_frozen(self):
-        """PlatformInfo should be immutable."""
-        from amplifier_module_provider_github_copilot._platform import PlatformInfo
+class TestPlatformDetection:
+    """Tests for get_platform_info()."""
 
-        info = PlatformInfo(
-            name="Test",
-            is_windows=False,
-            cli_binary_name="copilot",
-            uses_exe_extension=False,
+    def test_platform_info_is_cached(self) -> None:
+        """get_platform_info() returns same instance on repeated calls.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:1
+        """
+        from amplifier_module_provider_github_copilot._platform import get_platform_info
+
+        # Clear cache first
+        get_platform_info.cache_clear()
+
+        info1 = get_platform_info()
+        info2 = get_platform_info()
+
+        assert info1 is info2
+
+    def test_platform_info_is_frozen(self) -> None:
+        """PlatformInfo is immutable (frozen dataclass).
+
+        Contract: sdk-boundary:BinaryResolution:MUST:1
+        """
+        from amplifier_module_provider_github_copilot._platform import get_platform_info
+
+        get_platform_info.cache_clear()
+        info = get_platform_info()
+
+        with pytest.raises(AttributeError):
+            info.name = "modified"  # type: ignore[misc]
+
+    def test_windows_detection(self) -> None:
+        """Windows platform detected correctly.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:3
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            _make_test_platform_info,
         )
 
-        with pytest.raises(Exception):  # FrozenInstanceError
-            info.name = "Changed"  # type: ignore
+        info = _make_test_platform_info(is_windows=True)
 
-    def test_get_platform_info_returns_platform_info(self):
-        """get_platform_info should return a PlatformInfo instance."""
+        assert info.is_windows is True
+        assert info.name == "Windows"
+        assert info.cli_binary_name == "copilot.exe"
+
+    def test_unix_detection(self) -> None:
+        """Unix platform detected correctly.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:3
+        """
         from amplifier_module_provider_github_copilot._platform import (
-            PlatformInfo,
+            _make_test_platform_info,
+        )
+
+        info = _make_test_platform_info(is_windows=False)
+
+        assert info.is_windows is False
+        assert info.name == "Unix"
+        assert info.cli_binary_name == "copilot"
+
+    def test_windows_platform_detection_via_sys_platform(self) -> None:
+        """L73: sys.platform == 'win32' returns Windows PlatformInfo.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:1, :MUST:3
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            CLI_BINARY_NAME_WINDOWS,
             get_platform_info,
         )
 
-        result = get_platform_info()
-        assert isinstance(result, PlatformInfo)
-
-    def test_get_platform_info_windows(self):
-        """On Windows, should return Windows-appropriate values."""
-        from amplifier_module_provider_github_copilot._platform import get_platform_info
-
-        # Clear cache to allow re-evaluation with mocked platform
         get_platform_info.cache_clear()
+        try:
+            with patch("sys.platform", "win32"):
+                get_platform_info.cache_clear()
+                info = get_platform_info()
 
-        with patch.object(sys, "platform", "win32"):
-            result = get_platform_info()
+            assert info.is_windows is True
+            assert info.name == "Windows"
+            assert info.cli_binary_name == CLI_BINARY_NAME_WINDOWS
+        finally:
+            get_platform_info.cache_clear()
 
-        # Clear again to not affect other tests
-        get_platform_info.cache_clear()
+    def test_macos_platform_detection_via_sys_platform(self) -> None:
+        """L79: sys.platform == 'darwin' returns macOS PlatformInfo.
 
-        assert result.is_windows is True
-        assert result.cli_binary_name == "copilot.exe"
-        assert result.uses_exe_extension is True
-
-    def test_get_platform_info_linux(self):
-        """On Linux, should return Unix-appropriate values."""
-        from amplifier_module_provider_github_copilot._platform import get_platform_info
-
-        get_platform_info.cache_clear()
-
-        with patch.object(sys, "platform", "linux"):
-            result = get_platform_info()
-
-        get_platform_info.cache_clear()
-
-        assert result.is_windows is False
-        assert result.cli_binary_name == "copilot"
-        assert result.uses_exe_extension is False
-
-    def test_get_platform_info_darwin(self):
-        """On macOS, should return Unix-appropriate values with macOS name."""
-        from amplifier_module_provider_github_copilot._platform import get_platform_info
-
-        get_platform_info.cache_clear()
-
-        with patch.object(sys, "platform", "darwin"):
-            result = get_platform_info()
-
-        get_platform_info.cache_clear()
-
-        assert result.is_windows is False
-        assert result.cli_binary_name == "copilot"
-        assert result.name == "macOS"
-
-
-class TestBinaryNameConstants:
-    """Tests for binary name constants."""
-
-    def test_constants_are_defined(self):
-        """Binary name constants should be defined."""
+        Contract: sdk-boundary:BinaryResolution:MUST:1, :MUST:3
+        """
         from amplifier_module_provider_github_copilot._platform import (
             CLI_BINARY_NAME_UNIX,
+            get_platform_info,
+        )
+
+        get_platform_info.cache_clear()
+        try:
+            with patch("sys.platform", "darwin"):
+                get_platform_info.cache_clear()
+                info = get_platform_info()
+
+            assert info.is_windows is False
+            assert info.name == "macOS"
+            assert info.cli_binary_name == CLI_BINARY_NAME_UNIX
+        finally:
+            get_platform_info.cache_clear()
+
+
+# ============================================================================
+# Test: Binary Name Resolution
+# ============================================================================
+
+
+class TestBinaryNameResolution:
+    """Tests for get_cli_binary_name()."""
+
+    def test_windows_binary_name(self) -> None:
+        """Windows uses copilot.exe.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:3
+        """
+        from amplifier_module_provider_github_copilot._platform import (
             CLI_BINARY_NAME_WINDOWS,
-            CLI_BINARY_SUBDIR,
+            get_platform_info,
+        )
+
+        get_platform_info.cache_clear()
+
+        with patch("sys.platform", "win32"):
+            get_platform_info.cache_clear()
+            # Need to reimport to get fresh detection
+            from amplifier_module_provider_github_copilot import _platform
+
+            _platform.get_platform_info.cache_clear()
+
+        # Just verify the constant exists
+        assert CLI_BINARY_NAME_WINDOWS == "copilot.exe"
+
+    def test_unix_binary_name(self) -> None:
+        """Unix uses copilot (no extension).
+
+        Contract: sdk-boundary:BinaryResolution:MUST:3
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            CLI_BINARY_NAME_UNIX,
         )
 
         assert CLI_BINARY_NAME_UNIX == "copilot"
-        assert CLI_BINARY_NAME_WINDOWS == "copilot.exe"
-        assert CLI_BINARY_SUBDIR == "bin"
-
-    def test_get_cli_binary_name_returns_string(self):
-        """get_cli_binary_name should return a string."""
-        from amplifier_module_provider_github_copilot._platform import get_cli_binary_name
-
-        result = get_cli_binary_name()
-        assert isinstance(result, str)
-        assert result in ("copilot", "copilot.exe")
 
 
-class TestSdkBinaryPath:
+# ============================================================================
+# Test: SDK Binary Discovery
+# ============================================================================
+
+
+class TestSdkBinaryDiscovery:
     """Tests for get_sdk_binary_path()."""
 
-    def test_returns_none_when_sdk_not_installed(self):
-        """Should return None when copilot SDK is not installed."""
-        from amplifier_module_provider_github_copilot._platform import get_sdk_binary_path
+    def test_returns_none_when_sdk_not_installed(self) -> None:
+        """Returns None when copilot package not found.
 
-        with patch.dict("sys.modules", {"copilot": None}):
-            with patch("builtins.__import__", side_effect=ImportError("No module")):
-                result = get_sdk_binary_path()
+        Contract: sdk-boundary:BinaryResolution:MUST:2
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            get_sdk_binary_path,
+        )
 
-        assert result is None
-
-    def test_returns_none_when_binary_not_found(self):
-        """Should return None when SDK exists but binary doesn't."""
-        from amplifier_module_provider_github_copilot._platform import get_sdk_binary_path
-
-        mock_mod = Mock()
-        mock_mod.__file__ = "/fake/copilot/__init__.py"
-
-        with patch.dict("sys.modules", {"copilot": mock_mod}):
-            with patch("pathlib.Path.exists", return_value=False):
-                result = get_sdk_binary_path()
+        with patch("importlib.util.find_spec", return_value=None):
+            result = get_sdk_binary_path()
 
         assert result is None
 
-    def test_returns_path_when_binary_found(self):
-        """Should return Path when SDK binary is found."""
-        from amplifier_module_provider_github_copilot._platform import get_sdk_binary_path
+    def test_returns_none_when_binary_missing(self) -> None:
+        """Returns None when package found but binary not in bin/.
 
-        mock_mod = Mock()
-        mock_mod.__file__ = "/fake/copilot/__init__.py"
+        Contract: sdk-boundary:BinaryResolution:MUST:2
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            get_sdk_binary_path,
+        )
 
-        with patch.dict("sys.modules", {"copilot": mock_mod}):
-            with patch("pathlib.Path.exists", return_value=True):
-                result = get_sdk_binary_path()
+        mock_spec = MagicMock()
+        mock_spec.origin = "/fake/copilot/__init__.py"
+
+        with (
+            patch("importlib.util.find_spec", return_value=mock_spec),
+            patch.object(Path, "is_file", return_value=False),
+        ):
+            result = get_sdk_binary_path()
+
+        assert result is None
+
+    def test_returns_path_when_binary_found(self, tmp_path: Path) -> None:
+        """Returns path when package and binary both exist.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:2
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            get_cli_binary_name,
+            get_sdk_binary_path,
+        )
+
+        # Create fake SDK structure
+        pkg_dir = tmp_path / "copilot"
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").touch()
+        bin_dir = pkg_dir / "bin"
+        bin_dir.mkdir()
+        binary = bin_dir / get_cli_binary_name()
+        binary.touch()
+
+        mock_spec = MagicMock()
+        mock_spec.origin = str(pkg_dir / "__init__.py")
+
+        with patch("importlib.util.find_spec", return_value=mock_spec):
+            result = get_sdk_binary_path()
 
         assert result is not None
-        assert isinstance(result, Path)
+        assert result.name == get_cli_binary_name()
+
+    def test_invalid_origin_returns_none(self) -> None:
+        """L127-128: TypeError/ValueError from Path() construction returns None.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:2
+        """
+        from amplifier_module_provider_github_copilot._platform import get_sdk_binary_path
+
+        # Provide an origin value that causes Path() to raise TypeError
+        # The value 123 (int) causes Path(123) to work but .parent to fail
+        # Actually we need to mock get_copilot_spec_origin to return something
+        # that makes Path(origin).parent raise
+        # Contract: sdk-boundary:Membrane:MUST:1 - mock via membrane API
+        with patch(
+            "amplifier_module_provider_github_copilot.sdk_adapter.get_copilot_spec_origin",
+            return_value=123,  # int will cause TypeError in Path()
+        ):
+            result = get_sdk_binary_path()
+
+        assert result is None
+
+    def test_value_error_origin_returns_none(self) -> None:
+        """L127-128: ValueError from Path() construction returns None.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:2
+        Note: In practice ValueError is unlikely from Path(), but the code
+        handles it defensively. We test with embedded null byte which raises.
+        """
+        from amplifier_module_provider_github_copilot._platform import get_sdk_binary_path
+
+        # Path with embedded null byte causes ValueError
+        # Contract: sdk-boundary:Membrane:MUST:1 - mock via membrane API
+        with patch(
+            "amplifier_module_provider_github_copilot.sdk_adapter.get_copilot_spec_origin",
+            return_value="/valid/path\x00with_null",
+        ):
+            result = get_sdk_binary_path()
+
+        # Path with embedded null should trigger ValueError handling
+        assert result is None
 
 
-class TestFindCliInPath:
+# ============================================================================
+# Test: PATH Fallback
+# ============================================================================
+
+
+class TestPathFallback:
     """Tests for find_cli_in_path()."""
 
-    def test_returns_none_when_not_in_path(self):
-        """Should return None when CLI not in PATH."""
+    def test_returns_none_when_not_in_path(self) -> None:
+        """Returns None when CLI not in PATH.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:5
+        """
         from amplifier_module_provider_github_copilot._platform import find_cli_in_path
 
         with patch("shutil.which", return_value=None):
@@ -169,126 +305,275 @@ class TestFindCliInPath:
 
         assert result is None
 
-    def test_returns_path_when_found(self):
-        """Should return Path when CLI found in PATH."""
+    def test_returns_path_when_found(self) -> None:
+        """Returns Path when CLI found in PATH.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:5
+        """
         from amplifier_module_provider_github_copilot._platform import find_cli_in_path
 
-        with patch("shutil.which", return_value="/usr/bin/copilot"):
+        with patch("shutil.which", return_value="/usr/local/bin/copilot"):
             result = find_cli_in_path()
 
         assert result is not None
-        assert isinstance(result, Path)
-        # Path normalizes separators per platform
-        assert result.name == "copilot"
+        assert result == Path("/usr/local/bin/copilot")
+
+    def test_alternate_binary_found_when_primary_missing(self) -> None:
+        """L163: platform-primary name not found; alternate name found returns Path.
+
+        Contract: sdk-boundary:BinaryResolution:SHOULD:1
+        WSL edge case: Linux process with Windows PATH entries visible.
+        Primary 'copilot' not found; fallback 'copilot.exe' found in PATH.
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            PlatformInfo,
+            find_cli_in_path,
+            get_platform_info,
+        )
+
+        # Simulate Linux (not Windows) but copilot.exe is in Windows PATH via WSL
+        unix_info = PlatformInfo(name="Unix", is_windows=False, cli_binary_name="copilot")
+
+        get_platform_info.cache_clear()
+
+        def which_side_effect(name: str) -> str | None:
+            # Primary 'copilot' not found; alternate 'copilot.exe' found
+            if name == "copilot":
+                return None
+            if name == "copilot.exe":
+                return "/mnt/c/Users/user/AppData/copilot.exe"
+            return None
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot._platform.get_platform_info",
+                return_value=unix_info,
+            ),
+            patch("shutil.which", side_effect=which_side_effect),
+        ):
+            result = find_cli_in_path()
+
+        assert result is not None
+        assert "copilot.exe" in str(result)
+
+
+# ============================================================================
+# Test: Main Entry Point
+# ============================================================================
 
 
 class TestLocateCliBinary:
-    """Tests for locate_cli_binary() - the main entry point."""
+    """Tests for locate_cli_binary()."""
 
-    def test_prefers_sdk_binary_over_path(self):
-        """SDK binary should be preferred over PATH."""
-        from amplifier_module_provider_github_copilot._platform import locate_cli_binary
+    def test_prefers_sdk_over_path(self) -> None:
+        """SDK binary preferred over PATH (security).
 
-        mock_mod = Mock()
-        mock_mod.__file__ = "/sdk/copilot/__init__.py"
+        Contract: sdk-boundary:BinaryResolution:MUST:4
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            locate_cli_binary,
+        )
 
-        with patch.dict("sys.modules", {"copilot": mock_mod}):
-            with patch("pathlib.Path.exists", return_value=True):
-                with patch("shutil.which", return_value="/path/copilot"):
-                    result = locate_cli_binary()
+        sdk_path = Path("/sdk/bin/copilot")
+        path_binary = Path("/usr/bin/copilot")
 
-        # Should return SDK path, not PATH path
-        assert result is not None
-        assert "sdk" in str(result).lower() or "copilot" in str(result)
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot._platform.get_sdk_binary_path",
+                return_value=sdk_path,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot._platform.find_cli_in_path",
+                return_value=path_binary,
+            ),
+        ):
+            result = locate_cli_binary()
 
-    def test_falls_back_to_path_when_sdk_missing(self):
-        """Should fall back to PATH when SDK binary not available."""
-        from amplifier_module_provider_github_copilot._platform import locate_cli_binary
+        assert result == sdk_path
 
-        with patch.dict("sys.modules", {"copilot": None}):
-            with patch("builtins.__import__", side_effect=ImportError("No module")):
-                with patch("shutil.which", return_value="/usr/bin/copilot"):
-                    result = locate_cli_binary()
+    def test_falls_back_to_path(self) -> None:
+        """Falls back to PATH when SDK binary not found.
 
-        assert result is not None
-        # Path normalizes separators per platform
-        assert result.name == "copilot"
+        Contract: sdk-boundary:BinaryResolution:MUST:5
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            locate_cli_binary,
+        )
 
-    def test_returns_none_when_nothing_found(self):
-        """Should return None when CLI not found anywhere."""
-        from amplifier_module_provider_github_copilot._platform import locate_cli_binary
+        path_binary = Path("/usr/bin/copilot")
 
-        with patch.dict("sys.modules", {"copilot": None}):
-            with patch("builtins.__import__", side_effect=ImportError("No module")):
-                with patch("shutil.which", return_value=None):
-                    result = locate_cli_binary()
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot._platform.get_sdk_binary_path",
+                return_value=None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot._platform.find_cli_in_path",
+                return_value=path_binary,
+            ),
+        ):
+            result = locate_cli_binary()
+
+        assert result == path_binary
+
+    def test_returns_none_when_not_found(self) -> None:
+        """Returns None when binary not found anywhere.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:5
+        """
+        from amplifier_module_provider_github_copilot._platform import (
+            locate_cli_binary,
+        )
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot._platform.get_sdk_binary_path",
+                return_value=None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot._platform.find_cli_in_path",
+                return_value=None,
+            ),
+        ):
+            result = locate_cli_binary()
 
         assert result is None
 
 
-class TestMakeTestPlatformInfo:
-    """Tests for the test utility function."""
+# ============================================================================
+# Test: Permission Repair
+# ============================================================================
 
-    def test_creates_windows_platform(self):
-        """_make_test_platform_info should create Windows platform."""
+
+class TestPermissionRepair:
+    """Tests for ensure_executable()."""
+
+    def test_no_op_on_windows(self) -> None:
+        """Returns True immediately on Windows (no chmod needed).
+
+        Contract: sdk-boundary:BinaryResolution:MUST:7
+        """
+        from amplifier_module_provider_github_copilot._permissions import (
+            ensure_executable,
+        )
         from amplifier_module_provider_github_copilot._platform import (
-            _make_test_platform_info,
+            PlatformInfo,
+            get_platform_info,
         )
 
-        result = _make_test_platform_info(is_windows=True)
+        windows_info = PlatformInfo(name="Windows", is_windows=True, cli_binary_name="copilot.exe")
 
-        assert result.is_windows is True
-        assert result.cli_binary_name == "copilot.exe"
-        assert result.uses_exe_extension is True
+        # Clear lru_cache before patching (get_platform_info uses @lru_cache)
+        get_platform_info.cache_clear()
 
-    def test_creates_unix_platform(self):
-        """_make_test_platform_info should create Unix platform."""
+        # Patch at the source module where ensure_executable imports from
+        with patch(
+            "amplifier_module_provider_github_copilot._platform.get_platform_info",
+            return_value=windows_info,
+        ):
+            # Even a non-existent path should return True on Windows
+            result = ensure_executable(Path("/nonexistent"))
+
+            assert result is True
+
+    @pytest.mark.skipif(
+        __import__("sys").platform == "win32",
+        reason="Unix permission tests require POSIX filesystem",
+    )
+    def test_already_executable_is_idempotent(self, tmp_path: Path) -> None:
+        """Returns True without chmod if already executable.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from amplifier_module_provider_github_copilot._permissions import (
+            ensure_executable,
+        )
         from amplifier_module_provider_github_copilot._platform import (
-            _make_test_platform_info,
+            PlatformInfo,
+            get_platform_info,
         )
 
-        result = _make_test_platform_info(is_windows=False)
+        # Create executable file
+        binary = tmp_path / "copilot"
+        binary.touch()
+        binary.chmod(0o755)
 
-        assert result.is_windows is False
-        assert result.cli_binary_name == "copilot"
-        assert result.uses_exe_extension is False
+        unix_info = PlatformInfo(name="Unix", is_windows=False, cli_binary_name="copilot")
 
+        # Clear lru_cache before patching (get_platform_info uses @lru_cache)
+        get_platform_info.cache_clear()
 
-class TestLivePlatformDetection:
-    """Live tests for actual platform detection."""
+        with patch(
+            "amplifier_module_provider_github_copilot._platform.get_platform_info",
+            return_value=unix_info,
+        ):
+            result = ensure_executable(binary)
 
-    def test_live_platform_detection_matches_sys_platform(self):
-        """get_platform_info().is_windows should match sys.platform."""
-        from amplifier_module_provider_github_copilot._platform import get_platform_info
+            assert result is True
+            # Mode should be unchanged
+            assert binary.stat().st_mode & stat.S_IXUSR
 
-        result = get_platform_info()
+    @pytest.mark.skipif(
+        __import__("sys").platform == "win32",
+        reason="Unix permission tests require POSIX filesystem",
+    )
+    def test_adds_execute_permission(self, tmp_path: Path) -> None:
+        """Adds user+group execute permission.
 
-        if sys.platform == "win32":
-            assert result.is_windows is True
-            assert result.cli_binary_name == "copilot.exe"
-        else:
-            assert result.is_windows is False
-            assert result.cli_binary_name == "copilot"
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from amplifier_module_provider_github_copilot._permissions import (
+            ensure_executable,
+        )
+        from amplifier_module_provider_github_copilot._platform import (
+            PlatformInfo,
+            get_platform_info,
+        )
 
-    def test_live_locate_cli_binary(self):
-        """locate_cli_binary should work on current platform."""
-        from amplifier_module_provider_github_copilot._platform import locate_cli_binary
+        # Create non-executable file
+        binary = tmp_path / "copilot"
+        binary.touch()
+        binary.chmod(0o644)
 
-        # Just verify it doesn't crash - may or may not find binary
-        result = locate_cli_binary()
-        assert result is None or isinstance(result, Path)
+        unix_info = PlatformInfo(name="Unix", is_windows=False, cli_binary_name="copilot")
 
-    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only")
-    def test_live_windows_returns_exe(self):
-        """On actual Windows, binary name should be .exe."""
-        from amplifier_module_provider_github_copilot._platform import get_cli_binary_name
+        # Clear lru_cache before patching (get_platform_info uses @lru_cache)
+        get_platform_info.cache_clear()
 
-        assert get_cli_binary_name() == "copilot.exe"
+        with patch(
+            "amplifier_module_provider_github_copilot._platform.get_platform_info",
+            return_value=unix_info,
+        ):
+            result = ensure_executable(binary)
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only")
-    def test_live_unix_no_exe(self):
-        """On actual Unix, binary name should not have .exe."""
-        from amplifier_module_provider_github_copilot._platform import get_cli_binary_name
+            assert result is True
+            # Should now have user execute
+            assert binary.stat().st_mode & stat.S_IXUSR
+            # Should have group execute
+            assert binary.stat().st_mode & stat.S_IXGRP
 
-        assert get_cli_binary_name() == "copilot"
-        assert ".exe" not in get_cli_binary_name()
+    def test_returns_false_for_missing_file(self, tmp_path: Path) -> None:
+        """Returns False for non-existent file.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from amplifier_module_provider_github_copilot._permissions import (
+            ensure_executable,
+        )
+        from amplifier_module_provider_github_copilot._platform import (
+            PlatformInfo,
+            get_platform_info,
+        )
+
+        unix_info = PlatformInfo(name="Unix", is_windows=False, cli_binary_name="copilot")
+
+        # Clear lru_cache before patching (get_platform_info uses @lru_cache)
+        get_platform_info.cache_clear()
+
+        with patch(
+            "amplifier_module_provider_github_copilot._platform.get_platform_info",
+            return_value=unix_info,
+        ):
+            result = ensure_executable(tmp_path / "nonexistent")
+
+            assert result is False

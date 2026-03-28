@@ -4,7 +4,7 @@ Smoke Test for GitHub Copilot Provider
 =======================================
 
 A quick end-to-end verification script to validate the provider works with
-the Copilot CLI SDK. Use this during development to catch integration issues
+the Copilot SDK. Use this during development to catch integration issues
 early, before running the full test suite.
 
 Why This Exists
@@ -14,7 +14,7 @@ The full test suite (878+ tests) takes ~2 minutes. This smoke test runs in
 
   1. Provider initializes correctly
   2. SDK binary is found (cross-platform: Windows .exe vs Unix)
-  3. SDK authenticates successfully (via copilot CLI credentials)
+  3. SDK authenticates successfully (via copilot credentials)
   4. list_models() returns available models
   5. Provider closes cleanly
 
@@ -41,7 +41,7 @@ From repo root:
 
 Prerequisites
 -------------
-  - Copilot CLI authenticated: `copilot auth login`
+  - Copilot SDK authenticated: `copilot auth login`
   - Virtual environment activated with package installed
 
 Exit Codes
@@ -89,7 +89,7 @@ async def run_smoke_test(verbose: bool = False) -> int:
     Run the smoke test suite.
 
     Args:
-        verbose: Print detailed output (model list, full CLI path)
+        verbose: Print detailed output (model list, full SDK binary path)
 
     Returns:
         Exit code (0 = success)
@@ -106,9 +106,9 @@ async def run_smoke_test(verbose: bool = False) -> int:
     print_header("Provider Initialization")
 
     try:
-        from amplifier_module_provider_github_copilot import CopilotSdkProvider
+        from amplifier_module_provider_github_copilot import GitHubCopilotProvider
 
-        provider = CopilotSdkProvider()
+        provider = GitHubCopilotProvider()
         print_status("Import and instantiate", "OK")
     except ImportError as e:
         print_status("Import provider", "FAILED", RED)
@@ -137,12 +137,12 @@ async def run_smoke_test(verbose: bool = False) -> int:
 
         cli_path = locate_cli_binary()
         if cli_path:
-            print_status(f"CLI found: {cli_path.name}", "OK")
+            print_status(f"SDK binary found: {cli_path.name}", "OK")
             if verbose:
                 print(f"    Full path: {cli_path}")
         else:
-            print_status("CLI binary", "NOT FOUND", YELLOW)
-            print(f"\n{YELLOW}Warning: Copilot CLI not in PATH. SDK may fail.{RESET}")
+            print_status("SDK binary", "NOT FOUND", YELLOW)
+            print(f"\n{YELLOW}Warning: Copilot SDK binary not in PATH. SDK may fail.{RESET}")
     except Exception as e:
         print_status("Platform detection", "FAILED", RED)
         if verbose:
@@ -174,7 +174,7 @@ async def run_smoke_test(verbose: bool = False) -> int:
         print_status("list_models()", "FAILED", RED)
         print(f"\n{RED}Error: {e}{RESET}")
         print("\nPossible causes:")
-        print("  - Copilot CLI not authenticated: run 'copilot auth login'")
+        print("  - Copilot SDK not authenticated: run 'copilot auth login'")
         print("  - Network connectivity issues")
         print("  - Copilot service outage")
         await provider.close()
@@ -183,7 +183,7 @@ async def run_smoke_test(verbose: bool = False) -> int:
     # NOTE: Completion test is skipped because it requires amplifier-foundation
     # and ChatRequest construction. The list_models() test validates:
     #   ✓ SDK binary discovery (cross-platform)
-    #   ✓ SDK authentication (via copilot CLI credentials)
+    #   ✓ SDK authentication (via copilot credentials)
     #   ✓ Network connectivity to Copilot service
     #   ✓ Provider lifecycle (init → operation → close)
     # For full completion testing, run: pytest tests/test_provider.py -v

@@ -39,12 +39,12 @@ One command to bridge your existing `gh` CLI authentication into Amplifier.
 
 **Linux/macOS:**
 ```bash
-export GITHUB_TOKEN="ghp_your_token_here"
+export GITHUB_TOKEN="<YOUR_TOKEN_HERE>"
 ```
 
 **Windows PowerShell:**
 ```powershell
-$env:GITHUB_TOKEN = "ghp_your_token_here"
+$env:GITHUB_TOKEN = "<YOUR_TOKEN_HERE>"
 ```
 
 Use a GitHub Personal Access Token directly.
@@ -227,7 +227,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk>=0.1.32,<0.2.0`
+- `github-copilot-sdk>=0.2.0,<0.3.0`
 
 > **Note:** The `github-copilot-sdk` is installed automatically when you run 
 > `amplifier provider install github-copilot`. It is NOT bundled with the main 

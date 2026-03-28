@@ -10,7 +10,9 @@
 appsettings.*.json
 
 # Agent instructions (local only - not for repo)
-.github/copilot-instructions.md
+.github/
+AGENTS.md
+.claude/
 
 # OS files
 **/.DS_Store
@@ -24,6 +26,7 @@ appsettings.*.json
 node_modules
 .venv
 .venv-win
+.venv-wsl
 venv
 env
 __pycache__
@@ -57,6 +60,9 @@ lerna-debug.log*
 
 # Dev scratch files
 test_live_registry.py
+
+# Reference-only SDK clone (not for commit)
+ref-only/
 analyze_coverage.py
 tests_backup_*/
 
@@ -101,3 +107,4 @@ investigations/
 mydocs
 run_parallel_tests.ps1
 test_results.txt
+.tools/

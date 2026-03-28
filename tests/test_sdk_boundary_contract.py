@@ -1,0 +1,490 @@
+"""Boundary contract tests for SDK session configuration.
+
+These tests verify the exact configuration dict that CopilotClientWrapper.session()
+sends to client.create_session(). They use ConfigCapturingMock instead of MagicMock
+to ensure we test what is SENT, not just that something was called.
+
+Contract: contracts/sdk-boundary.md
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+    CopilotClientWrapper,
+)
+from tests.fixtures.config_capture import ConfigCapturingMock
+
+
+class TestSessionConfigContract:
+    """Verify the session_config dict sent to SDK matches our contract."""
+
+    @pytest.mark.asyncio
+    async def test_available_tools_empty_when_no_tools_provided(self) -> None:
+        """available_tools MUST be set to [] when no Amplifier tools are provided.
+
+        This prevents SDK built-in tools (list_agents, bash, edit, etc.) from
+        appearing to the model. Setting available_tools=[] blocks all tools,
+        which is correct when no Amplifier tools exist.
+
+        Contract: deny-destroy:ToolSuppression:MUST:1 — MUST NOT omit available_tools
+        Contract: sdk-boundary:ToolForwarding:MUST:3 — available_tools always set
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4o"):
+            pass
+
+        config = mock_client.last_config
+        # Contract v1.2: available_tools MUST be set (not omitted)
+        # When no tools provided, available_tools=[] prevents SDK built-ins from appearing
+        assert "available_tools" in config, "available_tools MUST be set"
+        assert config["available_tools"] == [], "available_tools MUST be [] when no tools"
+
+    @pytest.mark.asyncio
+    async def test_available_tools_allowlist_when_tools_provided(self) -> None:
+        """available_tools MUST be set to Amplifier tool names when tools are provided.
+
+        This creates an allowlist - only the provided tools are visible to the model.
+        SDK built-ins are blocked because they're not in the allowlist.
+
+        Contract: deny-destroy:Allowlist:MUST:1 — available_tools = tool names
+        Contract: sdk-boundary:ToolForwarding:MUST:1 — tools forwarded to session
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        # Provide some tools as dicts (simulating Amplifier's ToolSpec objects)
+        empty_params: dict[str, Any] = {}
+        tools: list[dict[str, Any]] = [
+            {"name": "search", "description": "Search the web", "parameters": empty_params},
+            {"name": "write_file", "description": "Write a file", "parameters": empty_params},
+        ]
+
+        async with wrapper.session(model="gpt-4o", tools=tools):
+            pass
+
+        config = mock_client.last_config
+        # available_tools should be set to the allowlist of tool names
+        assert "available_tools" in config, "available_tools MUST be set"
+        assert config["available_tools"] == ["search", "write_file"], (
+            "available_tools must be the list of tool names"
+        )
+
+    @pytest.mark.asyncio
+    async def test_system_message_uses_replace_mode(self) -> None:
+        """System message MUST use replace mode.
+
+        SDK ref: copilot/types.py SystemMessageConfig
+        SDK ref: copilot/client.py line 522-524 (system_message handling)
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(
+            model="gpt-4o", system_message="You are the Amplifier assistant."
+        ):
+            pass
+
+        config = mock_client.last_config
+        assert config["system_message"]["mode"] == "replace"
+        assert config["system_message"]["content"] == "You are the Amplifier assistant."
+
+    @pytest.mark.asyncio
+    async def test_system_message_absent_when_not_provided(self) -> None:
+        """No system_message key when caller doesn't provide one."""
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4o"):
+            pass
+
+        config = mock_client.last_config
+        assert "system_message" not in config
+
+    @pytest.mark.asyncio
+    async def test_permission_handler_always_set(self) -> None:
+        """Permission handler MUST be set on every session.
+
+        Contract: deny-destroy:DenyHook:MUST:1
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4o"):
+            pass
+
+        config = mock_client.last_config
+        assert "on_permission_request" in config
+        assert callable(config["on_permission_request"])
+
+    @pytest.mark.asyncio
+    async def test_streaming_always_enabled(self) -> None:
+        """Streaming MUST be enabled for event-based tool capture."""
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4o"):
+            pass
+
+        config = mock_client.last_config
+        assert config["streaming"] is True
+
+    @pytest.mark.asyncio
+    async def test_model_passed_through(self) -> None:
+        """Model parameter forwarded to SDK session config."""
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="claude-sonnet-4"):
+            pass
+
+        config = mock_client.last_config
+        assert config["model"] == "claude-sonnet-4"
+
+    @pytest.mark.asyncio
+    async def test_deny_hook_registered_on_session(self) -> None:
+        """Deny hook MUST be passed via session config 'hooks' key.
+
+        Contract: deny-destroy:DenyHook:MUST:1
+        Hooks are passed via session config, not method calls.
+        """
+        mock_client = ConfigCapturingMock()
+
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4o"):
+            pass
+
+        # Verify deny hook was passed via session config
+        config = mock_client.last_config
+        assert "hooks" in config, "session config must include 'hooks' key"
+        assert "on_pre_tool_use" in config["hooks"], "hooks must include 'on_pre_tool_use'"
+
+
+class TestToolForwardingContract:
+    """Verify tools from ChatRequest are forwarded to SDK session.
+
+    Contract: sdk-boundary.md § Tool Forwarding Contract
+    """
+
+    @pytest.mark.asyncio
+    async def test_tools_forwarded_to_session_config(self) -> None:
+        """Tools MUST be forwarded to session_config["tools"].
+
+        Contract: sdk-boundary:ToolForwarding:MUST:1
+        Layer: CopilotClientWrapper.session() → SDK create_session()
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        # Amplifier tool format (simplified)
+        tools: list[dict[str, object]] = [
+            {"name": "bash", "description": "Run shell commands", "parameters": {}},
+            {"name": "read_file", "description": "Read a file", "parameters": {}},
+        ]
+
+        async with wrapper.session(model="gpt-4o", tools=tools):
+            pass
+
+        config = mock_client.last_config
+        assert "tools" in config, "tools MUST be in session_config"
+        # Verify tools are forwarded (count matches)
+        assert len(config["tools"]) == len(tools), "All tools MUST be forwarded"
+
+    @pytest.mark.asyncio
+    async def test_tools_converted_to_sdk_format(self) -> None:
+        """Tools MUST be converted to objects with SDK-required attributes.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+
+        SDK iterates tools and accesses these attributes:
+        - tool.name
+        - tool.description
+        - tool.parameters
+        - tool.overrides_built_in_tool
+        - tool.skip_permission
+
+        Without these attributes, SDK raises AttributeError.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        # Amplifier tool format (what kernel sends)
+        tools: list[dict[str, object]] = [
+            {"name": "bash", "description": "Run shell commands", "parameters": {"type": "object"}},
+        ]
+
+        async with wrapper.session(model="gpt-4o", tools=tools):
+            pass
+
+        config = mock_client.last_config
+        assert "tools" in config, "tools MUST be in session_config"
+
+        # Verify each tool has SDK-required attributes
+        for tool in config["tools"]:
+            # SDK does attribute access, not dict access
+            assert hasattr(tool, "name"), "tool MUST have 'name' attribute"
+            assert hasattr(tool, "description"), "tool MUST have 'description' attribute"
+            assert hasattr(tool, "parameters"), "tool MUST have 'parameters' attribute"
+            assert hasattr(tool, "overrides_built_in_tool"), (
+                "tool MUST have 'overrides_built_in_tool' attribute"
+            )
+            assert hasattr(tool, "skip_permission"), "tool MUST have 'skip_permission' attribute"
+            assert hasattr(tool, "handler"), (
+                "tool MUST have 'handler' attribute (SDK checks it in session.py)"
+            )
+
+            # Verify values are correct
+            assert tool.name == "bash"
+            assert tool.description == "Run shell commands"
+            assert tool.parameters == {"type": "object"}
+            # Contract: deny-destroy:ToolSuppression:MUST:2 (see sdk-boundary:ToolForwarding:MUST:2)
+            assert tool.overrides_built_in_tool is True, (
+                "overrides_built_in_tool MUST be True to avoid SDK 'conflicts with built-in' error"
+            )
+            assert tool.skip_permission is False
+            assert tool.handler is None, "handler MUST be None (Amplifier handles tools)"
+
+    @pytest.mark.asyncio
+    async def test_toolspec_objects_converted_correctly(self) -> None:
+        """ToolSpec objects (Pydantic BaseModel) MUST be handled correctly.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+        Evidence: amplifier_core.message_models.ToolSpec
+
+        Amplifier kernel sends ToolSpec objects, not dicts. The converter
+        MUST handle attribute access (tool.name) not dict access (tool["name"]).
+
+        This test uses SimpleNamespace to simulate ToolSpec without importing
+        amplifier_core, keeping tests isolated from external dependencies.
+        """
+        from types import SimpleNamespace
+
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        # Simulate ToolSpec objects (Pydantic BaseModel with attributes)
+        # ToolSpec has: name: str, parameters: dict, description: str | None
+        toolspec_like = [
+            SimpleNamespace(
+                name="bash",
+                description="Run shell commands",
+                parameters={"type": "object", "properties": {}},
+            ),
+            SimpleNamespace(
+                name="read_file",
+                description="Read a file",
+                parameters={"type": "object"},
+            ),
+        ]
+
+        async with wrapper.session(model="gpt-4o", tools=toolspec_like):
+            pass
+
+        config = mock_client.last_config
+        assert "tools" in config, "tools MUST be in session_config"
+        assert len(config["tools"]) == 2, "All ToolSpec objects MUST be converted"
+
+        # Verify SDK-required attributes are present
+        tool = config["tools"][0]
+        assert tool.name == "bash"
+        assert tool.description == "Run shell commands"
+        assert tool.parameters == {"type": "object", "properties": {}}
+        assert tool.overrides_built_in_tool is True, (
+            "overrides_built_in_tool MUST be True to avoid SDK 'conflicts with built-in' error"
+        )
+        assert tool.skip_permission is False
+        assert tool.handler is None, "handler MUST be None for SDK to skip registration"
+
+    @pytest.mark.asyncio
+    async def test_execute_sdk_completion_accepts_tools_param(self) -> None:
+        """_execute_sdk_completion MUST accept 'tools' parameter.
+
+        Contract: provider-protocol:complete:MUST:2
+        Layer: Provider._execute_sdk_completion() → CopilotClientWrapper.session()
+
+        This test verifies the PROVIDER layer method signature includes tools.
+        """
+        import inspect
+
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        provider = GitHubCopilotProvider()
+        # Access protected method for signature introspection
+        sig = inspect.signature(
+            provider._execute_sdk_completion  # pyright: ignore[reportPrivateUsage]
+        )
+        param_names = list(sig.parameters.keys())
+
+        assert "tools" in param_names, (
+            f"_execute_sdk_completion MUST accept 'tools' parameter. Current params: {param_names}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_tools_none_when_not_provided(self) -> None:
+        """No tools key when caller doesn't provide tools."""
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4o"):
+            pass
+
+        config = mock_client.last_config
+        assert "tools" not in config, "tools key should be absent when not provided"
+
+    @pytest.mark.asyncio
+    async def test_tools_and_available_tools_not_conflated(self) -> None:
+        """tools (custom) and available_tools (built-in allowlist) are separate.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:4
+
+        available_tools IS set to Amplifier tool names to create an allowlist of
+        those tools, preventing SDK built-in tools (like list_agents) from being
+        visible to the model.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        tools: list[dict[str, object]] = [
+            {"name": "bash", "description": "Run shell commands", "parameters": {}}
+        ]
+
+        async with wrapper.session(model="gpt-4o", tools=tools):
+            pass
+
+        config = mock_client.last_config
+        # available_tools SHOULD be set to just the Amplifier tool names
+        assert "available_tools" in config, "available_tools MUST be set to allowlist"
+        assert config["available_tools"] == ["bash"], (
+            "available_tools must equal Amplifier tool names"
+        )
+        # tools should be custom tools (converted to SDK-compatible format)
+        sdk_tools = config["tools"]
+        assert len(sdk_tools) == len(tools), "All custom tools MUST be forwarded"
+        assert sdk_tools[0].name == "bash", "Tool name MUST be preserved"
+
+
+class TestConfigInvariants:
+    """Configuration invariants that must ALWAYS hold."""
+
+    # available_tools removed - Bug #1 fix: setting it to [] was disabling all tools
+    INVARIANTS: dict[str, object] = {
+        "streaming": True,  # Required for event capture
+        "available_tools": [],  # Contract v1.2: MUST be set (empty when no tools)
+    }
+
+    # Fields that must NOT be present (were for Bug #1 fix, now obsolete)
+    # Contract v1.2 corrected: available_tools MUST be set, not absent
+    ABSENT_INVARIANTS: list[str] = []
+
+    CALLABLE_INVARIANTS = [
+        "on_permission_request",  # Always set
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gpt-4", "gpt-4o", "claude-sonnet-4", None])
+    async def test_invariants_hold_for_any_model(self, model: str | None) -> None:
+        """Config invariants hold regardless of model selection."""
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        kwargs: dict[str, object] = {}
+        if model:
+            kwargs["model"] = model
+
+        async with wrapper.session(**kwargs):  # type: ignore[arg-type]
+            pass
+
+        config = mock_client.last_config
+        for key, expected in self.INVARIANTS.items():
+            assert config.get(key) == expected, (
+                f"Invariant violated: {key} should be {expected!r}, got {config.get(key)!r}"
+            )
+        for key in self.ABSENT_INVARIANTS:
+            assert key not in config, f"Absent invariant violated: {key} must NOT be in config"
+        for key in self.CALLABLE_INVARIANTS:
+            assert key in config and callable(config[key]), (
+                f"Callable invariant violated: {key} must be present and callable"
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "system_message",
+        [
+            "You are helpful",
+            "Custom persona",
+            None,
+        ],
+    )
+    async def test_invariants_hold_with_system_message_variations(
+        self, system_message: str | None
+    ) -> None:
+        """Config invariants hold regardless of system message."""
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        kwargs: dict[str, object] = {"model": "gpt-4o"}
+        if system_message:
+            kwargs["system_message"] = system_message
+
+        async with wrapper.session(**kwargs):  # type: ignore[arg-type]
+            pass
+
+        config = mock_client.last_config
+        # Contract v1.2: available_tools MUST be set (not omitted)
+        # When no tools provided, available_tools=[] prevents SDK built-ins
+        assert "available_tools" in config
+        assert config["available_tools"] == []
+        assert config.get("streaming") is True
+
+    @pytest.mark.asyncio
+    async def test_no_unexpected_keys_in_config(self) -> None:
+        """Session config should only contain known SDK keys.
+
+        Guards against typos or wrong key names that SDK silently ignores.
+        SDK ref: copilot/types.py SessionConfig fields
+        """
+        KNOWN_SDK_KEYS = {
+            "session_id",
+            "client_name",
+            "model",
+            "reasoning_effort",
+            "tools",
+            "system_message",
+            "available_tools",
+            "excluded_tools",
+            "on_permission_request",
+            "on_user_input_request",
+            "hooks",
+            "working_directory",
+            "provider",
+            "streaming",
+            "mcp_servers",
+            "custom_agents",
+            "agent",
+            "config_dir",
+            "skill_directories",
+            "disabled_skills",
+            "infinite_sessions",
+            "on_event",
+        }
+
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4o", system_message="test"):
+            pass
+
+        config = mock_client.last_config
+        unknown_keys = set(config.keys()) - KNOWN_SDK_KEYS
+        assert unknown_keys == set(), (
+            f"Unknown keys in session config: {unknown_keys}. "
+            f"These may be typos that the SDK silently ignores."
+        )

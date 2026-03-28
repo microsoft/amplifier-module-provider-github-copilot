@@ -1,0 +1,128 @@
+# Event Bridge Classification
+# Contract: contracts/event-vocabulary.md
+# SDK Reference: github-copilot-sdk SessionEventType enum
+version: "1.0"
+
+# Content event types for TTFT (time to first token) tracking
+# Contract: behaviors:Streaming:MUST:1
+# Any of these event types arriving starts the TTFT clock
+content_event_types:
+  - assistant.message_delta
+  - assistant.streaming_delta
+  - assistant.reasoning_delta
+
+# Streaming emission configuration
+# Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+# Maps event types to content block types for real-time UI emission
+streaming_emission:
+  text_content_types:
+    - assistant.message_delta
+    - assistant.streaming_delta
+  thinking_content_types:
+    - assistant.reasoning_delta
+
+event_classifications:
+  bridge:
+    # Content events - map SDK dotted names to domain types
+    - sdk_type: assistant.message_delta
+      domain_type: CONTENT_DELTA
+      block_type: TEXT
+    - sdk_type: assistant.streaming_delta
+      domain_type: CONTENT_DELTA
+      block_type: TEXT
+    - sdk_type: assistant.reasoning_delta
+      domain_type: CONTENT_DELTA
+      block_type: THINKING
+    # Completion events
+    - sdk_type: tool.execution_complete
+      domain_type: TOOL_CALL
+    - sdk_type: tool_use_complete  # Legacy underscore alias
+      domain_type: TOOL_CALL
+    - sdk_type: assistant.turn_end
+      domain_type: TURN_COMPLETE
+    - sdk_type: assistant.message
+      domain_type: TURN_COMPLETE
+    - sdk_type: message_complete  # Legacy underscore alias
+      domain_type: TURN_COMPLETE
+    # Usage and status events
+    - sdk_type: assistant.usage
+      domain_type: USAGE_UPDATE
+    - sdk_type: usage_update  # Legacy underscore alias
+      domain_type: USAGE_UPDATE
+    - sdk_type: session.idle
+      domain_type: TURN_COMPLETE  # session.idle triggers TURN_COMPLETE per contract
+    - sdk_type: session.error
+      domain_type: ERROR
+
+  consume:
+    - assistant.turn_start  # SDK v0.1.33 - turn lifecycle, consume internally
+    - assistant.reasoning  # SDK v0.1.33 - final reasoning summary, consume internally
+    - assistant.intent  # SDK v0.2.0 - intent report echo, consume internally
+    - tool.execution_start
+    - tool_use_start  # Legacy underscore alias
+    - tool.execution_progress
+    - session.start
+    - session.shutdown
+    - session.usage_info
+    - system.notification  # SDK v0.1.33 - log internally, don't forward
+    - system_notification  # Legacy underscore alias
+
+  drop:
+    - tool.execution_partial_result
+    - tool.user_requested
+    - permission.*
+    - session.context_changed
+    - session.background_tasks_changed
+    - session.compaction_*
+    - session.truncation
+    - session.workspace_file_changed
+    - session.snapshot_rewind
+    - session.info
+    - session.warning
+    - session.title_changed
+    - session.plan_changed
+    - session.mode_changed
+    - session.model_change
+    - session.tools_updated
+    - session.handoff
+    - session.resume
+    - session.task_complete
+    - hook.*
+    - elicitation.*
+    - command.*
+    - subagent.*
+    - skill.*
+    - user.*
+    - external_tool.*
+    - exit_plan_mode.*
+    - user_input.*
+    - pending_messages.*
+    - abort
+    - unknown
+
+finish_reason_map:
+  # Values MUST be lowercase to match amplifier-core proto:
+  #   "stop", "tool_calls", "length", "content_filter"
+  end_turn: stop
+  stop: stop
+  tool_use: tool_calls
+  max_tokens: length
+  content_filter: content_filter
+  "": stop  # SDK often sends empty/missing finish_reason for normal completion
+  _default: stop  # Normal completion when SDK doesn't specify
+
+# Session lifecycle event classification
+# Used by event_helpers.py for SDK event type detection
+session_lifecycle:
+  idle_events:
+    - session.idle
+    - session_idle
+    - idle
+  error_events:
+    - error
+    - session.error
+    - session_error
+    - sdk_error
+  usage_events:
+    - assistant.usage
+    - usage_update
