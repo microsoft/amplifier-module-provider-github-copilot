@@ -142,9 +142,10 @@ The stable public API is:
 from amplifier_module_provider_github_copilot import (
     mount,                  # Amplifier module entrypoint
     GitHubCopilotProvider,  # Provider class
-    ProviderInfo,           # Re-exported from amplifier_core
-    ModelInfo,              # Re-exported from amplifier_core
 )
+
+# Kernel types — import directly from amplifier_core
+from amplifier_core import ProviderInfo, ModelInfo
 ```
 
 All other symbols are internal implementation details and may change without notice.

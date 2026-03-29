@@ -318,7 +318,7 @@ async def mount(
         raise
 
 
-__all__ = ["mount", "GitHubCopilotProvider", "ProviderInfo", "ModelInfo"]
+__all__ = ["mount", "GitHubCopilotProvider"]
 
 
 # =============================================================================
