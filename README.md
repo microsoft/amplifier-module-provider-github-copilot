@@ -196,6 +196,18 @@ On Windows PowerShell:
 $env:RUN_LIVE_TESTS="1"; python -m pytest tests/integration/ -v
 ```
 
+## Project Status
+
+This is an **experimental project** exploring integration between the Amplifier framework and the GitHub Copilot CLI SDK. We are sharing it openly to enable community learning and experimentation.
+
+As an experimental project:
+
+- Response times may vary
+- Breaking changes may occur without deprecation periods
+- Features may be added, changed, or removed based on learnings
+
+For questions, feel free to open a [GitHub Discussion](../../discussions). For bug reports, open a [GitHub Issue](../../issues) with reproduction steps.
+
 ## Troubleshooting
 
 | Error | Cause | Solution |
