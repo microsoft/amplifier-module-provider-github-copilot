@@ -54,11 +54,6 @@ provider-github-copilot = "amplifier_module_provider_github_copilot:mount"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.uv.sources]
-# SDK not on public PyPI - must specify git source for uv to resolve
-# This enables `amplifier update` to auto-install the SDK
-github-copilot-sdk = { git = "https://github.com/github/copilot-sdk", rev = "v0.2.0", subdirectory = "python" }
-
 [tool.hatch.metadata]
 allow-direct-references = true
 
