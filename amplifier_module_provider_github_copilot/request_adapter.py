@@ -24,6 +24,8 @@ __all__ = [
     "convert_chat_request",
     "extract_prompt_from_chat_request",
     "extract_system_message",
+    "build_request_payload_for_observability",
+    "build_response_payload_for_observability",
     # Private exports for backward compatibility with tests
     "_extract_message_content",
     "_extract_content_block",
@@ -260,3 +262,110 @@ def extract_system_message(request: Any) -> str | None:
     logger.debug("[REQUEST_ADAPTER] Extracted system_message (length=%d)", len(system_message))
 
     return system_message
+
+
+# =============================================================================
+# OBSERVABILITY PAYLOAD BUILDERS
+# =============================================================================
+# Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
+# Separation of Concerns: Payload construction belongs in request_adapter.py,
+# not inline in provider.py. Provider stays thin, calling these helpers.
+# =============================================================================
+
+
+def build_request_payload_for_observability(
+    model: str,
+    request: Any,
+    internal_request: CompletionRequest,
+) -> dict[str, Any]:
+    """Build observability payload for llm:request event.
+
+    Contract: observability:Verbosity:MUST:1
+
+    Tool Format Support:
+        This function handles two tool specification formats:
+        1. **Nested format** (OpenAI-style): {"function": {"name": "...", ...}}
+           - Used by kernel ChatRequest when tools come from OpenAI-style schemas
+        2. **Flat format** (Amplifier-native): {"name": "...", "parameters": {...}}
+           - Used by Amplifier's internal ToolSpec model
+
+        Both formats are valid and may appear depending on how the request
+        was constructed. The SDK accepts either format.
+
+    Args:
+        model: The model being used for the request.
+        request: The original kernel ChatRequest.
+        internal_request: The converted internal CompletionRequest.
+
+    Returns:
+        Dict suitable for raw_request parameter of emit_request().
+    """
+    # Extract tool names safely
+    # Note: tools can be ToolSpec objects (attribute access) or dicts
+    # Contract: observability:Payload:SHOULD:2 — Type-safe tool name extraction
+    tool_names: list[str] = []
+    if internal_request.tools:
+        for tool in internal_request.tools:
+            name: str | None = None
+
+            # Format 1: ToolSpec object (Amplifier kernel passes these)
+            # Has .name attribute directly (Pydantic BaseModel)
+            if hasattr(tool, "name") and not isinstance(tool, dict):
+                name_raw = getattr(tool, "name", None)
+                if isinstance(name_raw, str):
+                    name = name_raw
+
+            # Format 2: Dict — check if it's a dict before calling .get()
+            elif isinstance(tool, dict):
+                # Subformat 2a: Nested (OpenAI-style) {"function": {"name": "..."}}
+                func_raw = tool.get("function")  # type: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                if isinstance(func_raw, dict):
+                    name_raw = func_raw.get("name")  # type: ignore[reportUnknownVariableType]
+                    if isinstance(name_raw, str):
+                        name = name_raw
+                # Subformat 2b: Flat (Amplifier-native) {"name": "..."}
+                elif "name" in tool:
+                    name_raw = tool.get("name")  # type: ignore[reportUnknownVariableType]
+                    if isinstance(name_raw, str):
+                        name = name_raw
+
+            if name:
+                tool_names.append(name)
+
+    return {
+        "model": model,
+        "message_count": len(getattr(request, "messages", [])),
+        "tool_names": tool_names,
+        "has_system_message": bool(internal_request.system_message),
+    }
+
+
+def build_response_payload_for_observability(
+    response: Any,
+    tool_calls: int,
+) -> dict[str, Any]:
+    """Build observability payload for llm:response event.
+
+    Contract: observability:Verbosity:MUST:1
+
+    Args:
+        response: The ChatResponse object.
+        tool_calls: Number of tool calls in response.
+
+    Returns:
+        Dict suitable for raw_response parameter of emit_response_ok().
+    """
+    # Count content blocks safely
+    # Contract: observability:Payload:SHOULD:1 — Type-safe content counting
+    # Defense: content may be string in edge cases, which would return char count
+    content_block_count = 0
+    content = getattr(response, "content", None)
+    if content is not None and isinstance(content, (list, tuple)) and not isinstance(content, str):
+        content_block_count = len(content)  # type: ignore[arg-type]
+
+    return {
+        "text_length": len(response.text) if hasattr(response, "text") and response.text else 0,
+        "content_block_count": content_block_count,
+        "tool_calls": tool_calls,
+        "finish_reason": getattr(response, "finish_reason", None),
+    }

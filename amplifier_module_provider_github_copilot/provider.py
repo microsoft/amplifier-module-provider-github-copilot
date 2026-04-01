@@ -83,6 +83,8 @@ from .observability import (
 from .request_adapter import (
     _extract_content_block,  # pyright: ignore[reportPrivateUsage]
     _extract_message_content,  # pyright: ignore[reportPrivateUsage]
+    build_request_payload_for_observability,
+    build_response_payload_for_observability,
     convert_chat_request,
 )
 from .request_adapter import (
@@ -347,6 +349,11 @@ class GitHubCopilotProvider:
                 tool_count=len(internal_request.tools) if internal_request.tools else 0,
                 streaming=use_streaming,
                 timeout=timeout_seconds,
+                raw_request=build_request_payload_for_observability(
+                    model=model,
+                    request=request,
+                    internal_request=internal_request,
+                ),
             )
 
             # Initialize accumulator before loop (for type checker)
@@ -529,6 +536,11 @@ class GitHubCopilotProvider:
                 finish_reason=response.finish_reason,
                 content_blocks=len(response.content) if response.content else 0,
                 tool_calls=response_tool_calls,
+                sdk_session_id=accumulator.sdk_session_id,
+                raw_response=build_response_payload_for_observability(
+                    response=response,
+                    tool_calls=response_tool_calls,
+                ),
             )
 
         return response
@@ -599,6 +611,9 @@ class GitHubCopilotProvider:
             async with client.session(
                 model=model, tools=tools, system_message=system_message
             ) as sdk_session:
+                # Capture SDK session ID for observability correlation
+                accumulator.sdk_session_id = sdk_session.session_id
+
                 # Contract: behaviors:Streaming:MUST:4 — bounded queue, drop on full
                 event_queue: asyncio.Queue[Any] = asyncio.Queue(
                     maxsize=streaming_config.event_queue_size

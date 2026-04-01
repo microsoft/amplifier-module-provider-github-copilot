@@ -30,7 +30,7 @@ try:
     from amplifier_core.llm_errors import (
         ConfigurationError,  # pyright: ignore[reportAssignmentType]
     )
-except ImportError:
+except ImportError:  # pragma: no cover
     # Fallback for standalone testing without amplifier_core
     class ConfigurationError(Exception):  # type: ignore[no-redef]
         """Fallback ConfigurationError when amplifier_core unavailable.

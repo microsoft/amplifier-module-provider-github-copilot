@@ -305,6 +305,18 @@ Without tool definitions in `session_config["tools"]`:
 - Provider returns raw text instead of structured `tool_calls`
 - Foundation cannot render `🔧 Using tool:` formatting
 
+### Input Tool Formats
+
+The provider accepts tools from ChatRequest in two formats:
+
+1. **Nested format** (OpenAI-style): `{"function": {"name": "...", "description": "...", "parameters": {...}}}`
+   - Used when tools originate from OpenAI-compatible schemas
+   
+2. **Flat format** (Amplifier-native): `{"name": "...", "description": "...", "parameters": {...}}`
+   - Used by Amplifier's internal `ToolSpec` Pydantic model (see `message_models.py`)
+
+Both formats are valid and the provider handles them transparently during conversion to SDK format (SimpleNamespace objects).
+
 ### Test Anchors
 
 | Anchor | Clause |

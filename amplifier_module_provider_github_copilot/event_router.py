@@ -149,7 +149,7 @@ class EventRouter:
         # Contract: streaming-contract:usage:MUST:1
         if is_usage:
             usage_data = extract_usage_data(sdk_event)
-            if usage_data:
+            if usage_data:  # pragma: no branch — usage events always have data
                 self._usage.clear()
                 self._usage.append(usage_data)
 
@@ -183,7 +183,8 @@ class EventRouter:
         # 5. Queue event for processing
         try:
             self._queue.put_nowait(sdk_event)
-        except asyncio.QueueFull:
+        except asyncio.QueueFull:  # pragma: no cover
+            # Defensive: queue size is bounded, but overflow rare in practice
             logger.debug(
                 "[STREAMING] Event queue full, dropping delta: %s",
                 event_type,
@@ -216,7 +217,7 @@ class EventRouter:
         if isinstance(sdk_event, dict):
             typed_evt = cast(dict[str, Any], sdk_event)
             data = typed_evt.get("data")
-        else:
+        else:  # pragma: no cover — SDK uses dict events; object fallback defensive
             data = getattr(sdk_event, "data", None)
 
         error_msg: str
@@ -226,7 +227,7 @@ class EventRouter:
             typed_data = cast(dict[str, Any], data)
             msg_val = typed_data.get("message")
             error_msg = str(msg_val) if msg_val is not None else sdk_event_str
-        else:
+        else:  # pragma: no cover — SDK sends dict data; object fallback defensive
             error_msg = str(getattr(data, "message", sdk_event_str))
 
         err = Exception(f"Session error: {error_msg}")
@@ -262,7 +263,8 @@ class EventRouter:
                 from amplifier_core import TextContent
 
                 self._emit_streaming(TextContent(text=delta_text))
-        elif event_type in self._config.thinking_content_types:
+        elif event_type in self._config.thinking_content_types:  # pragma: no cover
+            # Thinking content only emitted by models with extended thinking
             delta_text = _extract_delta_text(sdk_event)
             if delta_text:
                 from amplifier_core import ThinkingContent

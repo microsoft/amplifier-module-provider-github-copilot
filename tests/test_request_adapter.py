@@ -205,3 +205,212 @@ class TestExtractContentBlock:
         result = extract_prompt_from_chat_request(request)
 
         assert "Dict content" in result
+
+
+class TestBuildRequestPayloadForObservability:
+    """Test build_request_payload_for_observability() function.
+
+    Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
+    """
+
+    def test_builds_minimal_payload_with_just_model(self) -> None:
+        """Build payload with only model specified."""
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_request_payload_for_observability,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter import CompletionRequest
+
+        internal = CompletionRequest(prompt="Hello", model="gpt-4o")
+
+        result = build_request_payload_for_observability(
+            model="gpt-4o",
+            request=MockChatRequest(messages=[MockMessage(role="user", content="Hello")]),
+            internal_request=internal,
+        )
+
+        assert result["model"] == "gpt-4o"
+        assert result["message_count"] == 1
+        assert result["tool_names"] == []
+        assert result["has_system_message"] is False
+
+    def test_includes_tool_names(self) -> None:
+        """Include tool function names in payload."""
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_request_payload_for_observability,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter import CompletionRequest
+
+        tools = [
+            {"function": {"name": "read_file"}},
+            {"function": {"name": "write_file"}},
+        ]
+        internal = CompletionRequest(prompt="Use tools", model="gpt-4o", tools=tools)
+
+        result = build_request_payload_for_observability(
+            model="gpt-4o",
+            request=MockChatRequest(
+                messages=[MockMessage(role="user", content="Use tools")],
+                tools=tools,
+            ),
+            internal_request=internal,
+        )
+
+        assert result["tool_names"] == ["read_file", "write_file"]
+
+    def test_detects_system_message(self) -> None:
+        """Detect presence of system message."""
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_request_payload_for_observability,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter import CompletionRequest
+
+        internal = CompletionRequest(
+            prompt="Hello",
+            model="gpt-4o",
+            system_message="You are a helpful assistant",
+        )
+
+        result = build_request_payload_for_observability(
+            model="gpt-4o",
+            request=MockChatRequest(messages=[MockMessage(role="user", content="Hello")]),
+            internal_request=internal,
+        )
+
+        assert result["has_system_message"] is True
+
+    def test_handles_toolspec_objects_not_dicts(self) -> None:
+        """Handle ToolSpec objects from Amplifier kernel (attribute access, not .get()).
+
+        Contract: observability:Payload:SHOULD:2 — Type-safe tool name extraction
+
+        Regression: ToolSpec objects have .name attribute, not .get() method.
+        The function must handle both ToolSpec objects and legacy dicts.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_request_payload_for_observability,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter import CompletionRequest
+
+        # Simulate ToolSpec objects from amplifier_core (Pydantic BaseModel with attributes)
+        @dataclass
+        class MockToolSpec:
+            """Mock ToolSpec matching amplifier_core.message_models.ToolSpec."""
+
+            name: str
+            description: str
+            parameters: dict[str, Any] | None = None
+
+        tool_specs = [
+            MockToolSpec(name="read_file", description="Read a file"),
+            MockToolSpec(name="write_file", description="Write to a file"),
+        ]
+        # Cast to list[dict] to satisfy type checker - at runtime these are ToolSpec objects
+        internal = CompletionRequest(
+            prompt="Use tools",
+            model="gpt-4o",
+            tools=tool_specs,  # type: ignore[arg-type]
+        )
+
+        result = build_request_payload_for_observability(
+            model="gpt-4o",
+            request=MockChatRequest(messages=[MockMessage(role="user", content="Use tools")]),
+            internal_request=internal,
+        )
+
+        # Should extract names from ToolSpec objects via attribute access
+        assert result["tool_names"] == ["read_file", "write_file"]
+
+
+class TestBuildResponsePayloadForObservability:
+    """Test build_response_payload_for_observability() function.
+
+    Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
+    """
+
+    def test_builds_payload_from_response(self) -> None:
+        """Build payload from ChatResponse."""
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_response_payload_for_observability,
+        )
+
+        # Mock response with basic fields
+        class MockResponse:
+            text = "Hello, world!"
+            content = [{"type": "text", "text": "Hello, world!"}]
+            finish_reason = "end_turn"
+
+        result = build_response_payload_for_observability(
+            response=MockResponse(),
+            tool_calls=0,
+        )
+
+        assert result["text_length"] == 13
+        assert result["content_block_count"] == 1
+        assert result["tool_calls"] == 0
+        assert result["finish_reason"] == "end_turn"
+
+    def test_handles_none_text(self) -> None:
+        """Handle response with no text."""
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_response_payload_for_observability,
+        )
+
+        class MockResponse:
+            text = None
+            content = []
+            finish_reason = "tool_use"
+
+        result = build_response_payload_for_observability(
+            response=MockResponse(),
+            tool_calls=2,
+        )
+
+        assert result["text_length"] == 0
+        assert result["content_block_count"] == 0
+        assert result["tool_calls"] == 2
+        assert result["finish_reason"] == "tool_use"
+
+    def test_handles_none_content(self) -> None:
+        """Handle response with None content."""
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_response_payload_for_observability,
+        )
+
+        class MockResponse:
+            text = "Just text"
+            content = None
+            finish_reason = "stop"
+
+        result = build_response_payload_for_observability(
+            response=MockResponse(),
+            tool_calls=0,
+        )
+
+        assert result["text_length"] == 9
+        assert result["content_block_count"] == 0
+
+    def test_handles_string_content_defensive(self) -> None:
+        """Handle response with string content (edge case).
+
+        Contract: observability:Payload:SHOULD:1 — Type-safe content counting
+
+        Some edge cases may have content as a string instead of a list.
+        The function should return 0 for content_block_count, not the
+        character count of the string.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            build_response_payload_for_observability,
+        )
+
+        class MockResponse:
+            text = "Hello"
+            content = "raw string content"  # Edge case: string instead of list
+            finish_reason = "stop"
+
+        result = build_response_payload_for_observability(
+            response=MockResponse(),
+            tool_calls=0,
+        )
+
+        # Should be 0, not 18 (length of "raw string content")
+        assert result["content_block_count"] == 0

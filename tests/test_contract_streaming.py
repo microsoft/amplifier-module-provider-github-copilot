@@ -283,3 +283,88 @@ class TestFinishReasonNormalization:
             f"when tool_calls present. Got '{response.finish_reason}'. "
             f"This causes premature exit to interactive mode."
         )
+
+
+class TestThinkingBlockSignaturePreservation:
+    """streaming-contract:ThinkingBlock:MUST:1
+
+    Tests that reasoning_opaque is preserved as ThinkingBlock.signature.
+    """
+
+    def test_thinking_block_preserves_signature(self) -> None:
+        """streaming-contract:ThinkingBlock:MUST:1 — reasoning_opaque → signature.
+
+        Anthropic models send encrypted extended thinking data in `reasoning_opaque`.
+        This MUST be preserved as ThinkingBlock.signature for multi-turn extended thinking.
+        """
+        accumulator = StreamingAccumulator()
+
+        # Add thinking delta WITH signature (extracted from SDK reasoning_opaque)
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={
+                    "text": "Let me think about this...",
+                    "reasoning_opaque": "encrypted_signature_abc123xyz",
+                },
+                block_type="THINKING",
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        # Should have thinking content
+        assert response.content is not None
+        assert len(response.content) > 0
+
+        # Find the ThinkingBlock
+        thinking_block = None
+        for block in response.content:
+            if hasattr(block, "thinking"):
+                thinking_block = block
+                break
+
+        assert thinking_block is not None, "ThinkingBlock not found in response.content"
+
+        # CRITICAL: signature MUST be preserved for multi-turn extended thinking
+        assert hasattr(thinking_block, "signature"), "ThinkingBlock missing 'signature' attribute"
+        assert thinking_block.signature == "encrypted_signature_abc123xyz", (
+            f"Expected signature='encrypted_signature_abc123xyz', "
+            f"got '{thinking_block.signature}'. "
+            f"This breaks multi-turn extended thinking with Anthropic models."
+        )
+
+    def test_thinking_block_handles_no_signature(self) -> None:
+        """ThinkingBlock handles missing signature gracefully.
+
+        Non-extended-thinking responses may not have reasoning_opaque.
+        """
+        accumulator = StreamingAccumulator()
+
+        # Add thinking delta WITHOUT signature
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Simple thinking..."},
+                block_type="THINKING",
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        # Should have thinking content
+        thinking_block = None
+        for block in response.content:
+            if hasattr(block, "thinking"):
+                thinking_block = block
+                break
+
+        assert thinking_block is not None
+        # signature should be None (not missing, not error)
+        assert thinking_block.signature is None

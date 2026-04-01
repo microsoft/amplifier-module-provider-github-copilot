@@ -1111,3 +1111,104 @@ class TestFetchAndMapModels:
 
         with pytest.raises(ProviderUnavailableError):
             await fetch_and_map_models(mock_client)
+
+
+# =============================================================================
+# Test: model_translation edge cases
+# Coverage: sdk_adapter/model_translation.py lines 90-93, 100-101, 123-124
+# =============================================================================
+
+
+class TestModelTranslationEdgeCases:
+    """Test sdk_model_to_copilot_model with malformed SDK data.
+
+    The SDK may return partial model info. Translation must handle None values.
+    """
+
+    def test_translate_sdk_model_with_none_capabilities(self) -> None:
+        """SDK model with capabilities=None uses defaults.
+
+        Coverage: model_translation.py lines 90-93
+        """
+        from types import SimpleNamespace
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.model_translation import (
+            sdk_model_to_copilot_model,
+        )
+
+        # SDK model with no capabilities (complete shape)
+        sdk_model = SimpleNamespace(
+            id="test-model",
+            name="Test Model",
+            capabilities=None,
+            supported_reasoning_efforts=None,
+            default_reasoning_effort=None,
+        )
+
+        result = sdk_model_to_copilot_model(sdk_model)
+
+        assert result.id == "test-model"
+        # Uses defaults from config when capabilities is None
+        assert result.context_window > 0
+        assert result.max_output_tokens > 0
+
+    def test_translate_sdk_model_with_none_limits(self) -> None:
+        """SDK model with capabilities.limits=None uses defaults.
+
+        Coverage: model_translation.py lines 100-101
+        """
+        from types import SimpleNamespace
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.model_translation import (
+            sdk_model_to_copilot_model,
+        )
+
+        # SDK model with capabilities but no limits
+        sdk_model = SimpleNamespace(
+            id="test-model",
+            name="Test Model",
+            capabilities=SimpleNamespace(
+                limits=None,
+                supports=SimpleNamespace(vision=True, reasoning_effort=False),
+            ),
+            supported_reasoning_efforts=None,
+            default_reasoning_effort=None,
+        )
+
+        result = sdk_model_to_copilot_model(sdk_model)
+
+        assert result.id == "test-model"
+        assert result.context_window > 0
+
+    def test_translate_sdk_model_with_none_supports(self) -> None:
+        """SDK model with capabilities.supports=None defaults to False.
+
+        Coverage: model_translation.py lines 123-124
+        """
+        from types import SimpleNamespace
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.model_translation import (
+            sdk_model_to_copilot_model,
+        )
+
+        # SDK model with capabilities but no supports
+        sdk_model = SimpleNamespace(
+            id="test-model",
+            name="Test Model",
+            capabilities=SimpleNamespace(
+                limits=SimpleNamespace(
+                    max_context_window_tokens=100000,
+                    max_prompt_tokens=80000,
+                ),
+                supports=None,
+            ),
+            supported_reasoning_efforts=None,
+            default_reasoning_effort=None,
+        )
+
+        result = sdk_model_to_copilot_model(sdk_model)
+
+        assert result.id == "test-model"
+        # Vision/reasoning should default to False when supports is None
+        assert result.supports_vision is False
+        assert result.supports_reasoning_effort is False

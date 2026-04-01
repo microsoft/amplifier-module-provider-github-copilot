@@ -18,7 +18,7 @@ import logging
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
@@ -39,6 +39,7 @@ __all__ = [
     "RetryConfig",
     "StreamingConfig",
     "SdkProtectionConfig",
+    "SdkConfig",
     "load_models_config",
     "load_retry_config",
     "load_streaming_config",
@@ -412,6 +413,19 @@ class SessionProtectionConfig:
 
 
 @dataclass
+class SdkConfig:
+    """SDK subprocess configuration from config/sdk_protection.yaml.
+
+    Contract: sdk-protection:Subprocess:MUST:7
+    """
+
+    log_level: str
+    valid_log_levels: list[str]
+    log_level_env_var: str
+    prewarm_subprocess: bool
+
+
+@dataclass
 class SdkProtectionConfig:
     """SDK protection policy from config/sdk_protection.yaml.
 
@@ -420,6 +434,7 @@ class SdkProtectionConfig:
 
     tool_capture: ToolCaptureConfig
     session: SessionProtectionConfig
+    sdk: SdkConfig
 
 
 @functools.lru_cache(maxsize=1)
@@ -469,6 +484,13 @@ def load_sdk_protection_config() -> SdkProtectionConfig:
             provider="github-copilot",
         )
 
+    sdk_data = data.get("sdk")
+    if not sdk_data:
+        raise ConfigurationError(
+            "Config validation failed: sdk_protection.yaml missing 'sdk' section.",
+            provider="github-copilot",
+        )
+
     # Validate required keys
     for key in ["first_turn_only", "deduplicate", "log_capture_events"]:
         if key not in tc:
@@ -484,6 +506,38 @@ def load_sdk_protection_config() -> SdkProtectionConfig:
                 provider="github-copilot",
             )
 
+    for key in ["log_level", "log_level_env_var", "prewarm_subprocess", "valid_log_levels"]:
+        if key not in sdk_data:
+            raise ConfigurationError(
+                f"Config validation failed: sdk_protection.yaml missing 'sdk.{key}'.",
+                provider="github-copilot",
+            )
+
+    # Contract: sdk-protection:Subprocess:MUST:7 — Validate log_level against allowlist
+    valid_log_levels_raw = sdk_data["valid_log_levels"]
+    if not isinstance(valid_log_levels_raw, list):
+        raise ConfigurationError(
+            "Config validation failed: sdk.valid_log_levels must be a list.",
+            provider="github-copilot",
+        )
+    # Cast to list[str] for type checker after validation
+    valid_log_levels: list[str] = cast(list[str], valid_log_levels_raw)
+    if sdk_data["log_level"] not in valid_log_levels:
+        raise ConfigurationError(
+            f"Config validation failed: Invalid sdk.log_level '{sdk_data['log_level']}'. "
+            f"Must be one of: {', '.join(valid_log_levels)}",
+            provider="github-copilot",
+        )
+
+    # Contract: behaviors:ConfigLoading:MUST:6 — Reject string booleans
+    prewarm_value = sdk_data["prewarm_subprocess"]
+    if not isinstance(prewarm_value, bool):
+        raise ConfigurationError(
+            f"Config validation failed: sdk.prewarm_subprocess must be boolean (true/false), "
+            f"not '{type(prewarm_value).__name__}' ({prewarm_value!r}).",
+            provider="github-copilot",
+        )
+
     tool_capture = ToolCaptureConfig(
         first_turn_only=tc["first_turn_only"],
         deduplicate=tc["deduplicate"],
@@ -496,9 +550,17 @@ def load_sdk_protection_config() -> SdkProtectionConfig:
         idle_timeout_seconds=float(sess["idle_timeout_seconds"]),
     )
 
+    sdk = SdkConfig(
+        log_level=sdk_data["log_level"],
+        valid_log_levels=valid_log_levels,
+        log_level_env_var=sdk_data["log_level_env_var"],
+        prewarm_subprocess=prewarm_value,
+    )
+
     return SdkProtectionConfig(
         tool_capture=tool_capture,
         session=session,
+        sdk=sdk,
     )
 
 
@@ -525,7 +587,8 @@ def _load_model_fallback_values() -> dict[str, int]:
 
     try:
         files = importlib.resources.files("amplifier_module_provider_github_copilot.config")
-        content = (files / "models.yaml").read_text()
+        # Cross-OS compatibility: explicit encoding (L1 fix)
+        content = (files / "models.yaml").read_text(encoding="utf-8")
     except (FileNotFoundError, TypeError) as exc:
         raise ConfigurationError(
             "models.yaml not found in config/. "

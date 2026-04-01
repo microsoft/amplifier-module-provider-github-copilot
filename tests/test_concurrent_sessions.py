@@ -20,8 +20,9 @@ import pytest
 class MockSubprocessConfig:
     """Mock SubprocessConfig that accepts github_token."""
 
-    def __init__(self, github_token: str | None = None) -> None:
+    def __init__(self, github_token: str | None = None, log_level: str = "info") -> None:
         self.github_token = github_token
+        self.log_level = log_level
 
 
 class TestConcurrentSessions:

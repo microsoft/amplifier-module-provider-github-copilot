@@ -136,12 +136,14 @@ class MockSDKSession:
         events: Sequence[SessionEvent | dict[str, Any]] | None = None,
         *,
         raise_on_send: Exception | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Initialize mock session.
 
         Args:
             events: Sequence of SDK events to yield (SessionEvent or dict).
             raise_on_send: Exception to raise during send().
+            session_id: Mock SDK session ID for observability correlation.
         """
         self.events: Sequence[SessionEvent | dict[str, Any]] = events or []
         self.raise_on_send = raise_on_send
@@ -153,6 +155,8 @@ class MockSDKSession:
         self.last_attachments: list[dict[str, Any]] | None = None
         # Handler accepts Any since we pass both dicts and SessionEvent
         self._handlers: list[Callable[[Any], None]] = []
+        # SDK session ID for observability (mock value for tests)
+        self.session_id: str = session_id or "mock-sdk-session-id"
 
     def on(self, handler: Callable[[SessionEvent], None]) -> Callable[[], None]:
         """Register event handler (correct API).

@@ -25,17 +25,22 @@ status:
   error: "error"
 
 # Finish reason values (normalized from SDK)
+# Contract: event-vocabulary.md — Provider normalizes to "tool_calls" (amplifier-core proto)
 finish_reasons:
-  tool_use: "tool_use"
+  tool_use: "tool_calls"  # SDK sends tool_use, we normalize to tool_calls
   end_turn: "end_turn"
   stop: "stop"
   length: "length"
   content_filter: "content_filter"
 
 # Event emission (Amplifier hooks)
+# Note: events.enabled removed - events are always on when observability is loaded.
+# To disable events, don't subscribe to hooks.
 events:
-  enabled: true
-  raw_payloads: false  # Set true for full request/response in events
+  # Contract: observability:Verbosity:MUST:1 — default OFF per security posture
+  # WARNING: raw_payloads exposes full API payloads including potentially sensitive data.
+  # Never enable in production. Use only for local debugging with non-sensitive test data.
+  raw_payloads: false  # Set true for forensic/perf analysis (includes redacted metadata)
 
 # OTEL spans (if opentelemetry installed)
 otel:

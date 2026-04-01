@@ -1,10 +1,11 @@
 # Contract: Provider Protocol
 
 ## Version
-- **Current:** 1.0 (v2.1 Kernel-Validated)
+- **Current:** 1.1 (v2.1 Kernel-Validated)
 - **Module Reference:** amplifier_module_provider_github_copilot/provider.py
 - **Amplifier Contract:** amplifier-core PROVIDER_CONTRACT.md
 - **Status:** Specification
+- **Updated:** 2026-03-31 — Clarified mount() failure semantics
 
 ---
 
@@ -29,9 +30,15 @@ async def mount(
 
 **Behavioral Requirements:**
 - **MUST** accept `ModuleCoordinator` as first argument (type-safe)
-- **MUST** return cleanup callable or None (graceful degradation)
+- **MUST** return cleanup callable on success
+- **MUST** raise exception on failure (framework must distinguish failure from opt-out)
 - **MUST** register provider with coordinator via `coordinator.mount()`
 - **MUST** use process-level singleton for SDK client (memory efficiency)
+
+**Failure Semantics:**
+- Returning `None` indicates "provider chose not to load" (opt-out)
+- Raising an exception indicates "provider failed to load" (error)
+- **RATIONALE:** Framework needs to distinguish between a provider that doesn't apply vs one that's broken
 
 **Type Conformance:**
 - **MUST** use `ModuleCoordinator` instead of `Any` for type safety
@@ -346,6 +353,32 @@ async def _emit_event(self, event_name: str, data: dict[str, Any]) -> None:
 | `provider-protocol:QualityGates:MUST:2` | Full-repo `pyright .` must pass before release |
 
 **Rationale:** Running pyright only on the main package allowed test file errors to accumulate undetected. Test files are part of the deliverable and must be type-clean for Microsoft OSS release.
+
+---
+
+## Public API Surface
+
+### __all__ Export List
+
+The module's `__all__` defines the stable public API.
+
+**Behavioral Requirements:**
+- **MUST** export only `mount` and the provider class
+- **MUST NOT** re-export kernel types (`ModelInfo`, `ProviderInfo`)
+- **MUST** match ecosystem convention (anthropic, openai, azure-openai)
+
+**Rationale:** Kernel types belong to `amplifier_core`. Re-exporting them couples the provider's API to kernel internals and creates version skew risks.
+
+**Canonical Pattern:**
+```python
+__all__ = ["mount", "GitHubCopilotProvider"]
+```
+
+**Test Anchors:**
+| Anchor | Clause |
+|--------|--------|
+| `provider-protocol:public_api:MUST:1` | Exports only mount and provider class |
+| `provider-protocol:public_api:MUST:2` | Does not re-export kernel types |
 
 ---
 

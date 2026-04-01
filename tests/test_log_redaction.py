@@ -337,3 +337,237 @@ class TestLoggingPathIntegration:
 
         assert "/home/user/config.yaml" in result
         assert "secret123" not in result
+
+
+# ============================================================================
+# Test: Shadow Test Failure Fixes (S1-S4)
+# ============================================================================
+
+
+class TestShadowTestFailures:
+    """Tests for shadow test security failures.
+
+    These tests verify fixes for 4 failed shadow tests that leaked secrets.
+    Shadow test source: Amplifier v2026.03.25, core 1.3.3, commit 76e7fd0
+    """
+
+    # -------------------------------------------------------------------------
+    # S1: GitHub PAT with variable length
+    # Contract: behaviors:Logging:MUST:7
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "token_length",
+        [20, 25, 30, 36, 40, 50],  # Variable lengths
+    )
+    def test_github_pat_variable_length(self, token_length: int) -> None:
+        """GitHub PAT with variable length is redacted.
+
+        Contract: behaviors:Logging:MUST:7
+        Shadow Test: S1 — ghp_aBcDeFgHiJkLmNoPqRsT... LEAKED
+
+        GitHub tokens vary in length (20-50+ chars). The pattern must
+        use {20,} not {36} exactly.
+        """
+        token = "ghp_" + "a" * token_length
+        text = f"SDK error: invalid token {token}"
+        result = redact_sensitive_text(text)
+
+        assert token not in result, f"Token with {token_length} chars leaked"
+        assert REDACTED in result
+
+    # -------------------------------------------------------------------------
+    # S2: GitHub OAuth with variable length
+    # Contract: behaviors:Logging:MUST:7
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "token_length",
+        [20, 25, 30, 36, 40, 50],  # Variable lengths
+    )
+    def test_github_oauth_variable_length(self, token_length: int) -> None:
+        """GitHub OAuth token with variable length is redacted.
+
+        Contract: behaviors:Logging:MUST:7
+        Shadow Test: S2 — gho_aBcDeFgHiJkLmNoPqRsT... LEAKED
+        """
+        token = "gho_" + "a" * token_length
+        text = f"Authentication error: {token}"
+        result = redact_sensitive_text(text)
+
+        assert token not in result, f"Token with {token_length} chars leaked"
+        assert REDACTED in result
+
+    # -------------------------------------------------------------------------
+    # S3: Bearer token with space separator
+    # Contract: behaviors:Logging:MUST:9
+    # -------------------------------------------------------------------------
+
+    def test_bearer_with_space_separator(self) -> None:
+        """Bearer token with space (not colon) is redacted.
+
+        Contract: behaviors:Logging:MUST:9
+        Shadow Test: S3 — Bearer sk-1234567890abcdef LEAKED
+
+        The original pattern required [=:] but "Bearer <token>" uses space.
+        """
+        text = "Bearer sk-1234567890abcdef"
+        result = redact_sensitive_text(text)
+
+        assert "sk-1234567890abcdef" not in result
+        assert REDACTED in result
+
+    def test_bearer_with_colon_separator(self) -> None:
+        """Bearer token with colon is still redacted.
+
+        Contract: behaviors:Logging:MUST:9
+        """
+        text = "Bearer: sk-1234567890abcdef"
+        result = redact_sensitive_text(text)
+
+        assert "sk-1234567890abcdef" not in result
+        assert REDACTED in result
+
+    # -------------------------------------------------------------------------
+    # S4: OpenAI API key (sk- pattern)
+    # Contract: behaviors:Logging:MUST:8
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "key_length",
+        [20, 32, 48, 51],  # Various OpenAI key lengths
+    )
+    def test_openai_api_key(self, key_length: int) -> None:
+        """OpenAI API key (sk-...) is redacted.
+
+        Contract: behaviors:Logging:MUST:8
+        Shadow Test: S4 — sk-1234567890abcdefghijk... LEAKED
+
+        OpenAI keys start with sk- but had no pattern.
+        """
+        key = "sk-" + "a" * key_length
+        text = f"API error with key {key}"
+        result = redact_sensitive_text(text)
+
+        assert key not in result, f"OpenAI key with {key_length} chars leaked"
+        assert REDACTED in result
+
+    def test_anthropic_api_key(self) -> None:
+        """Anthropic API key (sk-ant-...) is redacted.
+
+        Contract: behaviors:Logging:MUST:8
+        """
+        key = "sk-ant-api03-" + "a" * 40
+        text = f"Anthropic error: {key}"
+        result = redact_sensitive_text(text)
+
+        assert key not in result
+        assert REDACTED in result
+
+    # -------------------------------------------------------------------------
+    # Additional edge cases
+    # Contract: behaviors:Logging:MUST:10
+    # -------------------------------------------------------------------------
+
+    def test_opaque_token_shorter_than_40(self) -> None:
+        """Opaque tokens 32+ chars are redacted (not just 40+).
+
+        Contract: behaviors:Logging:MUST:10
+        """
+        token = "A" * 32  # 32 chars, previously required 40+
+        text = f"Session token: {token}"
+        result = redact_sensitive_text(text)
+
+        assert token not in result
+        assert REDACTED in result
+
+    def test_sdk_exception_with_bare_token(self) -> None:
+        """SDK exception containing bare token is redacted.
+
+        Contract: behaviors:Logging:MUST:4
+
+        This is the integration case from error_translation.py using str(exc).
+        """
+        # Simulate SDK exception that contains token in message
+        sdk_error = Exception("CAPI request failed: ghp_" + "x" * 30)
+        result = redact_exception_message(sdk_error)
+
+        assert "ghp_" not in result or REDACTED in result
+
+
+# ============================================================================
+# Test: redact_dict with nested structures
+# ============================================================================
+
+
+class TestRedactDictNestedStructures:
+    """Test redact_dict handles nested lists and dicts.
+
+    Contract: behaviors:Logging:MUST:4
+    Coverage: security_redaction.py lines 172-192
+    """
+
+    def test_redact_dict_with_list_of_strings(self) -> None:
+        """List of strings with tokens are redacted."""
+        from amplifier_module_provider_github_copilot.security_redaction import redact_dict
+
+        data = {"tokens": ["ghp_" + "a" * 30, "normal_string", "sk-" + "b" * 25]}
+        result = redact_dict(data)
+
+        assert "ghp_" not in str(result)
+        assert "sk-" not in str(result)
+        assert "normal_string" in str(result)
+
+    def test_redact_dict_with_list_of_dicts(self) -> None:
+        """List of dicts are recursively redacted."""
+        from amplifier_module_provider_github_copilot.security_redaction import redact_dict
+
+        data = {
+            "items": [
+                {"token": "ghp_" + "a" * 30},
+                {"safe": "value"},
+            ]
+        }
+        result = redact_dict(data)
+
+        assert "ghp_" not in str(result)
+        assert "value" in str(result)
+
+    def test_redact_dict_with_list_of_primitives(self) -> None:
+        """List of primitives (int, bool) are preserved."""
+        from amplifier_module_provider_github_copilot.security_redaction import redact_dict
+
+        data = {"numbers": [1, 2, 3], "flags": [True, False], "mixed": [1, "ghp_" + "a" * 30, None]}
+        result = redact_dict(data)
+
+        assert result["numbers"] == [1, 2, 3]
+        assert result["flags"] == [True, False]
+        assert 1 in result["mixed"]
+        assert None in result["mixed"]
+        assert "ghp_" not in str(result["mixed"])
+
+    def test_redact_dict_with_nested_dict_in_dict(self) -> None:
+        """Nested dicts are recursively redacted."""
+        from amplifier_module_provider_github_copilot.security_redaction import redact_dict
+
+        data = {"outer": {"inner": {"token": "ghp_" + "a" * 30}}}
+        result = redact_dict(data)
+
+        assert "ghp_" not in str(result)
+
+    def test_redact_dict_primitives_preserved(self) -> None:
+        """Primitive values (int, float, bool, None) are preserved."""
+        from amplifier_module_provider_github_copilot.security_redaction import redact_dict
+
+        data = {
+            "count": 42,
+            "ratio": 3.14,
+            "enabled": True,
+            "nothing": None,
+        }
+        result = redact_dict(data)
+
+        assert result["count"] == 42
+        assert result["ratio"] == 3.14
+        assert result["enabled"] is True
+        assert result["nothing"] is None

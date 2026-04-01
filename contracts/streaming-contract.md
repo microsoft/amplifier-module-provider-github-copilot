@@ -51,7 +51,12 @@ class TextBlock(BaseModel):
 class ThinkingBlock(BaseModel):
     type: Literal["thinking"] = "thinking"
     thinking: str
+    signature: str | None = None  # Opaque extended thinking signature
 ```
+
+**streaming-contract:ThinkingBlock:MUST:1**: Provider MUST preserve `reasoning_opaque` from SDK events as `ThinkingBlock.signature`.
+
+**Rationale:** Anthropic models send encrypted extended thinking data in `reasoning_opaque` which must be returned verbatim in subsequent turns for multi-turn extended thinking to work. The kernel's `ThinkingBlock.signature` field maps directly to the SDK's `reasoning_opaque`. GPT models do not use this field.
 
 ### ToolCall (Pydantic)
 ```python

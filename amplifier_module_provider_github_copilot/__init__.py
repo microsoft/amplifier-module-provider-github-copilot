@@ -21,7 +21,7 @@ import os as _os_logging
 # - Sensitive data (prompts, tokens, tool outputs) persisting on disk
 # - World-readable log files in /tmp/ or other locations
 # - Compliance violations (GDPR, SOC2, etc.)
-if _os_logging.environ.get("GHCP_DEBUG"):
+if _os_logging.environ.get("GHCP_DEBUG"):  # pragma: no cover
     _stderr_handler = _logging.StreamHandler()
     _stderr_handler.setFormatter(
         _logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s", "%H:%M:%S")
@@ -55,8 +55,7 @@ if _os_logging.environ.get("GHCP_DEBUG"):
 # Using importlib.metadata avoids importing the SDK itself at module load time.
 # Contract: sdk-boundary.md MUST:5
 #
-# P1-6 Security Fix: SDK check bypass only allowed in pytest context.
-# The env var alone is not sufficient - pytest must be loaded in sys.modules.
+# Security: SDK check bypass requires both env var AND pytest in sys.modules.
 # This prevents production misuse while preserving test functionality.
 import asyncio
 import os as _os
@@ -79,7 +78,8 @@ _skip_sdk_check = _os.environ.get("SKIP_SDK_CHECK") and _is_pytest_running()
 if not _skip_sdk_check:
     try:
         _pkg_version("github-copilot-sdk")
-    except _PkgNotFoundError as _e:
+    except _PkgNotFoundError as _e:  # pragma: no cover
+        # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
             "Install with:  pip install 'github-copilot-sdk>=0.2.0,<0.3.0'"
@@ -90,7 +90,7 @@ if not _skip_sdk_check:
 from collections.abc import Awaitable, Callable  # noqa: E402
 from typing import Any  # noqa: E402
 
-from amplifier_core import ModelInfo, ModuleCoordinator, ProviderInfo  # noqa: E402
+from amplifier_core import ModuleCoordinator  # noqa: E402
 
 from .provider import GitHubCopilotProvider  # noqa: E402
 
@@ -118,6 +118,7 @@ _shared_client: CopilotClientWrapper | None = None
 _shared_client_refcount: int = 0
 _shared_client_lock: asyncio.Lock | None = None
 _shared_client_lock_guard = threading.Lock()  # Guards lazy lock creation
+_prewarm_task: asyncio.Task[None] | None = None  # Track prewarm task for cleanup
 
 # Lock timeout in seconds - hardcoded mechanism, not YAML policy
 # 30s timeout prevents indefinite blocking from deadlock
@@ -252,15 +253,26 @@ async def mount(
     Uses a process-level singleton for CopilotClientWrapper to prevent
     O(N) memory consumption from N concurrent sub-agents.
 
+    Pre-warming (optional):
+        When `sdk.prewarm_subprocess: true` in sdk_protection.yaml, the SDK
+        subprocess is spawned at mount() time rather than first request time.
+        This moves ~2s latency from user-visible first-request to invisible
+        mount time. Fire-and-forget — mount() doesn't wait for completion.
+
     Args:
         coordinator: Amplifier kernel coordinator.
         config: Optional provider configuration.
 
     Returns:
-        Cleanup callable, or None. Returns None on failure (graceful degradation).
+        Cleanup callable on success.
+
+    Raises:
+        Exception: On mount failure (framework distinguishes failure from opt-out).
 
     """
     import logging
+
+    from .config_loader import load_sdk_protection_config
 
     logger = logging.getLogger(__name__)
 
@@ -272,14 +284,44 @@ async def mount(
         from .security_redaction import redact_sensitive_text
 
         logger.error("[MOUNT] Failed to acquire shared client: %s", redact_sensitive_text(e))
-        # P2 Fix: Raise instead of return None — framework must distinguish failure from opt-out.
         raise
     except Exception as e:
         from .security_redaction import redact_sensitive_text
 
         logger.error("[MOUNT] Error acquiring shared client: %s", redact_sensitive_text(e))
-        # P2 Fix: Raise instead of return None — framework must distinguish failure from opt-out.
         raise
+
+    # Pre-warming: spawn SDK subprocess early if enabled
+    # Contract: sdk-protection:Subprocess:MUST:5 — Track prewarm task for cleanup
+    global _prewarm_task
+    try:
+        sdk_config = load_sdk_protection_config()
+        if sdk_config.sdk.prewarm_subprocess:
+            logger.info("[MOUNT] Pre-warming SDK subprocess (fire-and-forget)...")
+
+            async def _prewarm() -> None:
+                try:
+                    # Use public prewarm() API instead of internal method
+                    await shared_client.prewarm()  # type: ignore[union-attr]
+                    logger.info("[MOUNT] Pre-warming complete")
+                except Exception as prewarm_err:  # pragma: no cover
+                    from .security_redaction import redact_sensitive_text
+
+                    # Pre-warm failure is not fatal — first request will retry
+                    logger.warning(
+                        "[MOUNT] Pre-warming failed (will retry on first request): %s",
+                        redact_sensitive_text(prewarm_err),
+                    )
+
+            _prewarm_task = asyncio.create_task(_prewarm())
+    except Exception as config_err:  # pragma: no cover
+        from .security_redaction import redact_sensitive_text
+
+        # Config load failure during prewarm check is not fatal
+        logger.warning(
+            "[MOUNT] Failed to check prewarm config: %s",
+            redact_sensitive_text(config_err),
+        )
 
     try:
         logger.info("[MOUNT] Creating GitHubCopilotProvider...")
@@ -291,6 +333,17 @@ async def mount(
         logger.info("[MOUNT] Provider mounted successfully")
 
         async def cleanup() -> None:
+            # Contract: sdk-protection:Subprocess:MUST:5 — Cancel prewarm task
+            global _prewarm_task
+            if _prewarm_task is not None and not _prewarm_task.done():  # pragma: no cover
+                # Prewarm cancelled during shutdown — unlikely in tests
+                _prewarm_task.cancel()
+                try:
+                    await _prewarm_task
+                except asyncio.CancelledError:
+                    pass  # Expected
+                _prewarm_task = None
+
             # Release our reference to the shared client.
             # provider.close() is NOT called here because the shared
             # client lifecycle is managed by the singleton, not the provider.
@@ -314,10 +367,10 @@ async def mount(
         )
         # Full traceback at DEBUG level only (security: avoid leaking sensitive data)
         logger.debug("[MOUNT] Mount failure traceback", exc_info=True)
-        # P2 Fix: Raise instead of return None — framework must distinguish failure from opt-out.
         raise
 
 
+# Contract: provider-protocol:public_api:MUST:1
 __all__ = ["mount", "GitHubCopilotProvider"]
 
 
@@ -343,4 +396,4 @@ def __getattr__(name: str) -> None:
 
     if name in REMOVED_SYMBOLS:
         raise ImportError(REMOVED_SYMBOLS[name])
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")  # pragma: no cover

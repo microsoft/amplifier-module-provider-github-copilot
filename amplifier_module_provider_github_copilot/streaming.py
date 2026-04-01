@@ -96,6 +96,9 @@ class AccumulatedResponse:
 
     text_content: str = ""
     thinking_content: str = ""
+    # Opaque signature for extended thinking (Anthropic models)
+    # Contract: streaming-contract:ThinkingBlock:MUST:1
+    reasoning_opaque: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=lambda: [])
     usage: dict[str, Any] | None = None
     finish_reason: str | None = None
@@ -109,11 +112,16 @@ class StreamingAccumulator:
 
     text_content: str = ""
     thinking_content: str = ""
+    # Opaque signature for extended thinking (Anthropic models)
+    # Contract: streaming-contract:ThinkingBlock:MUST:1
+    reasoning_opaque: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=lambda: [])
     usage: dict[str, Any] | None = None
     finish_reason: str | None = None
     error: dict[str, Any] | None = None
     is_complete: bool = False
+    # SDK session ID for observability correlation
+    sdk_session_id: str | None = None
 
     def add(self, event: DomainEvent) -> None:
         """Add domain event to accumulator.
@@ -138,6 +146,10 @@ class StreamingAccumulator:
             text = event.data.get("text", "")
             if event.block_type == "THINKING":
                 self.thinking_content += text
+                # Capture reasoning_opaque for ThinkingBlock.signature
+                # Contract: streaming-contract:ThinkingBlock:MUST:1
+                if event.data.get("reasoning_opaque"):
+                    self.reasoning_opaque = event.data["reasoning_opaque"]
             else:
                 self.text_content += text
         elif event.type == DomainEventType.TOOL_CALL:
@@ -154,6 +166,7 @@ class StreamingAccumulator:
         return AccumulatedResponse(
             text_content=self.text_content,
             thinking_content=self.thinking_content,
+            reasoning_opaque=self.reasoning_opaque,
             tool_calls=self.tool_calls,
             usage=self.usage,
             finish_reason=self.finish_reason,
@@ -196,7 +209,14 @@ class StreamingAccumulator:
 
         # Add thinking content using both type systems
         if self.thinking_content:
-            content.append(ThinkingBlock(thinking=self.thinking_content))
+            # Contract: streaming-contract:ThinkingBlock:MUST:1
+            # Pass reasoning_opaque as signature for multi-turn extended thinking
+            content.append(
+                ThinkingBlock(
+                    thinking=self.thinking_content,
+                    signature=self.reasoning_opaque,
+                )
+            )
             content_blocks.append(ThinkingContent(text=self.thinking_content))
 
         # Convert tool calls to kernel ToolCall and ToolCallContent

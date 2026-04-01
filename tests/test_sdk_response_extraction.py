@@ -316,3 +316,62 @@ class TestToolArgumentExtraction:
         # Non-tool events shouldn't have arguments but should have text
         assert "arguments" not in result
         assert result.get("text") == "hello"
+
+
+class TestReasoningOpaqueExtraction:
+    """streaming-contract:ThinkingBlock:MUST:1
+
+    Test extraction of reasoning_opaque for ThinkingBlock.signature.
+    """
+
+    def test_extract_event_fields_preserves_reasoning_opaque(self) -> None:
+        """extract_event_fields MUST preserve reasoning_opaque from SDK events.
+
+        Contract: streaming-contract:ThinkingBlock:MUST:1
+
+        Anthropic models send encrypted extended thinking data in `reasoning_opaque`.
+        This MUST be extracted and later mapped to ThinkingBlock.signature.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.extract import (
+            extract_event_fields,
+        )
+
+        # Mock SDK event with reasoning_opaque (Claude extended thinking)
+        class MockReasoningData:
+            reasoning_text = "Let me think about this..."
+            reasoning_opaque = "encrypted_signature_abc123xyz"  # Opaque token for multi-turn
+
+        class MockReasoningEvent:
+            type = "assistant.reasoning"
+            data = MockReasoningData()
+
+        result = extract_event_fields(MockReasoningEvent())
+
+        # reasoning_opaque MUST be extracted
+        assert "reasoning_opaque" in result, (
+            "reasoning_opaque was not extracted! "
+            "This breaks multi-turn extended thinking with Anthropic models."
+        )
+        assert result["reasoning_opaque"] == "encrypted_signature_abc123xyz"
+        # reasoning_text should also be extracted
+        assert result.get("reasoning_text") == "Let me think about this..."
+
+    def test_extract_event_fields_handles_missing_reasoning_opaque(self) -> None:
+        """extract_event_fields handles events without reasoning_opaque."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.extract import (
+            extract_event_fields,
+        )
+
+        # Non-Claude or non-extended-thinking event
+        class MockData:
+            reasoning_text = "Simple reasoning"  # No opaque token
+
+        class MockEvent:
+            type = "assistant.reasoning"
+            data = MockData()
+
+        result = extract_event_fields(MockEvent())
+
+        # Should handle gracefully - no error, just no reasoning_opaque key
+        assert "reasoning_opaque" not in result or result.get("reasoning_opaque") is None
+        assert result.get("reasoning_text") == "Simple reasoning"

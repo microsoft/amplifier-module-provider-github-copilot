@@ -81,7 +81,6 @@ class ObservabilityConfig:
     event_names: EventNames = field(default_factory=EventNames)
     status: StatusValues = field(default_factory=StatusValues)
     finish_reasons: FinishReasons = field(default_factory=FinishReasons)
-    events_enabled: bool = True
     raw_payloads: bool = False
 
 
@@ -161,7 +160,6 @@ def load_observability_config() -> ObservabilityConfig:
             event_names=event_names,
             status=status,
             finish_reasons=finish_reasons,
-            events_enabled=events_data.get("enabled", True),
             raw_payloads=events_data.get("raw_payloads", False),
         )
 
@@ -259,10 +257,11 @@ class LlmLifecycleContext:
 
         # P3-14: Enforce raw_payloads policy
         if self.config.raw_payloads and raw_request:
-            from .security_redaction import redact_sensitive_text
+            from .security_redaction import redact_dict
 
+            # L2 Fix: Preserve dict structure for queryability
             # Redact before including (contract: Verbosity:MUST:2)
-            payload["raw_request"] = redact_sensitive_text(str(raw_request))
+            payload["raw_request"] = redact_dict(raw_request)
 
         await emit_event(
             self.coordinator,
@@ -279,12 +278,16 @@ class LlmLifecycleContext:
         finish_reason: str | None,
         content_blocks: int,
         tool_calls: int,
+        sdk_session_id: str | None = None,
         raw_response: dict[str, Any] | None = None,
     ) -> None:
         """Emit llm:response event for successful completion.
 
         Contract: observability:Events:MUST:3
         Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
+
+        Args:
+            sdk_session_id: Copilot SDK session ID for log correlation.
         """
         elapsed_ms = int((time.time() - self.start_time) * 1000)
 
@@ -310,12 +313,17 @@ class LlmLifecycleContext:
             "tool_calls": tool_calls,
         }
 
+        # SDK session ID for log correlation with Copilot SDK logs
+        if sdk_session_id:
+            payload["sdk_session_id"] = sdk_session_id
+
         # P3-14: Enforce raw_payloads policy
         if self.config.raw_payloads and raw_response:
-            from .security_redaction import redact_sensitive_text
+            from .security_redaction import redact_dict
 
+            # L2 Fix: Preserve dict structure for queryability
             # Redact before including (contract: Verbosity:MUST:2)
-            payload["raw_response"] = redact_sensitive_text(str(raw_response))
+            payload["raw_response"] = redact_dict(raw_response)
 
         await emit_event(
             self.coordinator,

@@ -130,7 +130,7 @@ class CompletionRequest:
     Attributes:
         prompt: The prompt text to send.
         model: Optional model override.
-        tools: Tool definitions for the completion.
+        tools: Tool definitions for the completion (ToolSpec objects or dicts).
         attachments: Image attachments (BlobAttachment dicts) for vision models.
         system_message: Optional system message for SDK session (mode: replace).
         max_tokens: Maximum tokens in response.
@@ -141,8 +141,8 @@ class CompletionRequest:
     prompt: str
     model: str | None = None
     # Note: Using default_factory=list is conventional but pyright strict requires annotation.
-    # Using explicit factory cast for type safety.
-    tools: list[dict[str, Any]] = field(default_factory=list)  # type: ignore[misc]
+    # Runtime type is Any because Amplifier kernel passes ToolSpec objects, not dicts.
+    tools: list[Any] = field(default_factory=list)  # type: ignore[misc]
     attachments: list[dict[str, Any]] = field(default_factory=list)  # type: ignore[misc]
     system_message: str | None = None
     max_tokens: int | None = None
