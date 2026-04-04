@@ -15,17 +15,18 @@ This contract defines the 5 stable domain events and how SDK events are classifi
 
 ---
 
-## The Six Domain Events
+## The Five Domain Events
 
 | Event | Description | Source |
 |-------|-------------|--------|
-| `CONTENT_DELTA` | Text chunk from assistant | SDK assistant.message_delta |
-| `THINKING_DELTA` | Reasoning/thinking chunk | SDK assistant.reasoning_delta |
+| `CONTENT_DELTA` | Text/thinking chunk from assistant | SDK assistant.message_delta, assistant.reasoning_delta |
 | `TOOL_CALL` | Tool invocation request | SDK tool.call (captured, not executed) |
 | `USAGE_UPDATE` | Token usage statistics | SDK assistant.usage |
 | `TURN_COMPLETE` | Assistant turn finished | SDK assistant.message / session.idle |
 | `SESSION_IDLE` | Reserved for future use | Not currently emitted |
 | `ERROR` | Session error event | SDK error / exception |
+
+**NOTE:** Thinking/reasoning content uses `CONTENT_DELTA` with `block_type="THINKING"` per events.yaml bridge mappings. This simplifies the domain model by treating thinking as a content type rather than a separate event category.
 
 **Note:** `session.idle` triggers TURN_COMPLETE, not SESSION_IDLE.
 The SESSION_IDLE enum value exists for potential future extensibility.
@@ -39,8 +40,8 @@ Events translated to domain events and passed to Amplifier.
 
 | SDK Event | Domain Event | Notes |
 |-----------|--------------|-------|
-| `assistant.message_delta` | `CONTENT_DELTA` | Text streaming |
-| `assistant.reasoning_delta` | `THINKING_DELTA` | Reasoning/thinking streaming |
+| `assistant.message_delta` | `CONTENT_DELTA` | Text streaming (block_type=TEXT) |
+| `assistant.reasoning_delta` | `CONTENT_DELTA` | Thinking streaming (block_type=THINKING) |
 | `assistant.message` | `TURN_COMPLETE` | Final message |
 | `session.idle` | `TURN_COMPLETE` | Turn finished (not SESSION_IDLE) |
 | `assistant.usage` | `USAGE_UPDATE` | Token counts |
@@ -146,7 +147,8 @@ DomainEvent(
 DomainEvent(
     type="TURN_COMPLETE",
     data={
-        "finish_reason": "end_turn",  # or "tool_calls" (amplifier-core canonical)
+        # Per amplifier-core proto: "stop", "tool_calls", "length", "content_filter"
+        "finish_reason": "stop",  # or "tool_calls" for tool invocations
         "message_id": "msg_123",
     }
 )
@@ -158,15 +160,16 @@ DomainEvent(
 
 | SDK Reason | Domain Reason |
 |------------|---------------|
-| `end_turn` | `STOP` |
-| `stop` | `STOP` |
-| `tool_calls` | `TOOL_CALLS` |
-| `max_tokens` | `LENGTH` |
-| `content_filter` | `CONTENT_FILTER` |
-| (default) | `ERROR` |
+| `end_turn` | `"stop"` |
+| `stop` | `"stop"` |
+| `tool_use` | `"tool_calls"` |
+| `max_tokens` | `"length"` |
+| `content_filter` | `"content_filter"` |
+| (default) | `"stop"` |
 
-**Note:** Provider normalizes to `"tool_calls"` (amplifier-core proto) when tool_calls are present,
-regardless of what SDK sends. See streaming-contract.md for details.
+**Note:** The SDK sends `tool_use` as the finish_reason when tool calls are made. The provider
+normalizes this to `"tool_calls"` (amplifier-core proto value). See `events.yaml` finish_reason_map
+and streaming-contract.md for details.
 
 ---
 
@@ -177,46 +180,51 @@ version: "1.0"
 
 event_classifications:
   bridge:
-    - sdk_event: "assistant.message_delta"
-      domain_event: "CONTENT_DELTA"
-      extract: ["text", "index"]
+    - sdk_type: "assistant.message_delta"
+      domain_type: "CONTENT_DELTA"
+      block_type: "TEXT"
     
-    - sdk_event: "assistant.reasoning_delta"
-      domain_event: "THINKING_DELTA"
-      extract: ["text", "index"]
+    - sdk_type: "assistant.reasoning_delta"
+      domain_type: "CONTENT_DELTA"
+      block_type: "THINKING"
     
-    - sdk_event: "assistant.message"
-      domain_event: "TURN_COMPLETE"
-      extract: ["finish_reason", "message_id"]
+    - sdk_type: "assistant.message"
+      domain_type: "TURN_COMPLETE"
     
-    - sdk_event: "session.idle"
-      domain_event: "TURN_COMPLETE"
-      extract: ["finish_reason"]
+    - sdk_type: "session.idle"
+      domain_type: "TURN_COMPLETE"
     
-    - sdk_event: "assistant.usage"
-      domain_event: "USAGE_UPDATE"
-      extract: ["input_tokens", "output_tokens", "total_tokens"]
+    - sdk_type: "assistant.usage"
+      domain_type: "USAGE_UPDATE"
   
   consume:
     - "tool.call"
     - "tool.result"
     - "session.start"
-    - "session.resume"
+    # NOTE: session.resume is DROP in events.yaml (not CONSUME)
+    # See events.yaml for the complete authoritative list
   
   drop:
     - "debug.*"
     - "heartbeat"
+    - "session.resume"
     - "session.compaction.*"
 
 finish_reason_map:
-  end_turn: STOP
-  stop: STOP
-  tool_calls: TOOL_CALLS  # amplifier-core canonical value
-  max_tokens: LENGTH
-  content_filter: CONTENT_FILTER
-  "": STOP  # SDK sends empty string for normal completion
-  _default: STOP  # Normal completion when unspecified
+  # Values MUST be lowercase to match amplifier-core proto:
+  #   "stop", "tool_calls", "length", "content_filter"
+  # SDK sends "tool_use" — mapped to domain "tool_calls"
+  end_turn: stop
+  stop: stop
+  tool_use: tool_calls  # SDK sends tool_use; domain value is tool_calls
+  max_tokens: length
+  content_filter: content_filter
+  "": stop  # SDK sends empty string for normal completion
+  _default: stop  # Normal completion when unspecified
 ```
+
+> **Note:** The Config Schema above shows the minimal structure. See `config/events.yaml` for the
+> complete authoritative classification list including all legacy aliases and DROP patterns.
 
 ---
 

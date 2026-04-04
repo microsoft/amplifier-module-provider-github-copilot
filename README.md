@@ -98,7 +98,7 @@ providers:
   - module: provider-github-copilot
     source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
     config:
-      default_model: claude-sonnet-4
+      default_model: claude-opus-4.5
 ```
 
 ## Usage
@@ -133,6 +133,8 @@ Works with sensible defaults out of the box. Default model is `claude-opus-4.5` 
 All options can be set via provider config in your bundle or amplifier configuration. See the source code for the full list of configurable parameters.
 
 Set `raw: true` to include raw API request/response payloads in `llm:request` and `llm:response` events.
+
+> **Security Warning:** The `raw: true` setting exposes full API payloads including potentially sensitive data. Never enable in production environments. Use only for local debugging with non-sensitive test data.
 
 ## Features
 

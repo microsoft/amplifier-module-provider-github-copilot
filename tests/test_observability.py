@@ -368,7 +368,7 @@ class TestObservabilityConfigLoading:
 
         config = _default_observability_config()
         assert config.provider_name == "github-copilot"
-        assert config.events_enabled is True
+        # Note: events_enabled removed as dead config (P4 fix)
         assert config.raw_payloads is False
 
     def test_observability_config_has_event_names(self) -> None:
@@ -570,7 +570,7 @@ class TestObservabilityConfigFallbacks:
         # Should return default config
         assert config is not None
         assert config.provider_name == "github-copilot"
-        assert config.events_enabled is True
+        # Note: events_enabled removed as dead config (P4 fix)
 
         # Clear cache for other tests
         load_observability_config.cache_clear()

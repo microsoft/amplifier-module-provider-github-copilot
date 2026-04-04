@@ -122,13 +122,16 @@ class TestGetInfo:
         assert "streaming" in info.capabilities
 
     def test_get_info_includes_tool_use_capability(self) -> None:
-        """AC-2: get_info() includes 'tool_use' capability."""
+        """AC-2: get_info() includes 'tools' capability.
+
+        Per kernel capabilities.py: TOOLS="tools" (not "tool_use").
+        """
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
         info = provider.get_info()
 
-        assert "tool_use" in info.capabilities
+        assert "tools" in info.capabilities
 
 
 class TestListModels:

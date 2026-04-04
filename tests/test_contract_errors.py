@@ -268,3 +268,185 @@ class TestConcreteErrorTranslation:
             f"Expected ProviderUnavailableError, got {type(result)}"
         )
         assert result.provider == "github-copilot"
+
+
+# =============================================================================
+# T-1: 8 Missing Error Rule Tests
+# =============================================================================
+
+
+class TestMissingErrorRules:
+    """T-1: Cover the 8 error rules that had no tests.
+
+    Each test verifies that the errors.yaml mapping fires correctly for
+    the corresponding SDK exception class and string pattern.
+    """
+
+    @pytest.fixture()
+    def error_config(self) -> ErrorConfig:
+        """Load real error config from YAML."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            load_error_config,
+        )
+
+        return load_error_config()
+
+    def test_circuit_breaker_error_rule(self, error_config: ErrorConfig) -> None:
+        """P0 — CircuitBreakerError → ProviderUnavailableError(retryable=False)."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ProviderUnavailableError,
+            translate_sdk_error,
+        )
+
+        class CircuitBreakerError(Exception):
+            pass
+
+        result = translate_sdk_error(CircuitBreakerError("circuit breaker TRIPPED"), error_config)
+        assert isinstance(result, ProviderUnavailableError), f"Got {type(result).__name__}"
+        assert result.retryable is False
+
+    def test_quota_exceeded_error_rule(self, error_config: ErrorConfig) -> None:
+        """P3 — QuotaExceededError → QuotaExceededError(retryable=False)."""
+        from amplifier_core.llm_errors import QuotaExceededError
+
+        from amplifier_module_provider_github_copilot.error_translation import translate_sdk_error
+
+        class QuotaExceededSDKError(Exception):
+            pass
+
+        result = translate_sdk_error(QuotaExceededSDKError("quota exceeded"), error_config)
+        assert isinstance(result, QuotaExceededError), f"Got {type(result).__name__}"
+        assert result.retryable is False
+
+    def test_connection_error_rule(self, error_config: ErrorConfig) -> None:
+        """P6 — ConnectionError → NetworkError(retryable=True)."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            NetworkError,
+            translate_sdk_error,
+        )
+
+        class ProcessExitedError(Exception):
+            pass
+
+        result = translate_sdk_error(ProcessExitedError("process exited"), error_config)
+        assert isinstance(result, NetworkError), f"Got {type(result).__name__}"
+        assert result.retryable is True
+
+    def test_model_not_found_error_rule(self, error_config: ErrorConfig) -> None:
+        """P7 — ModelNotFoundError → NotFoundError(retryable=False)."""
+        from amplifier_core.llm_errors import NotFoundError
+
+        from amplifier_module_provider_github_copilot.error_translation import translate_sdk_error
+
+        class ModelNotFoundError(Exception):
+            pass
+
+        result = translate_sdk_error(ModelNotFoundError("model not found"), error_config)
+        assert isinstance(result, NotFoundError), f"Got {type(result).__name__}"
+        assert result.retryable is False
+
+    def test_context_length_error_rule(self, error_config: ErrorConfig) -> None:
+        """P8 — ContextLengthError → ContextLengthError(retryable=False)."""
+        from amplifier_core.llm_errors import ContextLengthError
+
+        from amplifier_module_provider_github_copilot.error_translation import translate_sdk_error
+
+        class ContextLengthSDKError(Exception):
+            pass
+
+        result = translate_sdk_error(ContextLengthSDKError("context length exceeded"), error_config)
+        assert isinstance(result, ContextLengthError), f"Got {type(result).__name__}"
+        assert result.retryable is False
+
+    def test_stream_error_rule(self, error_config: ErrorConfig) -> None:
+        """P9 — StreamError → StreamError(retryable=True)."""
+        from amplifier_core.llm_errors import StreamError
+
+        from amplifier_module_provider_github_copilot.error_translation import translate_sdk_error
+
+        class SDKStreamError(Exception):
+            pass
+
+        result = translate_sdk_error(SDKStreamError("broken pipe in stream"), error_config)
+        assert isinstance(result, StreamError), f"Got {type(result).__name__}"
+        assert result.retryable is True  # StreamError is retryable per errors.yaml
+
+    def test_invalid_tool_call_error_rule(self, error_config: ErrorConfig) -> None:
+        """P10 — InvalidToolCallError → InvalidToolCallError(retryable=False)."""
+        from amplifier_core.llm_errors import InvalidToolCallError
+
+        from amplifier_module_provider_github_copilot.error_translation import translate_sdk_error
+
+        class InvalidToolCallSDKError(Exception):
+            pass
+
+        result = translate_sdk_error(
+            InvalidToolCallSDKError("fake tool detected, conflicts with a built-in"), error_config
+        )
+        assert isinstance(result, InvalidToolCallError), f"Got {type(result).__name__}"
+        assert result.retryable is False
+
+    def test_configuration_error_rule(self, error_config: ErrorConfig) -> None:
+        """P11 — ConfigurationError → ConfigurationError(retryable=False)."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ConfigurationError,
+            translate_sdk_error,
+        )
+
+        class SDKConfigError(Exception):
+            pass
+
+        result = translate_sdk_error(SDKConfigError("configuration error"), error_config)
+        assert isinstance(result, ConfigurationError), f"Got {type(result).__name__}"
+        assert result.retryable is False
+
+
+# =============================================================================
+# T-2: Error Rule Priority Ordering
+# =============================================================================
+
+
+class TestErrorRulePriority:
+    """T-2: Verify P0 (CircuitBreaker) fires before P4 (Timeout).
+
+    Critical: CircuitBreakerError message matches BOTH the CircuitBreaker pattern
+    AND the Timeout string pattern ("timeout" appears in some circuit breaker messages).
+    P0 MUST be checked before P4 to avoid false-positive Timeout classification.
+    """
+
+    @pytest.fixture()
+    def error_config(self) -> ErrorConfig:
+        from amplifier_module_provider_github_copilot.error_translation import load_error_config
+
+        return load_error_config()
+
+    def test_circuit_breaker_fires_before_timeout(self, error_config: ErrorConfig) -> None:
+        """P0 before P4: CircuitBreakerError MUST NOT become LLMTimeoutError.
+
+        The string "timeout" can appear in CircuitBreaker messages (e.g., waiting
+        for session > max=30s). If P4 matched before P0, we'd wrongly return
+        LLMTimeoutError (retryable=True) instead of ProviderUnavailableError
+        (retryable=False), causing the retry loop to keep hammering a broken provider.
+        """
+        from amplifier_module_provider_github_copilot.error_translation import (
+            LLMTimeoutError,
+            ProviderUnavailableError,
+            translate_sdk_error,
+        )
+
+        class CircuitBreakerError(Exception):
+            pass
+
+        # Message contains BOTH "timeout" AND circuit breaker pattern
+        exc = CircuitBreakerError("Circuit breaker TRIPPED: waiting for session > max=30s timeout")
+        result = translate_sdk_error(exc, error_config)
+
+        # MUST be ProviderUnavailableError (P0), NOT LLMTimeoutError (P4)
+        assert isinstance(result, ProviderUnavailableError), (
+            f"Expected ProviderUnavailableError (P0 wins), got {type(result).__name__}. "
+            "P0 CircuitBreaker rule MUST fire before P4 Timeout rule."
+        )
+        assert not isinstance(result, LLMTimeoutError), (
+            "CircuitBreakerError MUST NOT be classified as LLMTimeoutError"
+        )
+        assert result.retryable is False, "CircuitBreaker MUST be non-retryable"

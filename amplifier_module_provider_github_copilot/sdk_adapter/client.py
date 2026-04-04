@@ -17,6 +17,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+from .._permissions import ensure_executable
+from .._platform import locate_cli_binary
+from ..config_loader import load_sdk_protection_config
 from ..error_translation import ErrorConfig, translate_sdk_error
 from ..security_redaction import safe_log_message
 
@@ -96,8 +99,8 @@ def deny_permission_request(request: Any) -> Any:
             message="Amplifier orchestrator controls all operations",
         )
     # SDK < 0.1.28 doesn't have PermissionRequestResult
-    # Return dict fallback
-    return {
+    # Return dict fallback (only reached with SDK < 0.1.28, not in current supported range)
+    return {  # pragma: no cover
         "kind": "denied-by-rules",
         "message": "Amplifier orchestrator controls all operations",
     }
@@ -140,6 +143,41 @@ def _resolve_token() -> str | None:
     return None
 
 
+def _resolve_sdk_log_level() -> str:
+    """Resolve SDK log level from config and environment.
+
+    Contract: sdk-protection:Subprocess:MUST:7
+
+    Priority:
+    1. Environment variable (validated against allowlist)
+    2. YAML default (config.sdk.log_level)
+
+    Returns:
+        SDK log level (none, error, warning, info, debug, all).
+    """
+    import logging
+
+    config = load_sdk_protection_config()
+    env_var = config.sdk.log_level_env_var
+    default = config.sdk.log_level
+    valid_levels = set(config.sdk.valid_log_levels)
+
+    env_value = os.environ.get(env_var)
+    if env_value:
+        if env_value not in valid_levels:
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Invalid SDK log level %r from %s; using %r",
+                env_value,
+                env_var,
+                default,
+            )
+            return default
+        return env_value
+
+    return default
+
+
 class CopilotClientWrapper:
     """Wrapper around copilot.CopilotClient with lifecycle management.
 
@@ -159,6 +197,7 @@ class CopilotClientWrapper:
         self._client_lock: asyncio.Lock = asyncio.Lock()
         self._disconnect_failures: int = 0  # Track disconnect failures for escalation
         self._stopped: bool = False  # Track whether client has been stopped
+        self._copilot_pid: int | None = None  # SDK subprocess PID for log correlation
 
     def is_healthy(self) -> bool:
         """Check if the client is healthy and usable.
@@ -192,6 +231,15 @@ class CopilotClientWrapper:
         """Return the active SDK client (injected or owned)."""
         return self._sdk_client or self._owned_client
 
+    @property
+    def copilot_pid(self) -> str | None:
+        """SDK subprocess process ID for log correlation.
+
+        Returns:
+            PID as string, or None if client not initialized.
+        """
+        return str(self._copilot_pid) if self._copilot_pid else None
+
     async def _ensure_client_initialized(self, caller: str = "session") -> Any:
         """Ensure SDK client is initialized, creating lazily if needed.
 
@@ -205,9 +253,14 @@ class CopilotClientWrapper:
             Initialized SDK client.
 
         Raises:
+            RuntimeError: When client has been stopped (MUST-6).
             ProviderUnavailableError: When SDK not installed.
             LLMError: When SDK initialization fails.
         """
+        # Contract: sdk-protection:Subprocess:MUST:6 — Guard re-init after stop
+        if self._stopped:
+            raise RuntimeError("Copilot client has been stopped")
+
         client = self._get_client()
         if client is not None:
             return client
@@ -222,10 +275,15 @@ class CopilotClientWrapper:
                 from ._imports import CopilotClient, SubprocessConfig
 
                 token = _resolve_token()
+                log_level = _resolve_sdk_log_level()
 
                 # SDK v0.2.0: Use SubprocessConfig instead of options dict
                 if SubprocessConfig is not None and token:
-                    config = SubprocessConfig(github_token=token)
+                    config = SubprocessConfig(github_token=token, log_level=log_level)
+                    self._owned_client = CopilotClient(config)  # type: ignore[arg-type]
+                elif SubprocessConfig is not None and not token:
+                    # No token but SubprocessConfig available - use with log_level only
+                    config = SubprocessConfig(log_level=log_level)
                     self._owned_client = CopilotClient(config)  # type: ignore[arg-type]
                 elif token and SubprocessConfig is None:
                     # Security P1-6: Fail closed when explicit token cannot be applied.
@@ -242,10 +300,17 @@ class CopilotClientWrapper:
                         provider="github-copilot",
                     )
                 else:
-                    # No token provided - use SDK default authentication
+                    # No token, no SubprocessConfig - use SDK default authentication
                     self._owned_client = CopilotClient()  # type: ignore[arg-type]
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
+
+                # sdk-boundary:BinaryResolution:MUST:6 — repair execute bits before start
+                # uv strips execute permissions from bundled binaries; repair here.
+                # No-op on Windows; safe to call if binary not found.
+                binary_path = locate_cli_binary()
+                if binary_path:
+                    ensure_executable(binary_path)
 
                 # Start client - clear on failure for retry
                 try:
@@ -253,6 +318,11 @@ class CopilotClientWrapper:
                 except Exception:
                     self._owned_client = None
                     raise
+
+                # Capture subprocess PID for log correlation
+                process = getattr(self._owned_client, "_process", None)
+                if process is not None:
+                    self._copilot_pid = getattr(process, "pid", None)
 
                 logger.info("[CLIENT] Copilot client initialized for %s", caller)
                 return self._owned_client
@@ -268,6 +338,23 @@ class CopilotClientWrapper:
             except Exception as e:
                 error_config = self._get_error_config()
                 raise translate_sdk_error(e, error_config) from e
+
+    async def prewarm(self) -> None:
+        """Pre-warm SDK subprocess for lower first-request latency.
+
+        Call this at mount() time when sdk.prewarm_subprocess is true.
+        Spawns the SDK subprocess early (~2s startup) so the first complete()
+        call has ~200ms latency instead of ~2000ms.
+
+        Contract: sdk-protection:Subprocess:MUST:5 — This is the public API
+        that should be called instead of _ensure_client_initialized().
+
+        Raises:
+            RuntimeError: When client has been stopped.
+            ProviderUnavailableError: When SDK not installed.
+            LLMError: When SDK initialization fails.
+        """
+        await self._ensure_client_initialized(caller="prewarm")
 
     @asynccontextmanager
     async def session(
@@ -374,7 +461,10 @@ class CopilotClientWrapper:
         finally:
             if sdk_session is not None:
                 try:
-                    await sdk_session.disconnect()  # type: ignore[union-attr]
+                    await asyncio.wait_for(
+                        sdk_session.disconnect(),  # type: ignore[union-attr]
+                        timeout=load_sdk_protection_config().session.disconnect_timeout_seconds,
+                    )
                     logger.debug("[CLIENT] Session disconnected")
                     self._disconnect_failures = 0  # Reset on success
                 except Exception as disconnect_err:

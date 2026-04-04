@@ -81,6 +81,14 @@ def extract_event_fields(sdk_event: Any) -> dict[str, Any]:
         if reasoning_text and "reasoning_text" not in event_dict:
             event_dict["reasoning_text"] = reasoning_text
 
+        # reasoning_opaque for extended thinking signature preservation
+        # Contract: streaming-contract:ThinkingBlock:MUST:1
+        # Anthropic models send encrypted extended thinking data that must be
+        # returned verbatim in subsequent turns for multi-turn extended thinking.
+        reasoning_opaque = getattr(sdk_data, "reasoning_opaque", None)
+        if reasoning_opaque and "reasoning_opaque" not in event_dict:
+            event_dict["reasoning_opaque"] = reasoning_opaque
+
         # Tool event fields (SDK uses tool_call_id, tool_name)
         # Map to domain's "id" and "name" for translate_event
         tool_call_id = getattr(sdk_data, "tool_call_id", None)

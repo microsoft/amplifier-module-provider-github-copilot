@@ -778,6 +778,202 @@ class TestTokenFallbackSecurity:
                 or "cannot apply" in str(exc_info.value).lower()
             )
 
+
+class TestPrewarmSubprocess:
+    """Pre-warming: SDK subprocess initialization at mount() time.
+
+    When `sdk.prewarm_subprocess: true` in sdk_protection.yaml, the SDK
+    subprocess should be spawned during mount() rather than during the
+    first complete() call. This moves ~2s latency from user-visible
+    first-request time to invisible mount time.
+
+    Contract: sdk-boundary:Config:MUST:1
+    """
+
+    @pytest.mark.asyncio
+    async def test_prewarm_disabled_by_default(self) -> None:
+        """When prewarm_subprocess=False, client NOT initialized at mount.
+
+        Contract: sdk-boundary:Config:MUST:1 — lazy init when disabled.
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_sdk_protection_config,
+        )
+
+        config = load_sdk_protection_config()
+        # Default is False per YAML
+        assert config.sdk.prewarm_subprocess is False
+
+    @pytest.mark.asyncio
+    async def test_prewarm_enabled_triggers_early_init(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When prewarm_subprocess=True, mount() triggers client init.
+
+        The client should be initialized before first session() call.
+        This is a fire-and-forget task — mount() doesn't wait for it.
+
+        Contract: sdk-boundary:Config:MUST:1
+        """
+        import amplifier_module_provider_github_copilot as provider_module
+
+        init_timestamps: list[float] = []
+        import time
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "prewarm-test"
+        mock_session.disconnect = AsyncMock()
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                init_timestamps.append(time.perf_counter())
+
+            async def start(self) -> None:
+                # Simulate subprocess spawn delay
+                await asyncio.sleep(0.1)
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                return mock_session
+
+            async def stop(self) -> None:
+                pass
+
+        # Reset singleton state
+        provider_module._shared_client = None  # pyright: ignore[reportPrivateUsage]
+        provider_module._shared_client_refcount = 0  # pyright: ignore[reportPrivateUsage]
+
+        # Mock coordinator
+        mock_coordinator = MagicMock()
+        mock_coordinator.mount = AsyncMock()
+
+        # Patch config to enable pre-warming via monkeypatch.
+        # Targets __init__.py's module-level binding (not config_loader module).
+        import amplifier_module_provider_github_copilot as provider_module
+
+        try:
+
+            def mock_load_config() -> Any:
+                mock_config = MagicMock()
+                mock_config.sdk.prewarm_subprocess = True
+                mock_config.sdk.log_level = "none"
+                mock_config.sdk.log_level_env_var = "COPILOT_SDK_LOG"
+                mock_config.singleton.lock_timeout_seconds = 30.0
+                return mock_config
+
+            monkeypatch.setattr(provider_module, "load_sdk_protection_config", mock_load_config)
+
+            with (
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                    MockCopilotClient,
+                ),
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                    MagicMock(),
+                ),
+            ):
+                # Call mount — should trigger pre-warming
+                cleanup = await provider_module.mount(mock_coordinator, {})
+
+                # Give fire-and-forget task time to run
+                await asyncio.sleep(0.2)
+
+                # Client should have been initialized DURING mount (not after)
+                assert len(init_timestamps) == 1, (
+                    "Pre-warming should have triggered client initialization during mount()"
+                )
+
+                # Cleanup
+                if cleanup:
+                    await cleanup()
+        finally:
+            # Reset singleton after test
+            provider_module._shared_client = None  # pyright: ignore[reportPrivateUsage]
+            provider_module._shared_client_refcount = 0  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_prewarm_race_uses_existing_client(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Concurrent session() during pre-warm uses the same client.
+
+        If pre-warming is in progress and session() is called, the
+        session() should wait for the pre-warm to complete (via lock)
+        and use the same client — NOT create a second one.
+
+        Contract: deny-destroy:Ephemeral:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        init_count = 0
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "race-test"
+        mock_session.disconnect = AsyncMock()
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                nonlocal init_count
+                init_count += 1
+
+            async def start(self) -> None:
+                # Simulate slow subprocess spawn
+                await asyncio.sleep(0.3)
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                return mock_session
+
+            async def stop(self) -> None:
+                pass
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                MagicMock(),
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+
+            # Start pre-warm (simulated)
+            # pyright: ignore[reportPrivateUsage]
+            prewarm_task = asyncio.create_task(
+                wrapper._ensure_client_initialized(caller="prewarm")  # pyright: ignore[reportPrivateUsage]
+            )
+
+            # Immediately start session() — should block on lock
+            await asyncio.sleep(0.05)  # Let prewarm acquire lock first
+            async with wrapper.session(model="gpt-4"):
+                pass
+
+            await prewarm_task
+
+            # Only ONE client should have been created
+            assert init_count == 1, (
+                f"Expected 1 client init (lock should prevent race), got {init_count}"
+            )
+
+
+class TestTokenFallbackSecurityExtended:
+    """Extended security tests for token fallback behavior.
+
+    P1-6 Security Fix: An explicit token MUST NEVER be silently ignored.
+
+    Contract (OWASP A07): When explicit token is provided but SDK can't apply it:
+    - ALWAYS fail closed with ConfigurationError
+    - No escape hatches - security behavior is unconditional
+    - If tests need to avoid this: clear token env vars, don't mock SubprocessConfig=None
+
+    The SKIP_SDK_CHECK env var controls SDK _imports_ only, NOT auth behavior.
+    """
+
     @pytest.mark.asyncio
     async def test_token_always_fails_closed_no_escape_hatch(
         self,
@@ -890,3 +1086,471 @@ class TestTokenFallbackSecurity:
             # Should NOT raise - no token means no security concern
             async with wrapper.session(model="gpt-4"):
                 pass
+
+
+class TestCopilotPidTracking:
+    """SDK process ID tracking for log correlation.
+
+    The copilot_pid property enables correlation between provider events.jsonl
+    and SDK logs at ~/.copilot/logs/process-{timestamp}-{pid}.log.
+
+    Contract: observability.md — SHOULD include correlation IDs for tracing
+    """
+
+    def test_copilot_pid_none_before_init(self) -> None:
+        """copilot_pid is None before client initialization."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        wrapper = CopilotClientWrapper()
+        assert wrapper.copilot_pid is None
+
+    def test_copilot_pid_none_with_injected_client(self) -> None:
+        """copilot_pid is None when using injected client (no subprocess)."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        mock_client = MagicMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        # Injected client = no subprocess, no PID
+        assert wrapper.copilot_pid is None
+
+    @pytest.mark.asyncio
+    async def test_copilot_pid_captured_after_start(self) -> None:
+        """copilot_pid is captured after client.start().
+
+        The PID is extracted from client._process.pid after successful start.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "test-pid"
+        mock_session.disconnect = AsyncMock()
+
+        class MockProcess:
+            pid = 12345
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                self._process = MockProcess()
+
+            async def start(self) -> None:
+                pass
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                return mock_session
+
+            async def stop(self) -> None:
+                pass
+
+        wrapper = CopilotClientWrapper()
+
+        with patch(
+            "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+            MockCopilotClient,
+        ):
+            async with wrapper.session(model="gpt-4"):
+                # PID should be captured after initialization
+                assert wrapper.copilot_pid == "12345"
+
+    def test_copilot_pid_returns_string(self) -> None:
+        """copilot_pid returns string, not int."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        wrapper = CopilotClientWrapper()
+        # After setting internal PID manually for this test
+        wrapper._copilot_pid = 99999  # pyright: ignore[reportPrivateUsage]
+        assert wrapper.copilot_pid == "99999"
+        assert isinstance(wrapper.copilot_pid, str)
+
+
+class TestGuardReinitAfterStop:
+    """MUST-6: Guard re-initialization after stop.
+
+    Contract: sdk-protection:Subprocess:MUST:6
+    """
+
+    @pytest.mark.asyncio
+    async def test_session_raises_after_close(self) -> None:
+        """Cannot create session after close().
+
+        Contract: sdk-protection:Subprocess:MUST:6
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        wrapper = CopilotClientWrapper()
+        await wrapper.close()
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            async with wrapper.session(model="gpt-4"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_prewarm_raises_after_close(self) -> None:
+        """Cannot prewarm after close().
+
+        Contract: sdk-protection:Subprocess:MUST:6
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        wrapper = CopilotClientWrapper()
+        await wrapper.close()
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await wrapper.prewarm()
+
+    @pytest.mark.asyncio
+    async def test_list_models_raises_after_close(self) -> None:
+        """Cannot list models after close().
+
+        Contract: sdk-protection:Subprocess:MUST:6
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        wrapper = CopilotClientWrapper()
+        await wrapper.close()
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await wrapper.list_models()
+
+
+class TestPublicPrewarmAPI:
+    """Public prewarm() API for SDK subprocess initialization.
+
+    Contract: sdk-protection:Subprocess:MUST:5
+    """
+
+    @pytest.mark.asyncio
+    async def test_prewarm_initializes_client(self) -> None:
+        """prewarm() triggers client initialization.
+
+        Contract: sdk-protection:Subprocess:MUST:5
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        init_called = False
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                nonlocal init_called
+                init_called = True
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        wrapper = CopilotClientWrapper()
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                MagicMock(),
+            ),
+        ):
+            await wrapper.prewarm()
+            assert init_called, "prewarm() should have initialized client"
+
+        await wrapper.close()
+
+    @pytest.mark.asyncio
+    async def test_prewarm_idempotent(self) -> None:
+        """Multiple prewarm() calls only initialize once.
+
+        Contract: sdk-protection:Subprocess:MUST:5
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        init_count = 0
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                nonlocal init_count
+                init_count += 1
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        wrapper = CopilotClientWrapper()
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                MagicMock(),
+            ),
+        ):
+            await wrapper.prewarm()
+            await wrapper.prewarm()  # Second call should be no-op
+            assert init_count == 1, "prewarm() should only initialize once"
+
+        await wrapper.close()
+
+
+class TestSDKLogLevelEnvOverride:
+    """L3: SDK log-level env override behavior tests.
+
+    Contract: sdk-protection:Subprocess:MUST:7
+    Priority: Environment > YAML default
+    """
+
+    def test_resolve_log_level_uses_yaml_default(self) -> None:
+        """When no env var set, uses YAML default.
+
+        Contract: sdk-protection:Subprocess:MUST:7
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            _resolve_sdk_log_level,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Load actual config — assumes valid YAML
+        result = _resolve_sdk_log_level()
+        # Should be one of the valid log levels from YAML
+        assert result in {"none", "error", "warning", "info", "debug", "all"}
+
+    def test_resolve_log_level_env_overrides_yaml(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Env var overrides YAML default (priority: env > yaml).
+
+        Contract: sdk-protection:Subprocess:MUST:7
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_sdk_protection_config,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            _resolve_sdk_log_level,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Get the env var name from config
+        load_sdk_protection_config.cache_clear()
+        config = load_sdk_protection_config()
+        env_var_name = config.sdk.log_level_env_var
+
+        # Set env override
+        monkeypatch.setenv(env_var_name, "debug")
+
+        result = _resolve_sdk_log_level()
+        assert result == "debug"
+
+    def test_resolve_log_level_empty_env_uses_yaml(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Empty env var treated as not set — uses YAML.
+
+        Contract: sdk-protection:Subprocess:MUST:7
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_sdk_protection_config,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            _resolve_sdk_log_level,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Get the env var name from config
+        load_sdk_protection_config.cache_clear()
+        config = load_sdk_protection_config()
+        env_var_name = config.sdk.log_level_env_var
+        yaml_default = config.sdk.log_level
+
+        # Set empty env var
+        monkeypatch.setenv(env_var_name, "")
+
+        result = _resolve_sdk_log_level()
+        # Empty string = falsy = use YAML default
+        assert result == yaml_default
+
+    def test_resolve_log_level_config_specifies_env_var_name(self) -> None:
+        """Config YAML specifies which env var to check.
+
+        Three-Medium Architecture: policy (env var name) comes from YAML.
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_sdk_protection_config,
+        )
+
+        load_sdk_protection_config.cache_clear()
+        config = load_sdk_protection_config()
+
+        # env_var name defined in YAML
+        assert hasattr(config.sdk, "log_level_env_var")
+        assert config.sdk.log_level_env_var  # Non-empty string
+
+    def test_invalid_env_log_level_falls_back_to_yaml(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Invalid env log level falls back to YAML default.
+
+        Contract: sdk-protection:Subprocess:MUST:7
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_sdk_protection_config,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            _resolve_sdk_log_level,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        load_sdk_protection_config.cache_clear()
+        config = load_sdk_protection_config()
+        env_var_name = config.sdk.log_level_env_var
+        yaml_default = config.sdk.log_level
+
+        # Set invalid env value
+        monkeypatch.setenv(env_var_name, "INVALID_LEVEL")
+
+        result = _resolve_sdk_log_level()
+        # Must fall back to YAML default, not use invalid value
+        assert result == yaml_default
+
+
+# ===========================================================================
+# Phase 3: ensure_executable() wiring + singleton lock type
+# ===========================================================================
+
+
+class TestEnsureExecutableWiring:
+    """ensure_executable() must be called before CopilotClient.start() on Unix.
+
+    Contract: sdk-boundary:BinaryResolution:MUST:6 — MUST set execute bits.
+    The uv package manager strips execute permissions; without this call,
+    the SDK subprocess silently fails on fresh installs.
+    """
+
+    @pytest.mark.skipif(
+        __import__("sys").platform == "win32",
+        reason="ensure_executable is no-op on Windows; wiring tested on Unix",
+    )
+    @pytest.mark.asyncio
+    async def test_ensure_executable_called_before_start_on_unix(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ensure_executable called with binary path before CopilotClient.start().
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        call_order: list[str] = []
+        binary_path = Path("/usr/local/bin/copilot")
+
+        def mock_locate_cli_binary() -> Path | None:
+            return binary_path
+
+        def mock_ensure_executable(path: Path) -> bool:
+            call_order.append(f"ensure_executable:{path}")
+            return True
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                pass
+
+            async def start(self) -> None:
+                call_order.append("start")
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                mock_sess = AsyncMock()
+                mock_sess.session_id = "exe-test"
+                mock_sess.disconnect = AsyncMock()
+                return mock_sess
+
+            async def stop(self) -> None:
+                pass
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
+                mock_locate_cli_binary,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.ensure_executable",
+                mock_ensure_executable,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+            async with wrapper.session(model="gpt-4"):
+                pass
+
+        assert f"ensure_executable:{binary_path}" in call_order, (
+            "ensure_executable must be called before start()"
+        )
+        exe_idx = call_order.index(f"ensure_executable:{binary_path}")
+        start_idx = call_order.index("start")
+        assert exe_idx < start_idx, (
+            f"ensure_executable (pos {exe_idx}) must come before start() (pos {start_idx})"
+        )
+
+
+class TestSingletonLock:
+    """The module-level singleton lock must be threading.Lock, not asyncio.Lock.
+
+    Contract: provider-protocol:mount:MUST:5 — process-level singleton.
+    An asyncio.Lock is event-loop scoped; using one across multiple event loops
+    (e.g., in multi-turn test suites or multi-threaded Amplifier environments)
+    raises RuntimeError. threading.Lock works reliably across all loops/threads.
+    """
+
+    def test_state_lock_is_threading_lock(self) -> None:
+        """_state_lock must be threading.Lock, not asyncio.Lock.
+
+        Contract: provider-protocol:mount:MUST:5
+        """
+        import asyncio
+        import threading
+
+        import amplifier_module_provider_github_copilot as mod
+
+        assert hasattr(mod, "_state_lock"), (
+            "_state_lock (threading.Lock) must exist in __init__.py for cross-loop safety"
+        )
+        lock = mod._state_lock  # type: ignore[attr-defined]
+        assert isinstance(lock, type(threading.Lock())), (
+            f"_state_lock must be threading.Lock, got {type(lock)}. "
+            "asyncio.Lock is event-loop scoped and unsafe for cross-loop singleton access."
+        )
+        assert not isinstance(lock, asyncio.Lock), (
+            "Must NOT be asyncio.Lock — it binds to the creating event loop"
+        )

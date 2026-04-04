@@ -31,6 +31,7 @@ __all__ = [
     "get_sdk_binary_path",
     "find_cli_in_path",
     "locate_cli_binary",
+    "is_pytest_running",
 ]
 
 # Binary name constants
@@ -46,6 +47,7 @@ class PlatformInfo:
     Attributes:
         name: Human-readable platform name ("Windows", "macOS", "Unix")
         is_windows: True if running on Windows
+        is_wsl: True if running inside Windows Subsystem for Linux
         cli_binary_name: Platform-appropriate binary name
 
     """
@@ -53,6 +55,7 @@ class PlatformInfo:
     name: str
     is_windows: bool
     cli_binary_name: str
+    is_wsl: bool = False
 
 
 @lru_cache(maxsize=1)
@@ -83,10 +86,18 @@ def get_platform_info() -> PlatformInfo:
         )
     else:
         # Linux, cygwin, other Unix-like systems
+        # Detect WSL via /proc/version containing "microsoft"
+        is_wsl = False
+        try:
+            with open("/proc/version", encoding="utf-8") as f:
+                is_wsl = "microsoft" in f.read().lower()
+        except OSError:
+            pass  # /proc/version not present on non-Linux or in some containers
         return PlatformInfo(
             name="Unix",
             is_windows=False,
             cli_binary_name=CLI_BINARY_NAME_UNIX,
+            is_wsl=is_wsl,
         )
 
 
@@ -192,29 +203,15 @@ def locate_cli_binary() -> Path | None:
     return find_cli_in_path()
 
 
-def _make_test_platform_info(  # pyright: ignore[reportUnusedFunction]
-    *, is_windows: bool = False
-) -> PlatformInfo:
-    """Create platform info for testing.
+def is_pytest_running() -> bool:
+    """Check if pytest is currently executing as the test runner.
 
-    Used by tests via local import (tests/test_platform.py).
-    Use instead of mocking sys.platform.
+    Used as a guard in test-only SDK bypass logic. Centralised here
+    (single source of truth) so both __init__.py and sdk_adapter/_imports.py
+    share the same implementation.
 
-    Args:
-        is_windows: Whether to create Windows platform info.
-
-    Returns:
-        PlatformInfo for testing.
-
+    Note: Test-only convenience bypass — NOT a security boundary.
+    An adversary can bypass this by importing pytest before setting
+    SKIP_SDK_CHECK. Guards against accidental misuse only.
     """
-    if is_windows:
-        return PlatformInfo(
-            name="Windows",
-            is_windows=True,
-            cli_binary_name=CLI_BINARY_NAME_WINDOWS,
-        )
-    return PlatformInfo(
-        name="Unix",
-        is_windows=False,
-        cli_binary_name=CLI_BINARY_NAME_UNIX,
-    )
+    return "pytest" in sys.modules

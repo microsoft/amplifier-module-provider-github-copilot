@@ -95,9 +95,11 @@ models:
     display_name: "Claude Opus 4.5"
     context_window: 200000
     max_output_tokens: 32000
+    # Per-model capabilities include vision (from SDK supports_vision)
+    # Provider-level only lists streaming, tools (what ALL models support)
     capabilities:
       - streaming
-      - tool_use
+      - tools
       - vision
 ```
 
@@ -142,6 +144,31 @@ This priority order enables:
 4. **MUST NOT** log sensitive data (tokens, prompts in production)
 5. **MUST** include correlation IDs for tracing
 
+### Secret Redaction Requirements
+
+The `security_redaction.py` module **MUST** redact all of the following secret patterns:
+
+**MUST-7: GitHub Token Patterns (flexible length)**
+- `ghp_[A-Za-z0-9]{20,}` — Personal Access Token
+- `gho_[A-Za-z0-9]{20,}` — OAuth Token
+- `ghu_[A-Za-z0-9]{20,}` — User-to-Server Token
+- `ghs_[A-Za-z0-9]{20,}` — Server-to-Server Token
+- `ghr_[A-Za-z0-9]{20,}` — Refresh Token
+- `github_pat_[A-Za-z0-9_]{20,}` — Fine-grained PAT
+
+**MUST-8: API Key Patterns**
+- `sk-[A-Za-z0-9]{20,}` — OpenAI API keys
+- `sk-ant-[A-Za-z0-9-]{20,}` — Anthropic API keys
+
+**MUST-9: Bearer Token Patterns**
+- `Bearer[\s=:]+[^\s'"]+` — Bearer with space, equals, or colon separator
+- Authorization headers regardless of separator
+
+**MUST-10: Opaque Token Patterns**
+- Any alphanumeric string 32+ characters (catch-all for unknown formats)
+
+**Rationale:** SDK error messages may contain tokens. `error_translation.py` uses `str(exc)` which passes raw exception text through. All token formats MUST be redacted before logging or returning to kernel.
+
 ---
 
 ## Config Loading Policy
@@ -150,8 +177,32 @@ This priority order enables:
 
 1. **MUST** load config from `amplifier_module_provider_github_copilot/config/` (package directory)
 2. **MUST** fail-fast with `ConfigurationError` if required config keys are missing (YAML is authoritative per Three-Medium Architecture)
-3. **MUST NOT** load config from root `config/` directory (legacy, not packaged)
-4. **MUST NOT** duplicate policy values in Python code (no hardcoded fallbacks that shadow YAML)
+3. **MUST** fail-fast with `ConfigurationError` if config values are invalid (e.g., enum values not in allowlist, wrong types)
+4. **MUST NOT** load config from root `config/` directory (legacy, not packaged)
+5. **MUST NOT** duplicate policy values in Python code (no hardcoded fallbacks that shadow YAML)
+6. **MUST NOT** use Python type coercion that masks invalid values (e.g., `bool("false")` returns `True`)
+
+### Value Validation
+
+When YAML defines an allowlist (either as data or documented in comments), the loader MUST validate against it:
+
+```python
+# WRONG: Accepts any string
+log_level = sdk_data["log_level"]
+
+# CORRECT: Validate against allowlist from YAML
+valid_levels = sdk_data.get("valid_log_levels", ["none", "error", "warning", "info", "debug", "all"])
+if sdk_data["log_level"] not in valid_levels:
+    raise ConfigurationError(f"Invalid sdk.log_level: {sdk_data['log_level']}")
+```
+
+### Test Anchors
+
+| Anchor | Clause |
+|--------|--------|
+| `behaviors:ConfigLoading:MUST:1` | Load from package directory |
+| `behaviors:ConfigLoading:MUST:2` | Fail-fast on missing keys |
+| `behaviors:ConfigLoading:MUST:3` | Fail-fast on invalid values |
 
 ---
 
@@ -298,6 +349,10 @@ When the SDK is unavailable AND the disk cache is empty/invalid, the provider MU
 | `behaviors:Logging:MUST:1` | Logs errors at ERROR level |
 | `behaviors:Logging:MUST:4` | Does NOT log sensitive data |
 | `behaviors:Logging:MUST:5` | Includes correlation IDs |
+| `behaviors:Logging:MUST:7` | Redacts GitHub token patterns (ghp_, gho_, ghu_, ghs_, ghr_) |
+| `behaviors:Logging:MUST:8` | Redacts API key patterns (sk-, sk-ant-) |
+| `behaviors:Logging:MUST:9` | Redacts Bearer tokens with space/colon/equals |
+| `behaviors:Logging:MUST:10` | Redacts opaque tokens (32+ alphanumeric) |
 
 ### TestFiles
 

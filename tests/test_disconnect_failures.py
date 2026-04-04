@@ -156,3 +156,70 @@ class TestDisconnectFailureInit:
         wrapper = CopilotClientWrapper()
         assert hasattr(wrapper, "_disconnect_failures")
         assert wrapper._disconnect_failures == 0  # type: ignore[reportPrivateUsage]  # Testing internal state
+
+
+class TestDisconnectTimeout:
+    """Tests that session disconnect has a timeout to prevent indefinite hangs.
+
+    Contract: sdk-boundary:BinaryResolution (implies responsible resource cleanup)
+    P2 performance fix: disconnect() without timeout can hang indefinitely.
+    """
+
+    @pytest.mark.asyncio
+    async def test_disconnect_timeout_raises_internally_not_to_caller(
+        self,
+    ) -> None:
+        """When disconnect() hangs past timeout, error is logged but caller not raised.
+
+        The session context manager MUST NOT propagate disconnect timeout to caller.
+        The timeout is sourced from sdk_protection.yaml session.disconnect_timeout_seconds.
+        Contract: sdk-protection:Session:MUST:3
+        """
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        async def slow_disconnect() -> None:
+            await asyncio.sleep(999)  # Simulates indefinite hang
+
+        mock_sdk_client = MagicMock()
+        mock_session = MagicMock()
+        mock_session.disconnect = slow_disconnect
+        mock_session.session_id = "timeout-test"
+        mock_sdk_client.create_session = AsyncMock(return_value=mock_session)
+
+        wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
+
+        # Patch config to use a tiny timeout so the test runs fast.
+        # Contract: sdk-protection:Session:MUST:3 — timeout sourced from YAML
+        mock_config = MagicMock()
+        mock_config.session.disconnect_timeout_seconds = 0.05
+        with patch(
+            "amplifier_module_provider_github_copilot.sdk_adapter.client.load_sdk_protection_config",
+            return_value=mock_config,
+        ):
+            async with wrapper.session(model="gpt-4"):
+                pass
+        # Reaching here means session completed (did not hang)
+
+    def test_disconnect_timeout_in_session_config(
+        self,
+    ) -> None:
+        """disconnect_timeout_seconds must be present in SessionProtectionConfig.
+
+        Contract: sdk-protection:Session:MUST:3
+        Three-Medium: timeout policy lives in YAML, not as Python constant.
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_sdk_protection_config,
+        )
+
+        config = load_sdk_protection_config()
+        assert hasattr(config.session, "disconnect_timeout_seconds"), (
+            "SessionProtectionConfig must have disconnect_timeout_seconds field"
+        )
+        assert isinstance(config.session.disconnect_timeout_seconds, float)
+        assert config.session.disconnect_timeout_seconds > 0

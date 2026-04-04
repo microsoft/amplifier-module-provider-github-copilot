@@ -488,3 +488,80 @@ class TestConfigInvariants:
             f"Unknown keys in session config: {unknown_keys}. "
             f"These may be typos that the SDK silently ignores."
         )
+
+
+class TestRuntimeSDKTypeLeak:
+    """sdk-boundary:TypeTranslation:MUST:1 — Runtime SDK type leak assertion.
+
+    Verifies at RUNTIME (not AST) that SDK types do not leak through the membrane.
+    This complements test_sdk_boundary_quarantine.py (static AST checks).
+    """
+
+    def test_session_handle_is_domain_type_not_sdk(self) -> None:
+        """sdk-boundary:TypeTranslation:MUST:1 — SessionHandle is a domain class.
+
+        The module attribute for SessionHandle must point to our sdk_adapter,
+        not to the Copilot SDK package.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter import SessionHandle
+
+        # Domain type: __module__ must NOT point to the SDK (copilot.*)
+        module = getattr(SessionHandle, "__module__", "")
+        assert module.startswith("amplifier_module_provider_github_copilot"), (
+            f"SessionHandle must be defined in amplifier_module_provider_github_copilot, "
+            f"got __module__={module!r} — possible SDK type leak"
+        )
+
+    def test_all_exported_classes_are_domain_types(self) -> None:
+        """sdk-boundary:TypeTranslation:MUST:1 — Public class exports are domain types.
+
+        All class objects in sdk_adapter.__all__ must be defined in our package,
+        not imported directly from the Copilot SDK.
+        """
+        import amplifier_module_provider_github_copilot.sdk_adapter as sdk_adapter_mod
+
+        sdk_package_prefix = "copilot"
+        our_package_prefix = "amplifier_module_provider_github_copilot"
+
+        leaked: list[str] = []
+        for name in sdk_adapter_mod.__all__:
+            obj = getattr(sdk_adapter_mod, name, None)
+            if obj is None or not isinstance(obj, type):
+                continue  # Skip non-class exports (functions, type aliases)
+            mod = getattr(obj, "__module__", "") or ""
+            if mod.startswith(sdk_package_prefix) and not mod.startswith(our_package_prefix):
+                leaked.append(f"{name} (__module__={mod!r})")
+
+        assert not leaked, "SDK types leaked into sdk_adapter public API at runtime:\n" + "\n".join(
+            leaked
+        )
+
+    @pytest.mark.asyncio
+    async def test_session_context_manager_yields_domain_type(self) -> None:
+        """sdk-boundary:TypeTranslation:MUST:4 — session() yields domain type, not SDK object.
+
+        At runtime, the yielded value must be SessionHandle (domain), not the raw SDK session.
+        """
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_provider_github_copilot.sdk_adapter import SessionHandle
+
+        mock_sdk_session = AsyncMock()
+        mock_sdk_session.session_id = "sess-type-test"
+        mock_sdk_session.disconnect = AsyncMock()
+
+        mock_sdk_client = AsyncMock()
+        mock_sdk_client.create_session = AsyncMock(return_value=mock_sdk_session)
+
+        wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
+
+        async with wrapper.session(model="gpt-4") as handle:
+            # Must be SessionHandle (domain type), not the raw AsyncMock
+            assert isinstance(handle, SessionHandle), (
+                f"session() must yield SessionHandle (domain type), "
+                f"got {type(handle).__name__!r} — SDK type leak"
+            )
+            # The raw SDK session must NOT be directly accessible (encapsulated)
+            assert handle is not mock_sdk_session, (
+                "session() must not yield the raw SDK session object directly"
+            )

@@ -6,9 +6,12 @@ SDK types MUST NOT leak outside this module.
 Contract: contracts/sdk-boundary.md
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -130,7 +133,7 @@ class CompletionRequest:
     Attributes:
         prompt: The prompt text to send.
         model: Optional model override.
-        tools: Tool definitions for the completion.
+        tools: Tool definitions for the completion (ToolSpec objects or dicts).
         attachments: Image attachments (BlobAttachment dicts) for vision models.
         system_message: Optional system message for SDK session (mode: replace).
         max_tokens: Maximum tokens in response.
@@ -141,8 +144,8 @@ class CompletionRequest:
     prompt: str
     model: str | None = None
     # Note: Using default_factory=list is conventional but pyright strict requires annotation.
-    # Using explicit factory cast for type safety.
-    tools: list[dict[str, Any]] = field(default_factory=list)  # type: ignore[misc]
+    # Runtime type is Any because Amplifier kernel passes ToolSpec objects, not dicts.
+    tools: list[Any] = field(default_factory=list)  # type: ignore[misc]
     attachments: list[dict[str, Any]] = field(default_factory=list)  # type: ignore[misc]
     system_message: str | None = None
     max_tokens: int | None = None
@@ -334,11 +337,26 @@ def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
 
     # Find LAST user message (SDK only supports current turn images)
     last_user_msg: Any = None
+    historical_image_count: int = 0
     msg: Any
     for msg in reversed(list(messages)):
         if getattr(msg, "role", "") == "user":
-            last_user_msg = msg
-            break
+            if last_user_msg is None:
+                last_user_msg = msg
+            else:
+                # L-5: Count images in historical user messages (they will be dropped)
+                hist_content = getattr(msg, "content", None)
+                if isinstance(hist_content, list):
+                    for blk in cast(list[Any], hist_content):
+                        if getattr(blk, "type", None) == "image":
+                            historical_image_count += 1
+
+    if historical_image_count > 0:
+        logger.warning(
+            "[IMAGE_PASSTHROUGH] %d image(s) in historical messages silently dropped "
+            "— SDK only supports images from the last user message.",
+            historical_image_count,
+        )
 
     if not last_user_msg:
         return []
@@ -348,8 +366,9 @@ def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
     if not isinstance(content, list):
         return []  # Plain text content, no images
 
-    # Cast content to list[Any] for type safety in iteration
-    content_blocks: list[Any] = content  # type: ignore[assignment]
+    # Cast content to list[Any] for safe iteration over heterogeneous content blocks
+    # isinstance(content, list) guard above proves content is a list; cast makes it explicit
+    content_blocks: list[Any] = cast(list[Any], content)
 
     # Extract images from content blocks
     # Note: content is list of various block types (text, image, tool_result, etc.)

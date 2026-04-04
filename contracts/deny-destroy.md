@@ -168,14 +168,14 @@ Any configuration that would allow the SDK to execute tools would break Amplifie
 
 ## Implementation Notes
 
-The deny hook must be installed using the SDK's `preToolUse` mechanism:
+The deny hook must be installed via `session_config["hooks"]` at creation time:
 
 ```python
-# Pseudocode - actual implementation in session_factory.py
-def make_deny_hook():
-    def deny_all_tools(tool_request):
-        return {"action": "DENY", "reason": "Amplifier orchestrator handles tools"}
-    return deny_all_tools
+# Actual implementation: sdk_adapter/client.py _make_deny_hook_config()
+def _make_deny_hook_config() -> dict[str, Any]:
+    def deny_hook(tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+        return {"action": "DENY", "reason": ""}
+    return {"on_pre_tool_use": deny_hook}
 ```
 
 Session destruction must use the SDK's proper cleanup mechanism to avoid resource leaks.

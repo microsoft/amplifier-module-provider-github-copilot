@@ -87,6 +87,11 @@ venvPath = "."
 venv = ".venv"
 # Exclude stub-related errors for pytest (has inline types but pyright strict mode is pedantic)
 reportMissingTypeStubs = false
+# amplifier_core and copilot SDK are runtime-only packages (live in the amplifier uv tool,
+# not in the dev venv). Their types are fully covered by typings/ stub files.
+# reportMissingModuleSource fires when stubs exist but source is absent from the dev venv —
+# correct pyright setting for intentional runtime-only packages with hand-written stubs.
+reportMissingModuleSource = "none"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

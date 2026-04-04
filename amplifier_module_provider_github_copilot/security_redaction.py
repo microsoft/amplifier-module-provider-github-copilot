@@ -15,11 +15,12 @@ This module handles redaction of:
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, cast
 
 __all__ = [
     "REDACTED",
     "redact_sensitive_text",
+    "redact_dict",
     "redact_exception_message",
     "safe_log_message",
 ]
@@ -52,18 +53,29 @@ _KEY_VALUE_PATTERN = re.compile(
 # Authorization header pattern (captures full header value)
 # Handles: Authorization: Bearer xyz, "Authorization": "Bearer xyz"
 _AUTH_HEADER_PATTERN = re.compile(
-    r"['\"]?(Authorization|Bearer)['\"]?[\s]*[=:][\s]*['\"]?(?:Bearer[\s]+)?([^\s'\",}\]]+)['\"]?",
+    # FIX: Added \s to separator class to match "Bearer <token>" (space separator)
+    # Contract: behaviors:Logging:MUST:9
+    r"['\"]?(Authorization|Bearer)['\"]?[\s]*[\s=:][\s]*['\"]?(?:Bearer[\s]+)?([^\s'\",}\]]+)['\"]?",
     re.IGNORECASE,
 )
 
 # GitHub token patterns (standalone tokens without key context)
+# FIX: Changed {36} to {20,} for variable-length tokens
+# Contract: behaviors:Logging:MUST:7
 _GITHUB_TOKEN_PATTERNS = [
-    re.compile(r"\bghp_[A-Za-z0-9]{36}\b"),  # Personal access token
-    re.compile(r"\bgho_[A-Za-z0-9]{36}\b"),  # OAuth token
-    re.compile(r"\bghu_[A-Za-z0-9]{36}\b"),  # User-to-server token
-    re.compile(r"\bghs_[A-Za-z0-9]{36}\b"),  # Server-to-server token
-    re.compile(r"\bghr_[A-Za-z0-9]{36}\b"),  # Refresh token
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),  # Personal access token
+    re.compile(r"\bgho_[A-Za-z0-9]{20,}\b"),  # OAuth token
+    re.compile(r"\bghu_[A-Za-z0-9]{20,}\b"),  # User-to-server token
+    re.compile(r"\bghs_[A-Za-z0-9]{20,}\b"),  # Server-to-server token
+    re.compile(r"\bghr_[A-Za-z0-9]{20,}\b"),  # Refresh token
     re.compile(r"\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b"),  # Fine-grained PAT
+]
+
+# API key patterns (sk- prefix for OpenAI, Anthropic, etc.)
+# Contract: behaviors:Logging:MUST:8
+_API_KEY_PATTERNS = [
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),  # OpenAI API key
+    re.compile(r"\bsk-ant-[A-Za-z0-9-]{20,}\b"),  # Anthropic API key
 ]
 
 # JWT-like patterns (three base64 segments separated by dots)
@@ -72,8 +84,10 @@ _JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z
 
 # Opaque bearer tokens (long alphanumeric strings that look like tokens)
 # Catches tokens that don't match specific patterns but look suspicious
+# FIX: Changed {40,} to {32,} for shorter tokens
+# Contract: behaviors:Logging:MUST:10
 _OPAQUE_TOKEN_PATTERN = re.compile(
-    r"\b[A-Za-z0-9_-]{40,}\b"  # 40+ chars, likely a token
+    r"\b[A-Za-z0-9_-]{32,}\b"  # 32+ chars, likely a token
 )
 
 
@@ -112,6 +126,11 @@ def redact_sensitive_text(value: object) -> str:
     for pattern in _GITHUB_TOKEN_PATTERNS:
         text = pattern.sub(REDACTED, text)
 
+    # Redact API keys (sk- prefix for OpenAI, Anthropic, etc.)
+    # Contract: behaviors:Logging:MUST:8
+    for pattern in _API_KEY_PATTERNS:
+        text = pattern.sub(REDACTED, text)
+
     # P2-9: Redact JWT-like tokens (base64.base64.base64)
     text = _JWT_PATTERN.sub(REDACTED, text)
 
@@ -133,6 +152,44 @@ def _count_secrets(text: str) -> int:
     count += len(_JWT_PATTERN.findall(text))
     count += len(_OPAQUE_TOKEN_PATTERN.findall(text))
     return count
+
+
+def redact_dict(value: dict[str, Any]) -> dict[str, Any]:
+    """Redact sensitive values in a dict while preserving structure.
+
+    L2 Fix: Preserves dict structure for queryability instead of str().
+    Recursively walks dict/list structures and redacts string values.
+
+    Args:
+        value: Dictionary to redact.
+
+    Returns:
+        New dict with redacted string values, structure preserved.
+
+    Contract: behaviors:Logging:MUST:4
+
+    """
+    result: dict[str, Any] = {}
+    for key, val in value.items():
+        if isinstance(val, str):
+            result[key] = redact_sensitive_text(val)
+        elif isinstance(val, dict):
+            # Cast to satisfy type checker — isinstance confirms dict
+            result[key] = redact_dict(cast(dict[str, Any], val))
+        elif isinstance(val, list):
+            redacted_list: list[Any] = []
+            for item in cast(list[Any], val):
+                if isinstance(item, dict):
+                    redacted_list.append(redact_dict(cast(dict[str, Any], item)))
+                elif isinstance(item, str):
+                    redacted_list.append(redact_sensitive_text(item))
+                else:
+                    redacted_list.append(item)
+            result[key] = redacted_list
+        else:
+            # Primitives (int, float, bool, None) are safe
+            result[key] = val
+    return result
 
 
 def redact_exception_message(exc: BaseException) -> str:

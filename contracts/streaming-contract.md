@@ -51,7 +51,12 @@ class TextBlock(BaseModel):
 class ThinkingBlock(BaseModel):
     type: Literal["thinking"] = "thinking"
     thinking: str
+    signature: str | None = None  # Opaque extended thinking signature
 ```
+
+**streaming-contract:ThinkingBlock:MUST:1**: Provider MUST preserve `reasoning_opaque` from SDK events as `ThinkingBlock.signature`.
+
+**Rationale:** Anthropic models send encrypted extended thinking data in `reasoning_opaque` which must be returned verbatim in subsequent turns for multi-turn extended thinking to work. The kernel's `ThinkingBlock.signature` field maps directly to the SDK's `reasoning_opaque`. GPT models do not use this field.
 
 ### ToolCall (Pydantic)
 ```python
@@ -261,7 +266,7 @@ The `finish_reason` field MUST be normalized before returning to the orchestrato
 |-----------|---------------|-----------|
 | Tool calls present | `"tool_calls"` | Orchestrator must execute tools (ALWAYS overrides SDK) |
 | No tool calls, SDK sent finish_reason | preserve SDK value | Normal completion with SDK-provided reason |
-| No tool calls, no SDK finish_reason | `"end_turn"` | Default for text-only responses |
+| No tool calls, no SDK finish_reason | `"stop"` | Default for text-only responses (per amplifier-core proto, not "end_turn") |
 | Error occurred | `"error"` | Error path |
 
 **MUST-5:** Provider MUST set `finish_reason="tool_calls"` when `tool_calls` is non-empty, **regardless of what the SDK sent**.
@@ -296,7 +301,7 @@ def assemble_response(accumulator: StreamAccumulator) -> ChatResponse:
     if tool_calls:
         finish_reason = "tool_calls"  # Override any SDK value (amplifier-core canonical)
     elif not accumulator.finish_reason:
-        finish_reason = "end_turn"  # Default for text-only
+        finish_reason = "stop"  # Default for text-only (per amplifier-core proto: "stop", not "end_turn")
     else:
         finish_reason = accumulator.finish_reason  # Preserve SDK value
     

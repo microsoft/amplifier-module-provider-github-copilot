@@ -3,6 +3,7 @@
 import fnmatch
 import functools
 import logging
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -62,10 +63,14 @@ class StreamingChatResponse(ChatResponse):
 
 
 class DomainEventType(Enum):
-    """Domain event types per event-vocabulary.md."""
+    """Domain event types per event-vocabulary.md.
+
+    NOTE: Thinking/reasoning content uses CONTENT_DELTA with block_type="THINKING"
+    per events.yaml bridge mappings. A separate THINKING_DELTA type was removed
+    as dead code in H-3 fix.
+    """
 
     CONTENT_DELTA = "CONTENT_DELTA"
-    THINKING_DELTA = "THINKING_DELTA"  # Reasoning/thinking content
     TOOL_CALL = "TOOL_CALL"
     USAGE_UPDATE = "USAGE_UPDATE"
     TURN_COMPLETE = "TURN_COMPLETE"
@@ -96,6 +101,9 @@ class AccumulatedResponse:
 
     text_content: str = ""
     thinking_content: str = ""
+    # Opaque signature for extended thinking (Anthropic models)
+    # Contract: streaming-contract:ThinkingBlock:MUST:1
+    reasoning_opaque: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=lambda: [])
     usage: dict[str, Any] | None = None
     finish_reason: str | None = None
@@ -107,13 +115,29 @@ class AccumulatedResponse:
 class StreamingAccumulator:
     """Accumulates streaming domain events into final response."""
 
-    text_content: str = ""
+    # H-4: Per-block text storage for streaming-contract:Accumulation:MUST:2
+    # A new block is started when a TOOL_CALL event arrives, so pre-tool and
+    # post-tool text land in separate TextBlocks in the final response.
+    _text_blocks: list[str] = field(default_factory=lambda: [""])
     thinking_content: str = ""
+    # Opaque signature for extended thinking (Anthropic models)
+    # Contract: streaming-contract:ThinkingBlock:MUST:1
+    reasoning_opaque: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=lambda: [])
     usage: dict[str, Any] | None = None
     finish_reason: str | None = None
     error: dict[str, Any] | None = None
     is_complete: bool = False
+    # SDK session ID for observability correlation
+    sdk_session_id: str | None = None
+    # SDK subprocess PID for log file correlation (~/.copilot/logs/process-*-{pid}.log)
+    # Contract: observability:Events:SHOULD:3
+    sdk_pid: str | None = None
+
+    @property
+    def text_content(self) -> str:
+        """Backward-compat joined text.  Prefer iterating text_blocks directly."""
+        return "".join(self._text_blocks)
 
     def add(self, event: DomainEvent) -> None:
         """Add domain event to accumulator.
@@ -138,10 +162,18 @@ class StreamingAccumulator:
             text = event.data.get("text", "")
             if event.block_type == "THINKING":
                 self.thinking_content += text
+                # Capture reasoning_opaque for ThinkingBlock.signature
+                # Contract: streaming-contract:ThinkingBlock:MUST:1
+                if event.data.get("reasoning_opaque"):
+                    self.reasoning_opaque = event.data["reasoning_opaque"]
             else:
-                self.text_content += text
+                self._text_blocks[-1] += text
         elif event.type == DomainEventType.TOOL_CALL:
             self.tool_calls.append(event.data)
+            # H-4: Start a new text block after a tool call so that any
+            # post-tool text lands in a separate TextBlock.
+            # Contract: streaming-contract:Accumulation:MUST:2
+            self._text_blocks.append("")
         elif event.type == DomainEventType.TURN_COMPLETE:
             self.finish_reason = event.data.get("finish_reason", "stop")
             self.is_complete = True
@@ -154,6 +186,7 @@ class StreamingAccumulator:
         return AccumulatedResponse(
             text_content=self.text_content,
             thinking_content=self.thinking_content,
+            reasoning_opaque=self.reasoning_opaque,
             tool_calls=self.tool_calls,
             usage=self.usage,
             finish_reason=self.finish_reason,
@@ -185,18 +218,29 @@ class StreamingAccumulator:
         )
 
         # Build content list (Pydantic types for context persistence)
-        content: list[Any] = []
+        # Narrowed to actual kernel types — eliminates arg-type suppression at StreamingChatResponse
+        # Contract: streaming-contract:StreamingResponse:MUST:3
+        content: list[TextBlock | ThinkingBlock | ToolCall] = []
         # Build content_blocks list (dataclass types for streaming UI)
         content_blocks: list[TextContent | ThinkingContent | ToolCallContent] = []
 
-        # Add text content using both type systems
-        if self.text_content:
-            content.append(TextBlock(text=self.text_content))
-            content_blocks.append(TextContent(text=self.text_content))
+        # Add text content using both type systems — one TextBlock per block
+        # H-4: streaming-contract:Accumulation:MUST:2 — preserve block boundaries
+        for block_text in self._text_blocks:
+            if block_text:
+                content.append(TextBlock(text=block_text))
+                content_blocks.append(TextContent(text=block_text))
 
         # Add thinking content using both type systems
         if self.thinking_content:
-            content.append(ThinkingBlock(thinking=self.thinking_content))
+            # Contract: streaming-contract:ThinkingBlock:MUST:1
+            # Pass reasoning_opaque as signature for multi-turn extended thinking
+            content.append(
+                ThinkingBlock(
+                    thinking=self.thinking_content,
+                    signature=self.reasoning_opaque,
+                )
+            )
             content_blocks.append(ThinkingContent(text=self.thinking_content))
 
         # Convert tool calls to kernel ToolCall and ToolCallContent
@@ -204,22 +248,24 @@ class StreamingAccumulator:
         if self.tool_calls:
             tool_calls = []
             for tc in self.tool_calls:
+                # Generate ID once — shared across ToolCall and ToolCallContent
+                tool_call_id = tc.get("id", "") or str(uuid.uuid4())
+                tc_name = tc.get("name", "")
+                tc_args: dict[str, Any] = (
+                    tc.get("arguments", {}) if isinstance(tc.get("arguments"), dict) else {}
+                )
                 tool_call = ToolCall(
-                    id=tc.get("id", ""),
-                    name=tc.get("name", ""),
-                    arguments=tc.get("arguments", {})
-                    if isinstance(tc.get("arguments"), dict)
-                    else {},
+                    id=tool_call_id,
+                    name=tc_name,
+                    arguments=tc_args,
                 )
                 tool_calls.append(tool_call)
                 # Also add to content_blocks for streaming UI
                 content_blocks.append(
                     ToolCallContent(
-                        id=tc.get("id", ""),
-                        name=tc.get("name", ""),
-                        arguments=tc.get("arguments", {})
-                        if isinstance(tc.get("arguments"), dict)
-                        else {},
+                        id=tool_call_id,
+                        name=tc_name,
+                        arguments=tc_args,
                     )
                 )
 
@@ -257,7 +303,7 @@ class StreamingAccumulator:
         # Contract: content_blocks is None when empty (not empty list)
         # streaming-contract:StreamingResponse:MUST:4
         return StreamingChatResponse(
-            content=content,  # type: ignore[arg-type]
+            content=content,
             tool_calls=tool_calls,
             usage=usage,
             finish_reason=normalized_finish_reason,

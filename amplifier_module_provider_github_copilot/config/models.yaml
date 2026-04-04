@@ -14,9 +14,13 @@ provider:
     - COPILOT_GITHUB_TOKEN   # Official recommended
     - GH_TOKEN               # GitHub CLI compatible
     - GITHUB_TOKEN           # GitHub Actions compatible
+  # Provider-level capabilities: minimum ALL models support (intersection)
+  # Per PROVIDER_CONTRACT.md:97, use kernel constants: TOOLS="tools", STREAMING="streaming"
+  # NOTE: Per-model capabilities (vision, thinking) are set dynamically in models.py
+  # based on SDK's supports_vision/supports_reasoning_effort flags
   capabilities:
     - streaming
-    - tool_use
+    - tools
   # Updated defaults to use claude-opus-4.5 with SDK-verified limits
   # SDK limits: max_context_window=200000, max_prompt_tokens=168000
   # max_output_tokens = context_window - max_prompt_tokens = 32000
@@ -35,9 +39,10 @@ models:
     display_name: "Claude Opus 4.5"
     context_window: 200000
     max_output_tokens: 32000
+    # Per kernel capabilities.py: TOOLS="tools", STREAMING="streaming", VISION="vision"
     capabilities:
       - streaming
-      - tool_use
+      - tools
       - vision
     defaults: {}
 
@@ -47,7 +52,7 @@ models:
     max_output_tokens: 4096
     capabilities:
       - streaming
-      - tool_use
+      - tools
     defaults: {}
 
   - id: gpt-4o
@@ -56,7 +61,7 @@ models:
     max_output_tokens: 4096
     capabilities:
       - streaming
-      - tool_use
+      - tools
     defaults: {}
 
 # Three-Medium Architecture: Fallback values for when SDK returns None

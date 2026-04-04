@@ -1,11 +1,12 @@
 # Contract: SDK Protection
 
 ## Version
-- **Current:** 1.0
-- **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/tool_capture.py
+- **Current:** 1.1
+- **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/tool_capture.py, __init__.py, client.py
 - **Config Reference:** amplifier_module_provider_github_copilot/config/sdk_protection.yaml
 - **Status:** Defensive Enhancement
 - **Created:** 2026-03-21 — Defense-in-depth layer for SDK interaction
+- **Updated:** 2026-03-31 — Added Subprocess Management Invariants (MUST-5,6,7)
 
 ---
 
@@ -51,7 +52,7 @@ When `session.explicit_abort` is true in config, the provider MUST call `session
 
 **Rationale:** Explicit abort signals to the SDK that we're done, rather than relying on timeout-based cleanup. This provides cleaner shutdown semantics.
 
-**Implementation:** Call in `_stream_with_session()` after tool capture detected
+**Implementation:** Call in `provider.py` `complete()` after tool capture detected, inside the `create_session()` context manager
 
 ### MUST-4: Abort Timeout
 
@@ -68,6 +69,41 @@ The provider SHOULD NOT use `session.idle_timeout_seconds` for the main idle wai
 The `idle_timeout_seconds` config is retained for abort operations only.
 
 **Implementation:** `asyncio.wait_for(idle_event.wait(), timeout=timeout)` — uses caller's timeout
+
+---
+
+## Subprocess Management Invariants
+
+### MUST-5: Prewarm Task Tracking
+
+When `sdk.prewarm_subprocess` is true, the provider MUST track the prewarm asyncio.Task and cancel it during cleanup. Untracked fire-and-forget tasks can orphan SDK subprocesses during rapid mount/unmount cycles.
+
+**Rationale:** Without task tracking, repeated mount/unmount (e.g., during testing or hot-reload) leaks Copilot subprocesses. Each subprocess consumes ~100MB memory and holds authentication state.
+
+**Implementation:** Store task reference in module-level variable, cancel in cleanup function.
+
+### MUST-6: Guard Re-initialization After Stop
+
+The provider MUST check `_stopped` flag in `_ensure_client_initialized()` and raise `RuntimeError` if the client has been stopped. This prevents prewarm or lazy-init from resurrecting a stopped client.
+
+**Rationale:** After `stop()` is called, the shared client is in a terminal state. Allowing re-init would violate the singleton lifecycle and could cause resource leaks.
+
+**Implementation:** `if self._stopped: raise RuntimeError("Copilot client has been stopped")`
+
+### MUST-7: Validate SDK Config Values
+
+The provider MUST validate `sdk.log_level` against the allowlist defined in config. This applies to both YAML values AND runtime environment overrides.
+
+- YAML validation: Invalid values MUST raise `ConfigurationError` at load time
+- ENV validation: Invalid env values MUST fall back to YAML default with warning
+
+**Rationale:** Three-Medium Architecture requires fail-fast on invalid policy values. Silent acceptance of invalid log levels could enable verbose logging of sensitive conversation data.
+
+**Valid log levels:** `none`, `error`, `warning`, `info`, `debug`, `all`
+
+**Implementation:** 
+- YAML: Validation in `load_sdk_protection_config()`
+- ENV: Validation in `_resolve_sdk_log_level()`
 
 ---
 
@@ -100,6 +136,9 @@ Deduplication uses O(n) set membership check where n = number of captured tools.
 | `sdk-protection:Session:MUST:3` | Explicit abort | `tests/test_sdk_protection.py` |
 | `sdk-protection:Session:MUST:4` | Abort timeout | `tests/test_sdk_protection.py` |
 | `sdk-protection:Session:SHOULD:2` | Idle timeout | `tests/test_sdk_protection.py` |
+| `sdk-protection:Subprocess:MUST:5` | Prewarm task tracking | `tests/test_client_lifecycle.py` |
+| `sdk-protection:Subprocess:MUST:6` | Guard re-init after stop | `tests/test_client_lifecycle.py` |
+| `sdk-protection:Subprocess:MUST:7` | Validate SDK config | `tests/test_sdk_protection.py` |
 
 ---
 
@@ -115,6 +154,12 @@ Policy values are defined in `config/sdk_protection.yaml`. The Python code loads
 | `session.explicit_abort` | bool | true | Call session.abort() |
 | `session.abort_timeout_seconds` | float | 5.0 | Abort call timeout |
 | `session.idle_timeout_seconds` | float | 30.0 | Idle wait safety bound |
+| `sdk.log_level` | str | "info" | SDK subprocess log level |
+| `sdk.log_level_env_var` | str | "COPILOT_SDK_LOG_LEVEL" | Env var override |
+| `sdk.prewarm_subprocess` | bool | false | Spawn subprocess at mount() |
+| `sdk.valid_log_levels` | list | see below | Allowlist for validation |
+
+**Valid log levels:** `["none", "error", "warning", "info", "debug", "all"]`
 
 ---
 

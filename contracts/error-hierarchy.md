@@ -210,7 +210,7 @@ Error config loading supports two paths:
 Both paths MUST:
 - Parse `context_extraction` patterns
 - Produce identical `ErrorConfig` objects
-- Fall back gracefully when config is missing (default to `ProviderUnavailableError`, `retryable=True`)
+- Fall back gracefully when config is missing (default to `ProviderUnavailableError`, `retryable=False` — conservative non-retry per Golden Vision V2)
 
 ---
 

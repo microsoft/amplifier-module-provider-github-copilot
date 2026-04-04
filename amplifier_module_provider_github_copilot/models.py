@@ -25,7 +25,7 @@ try:
         ModelInfo as AmplifierModelInfo,  # pyright: ignore[reportAssignmentType]
     )
     from amplifier_core import ProviderUnavailableError  # pyright: ignore[reportAssignmentType]
-except ImportError:
+except ImportError:  # pragma: no cover
     # Fallback for standalone testing
     from pydantic import BaseModel, Field
 

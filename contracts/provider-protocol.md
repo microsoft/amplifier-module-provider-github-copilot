@@ -1,10 +1,11 @@
 # Contract: Provider Protocol
 
 ## Version
-- **Current:** 1.0 (v2.1 Kernel-Validated)
+- **Current:** 1.1 (v2.1 Kernel-Validated)
 - **Module Reference:** amplifier_module_provider_github_copilot/provider.py
 - **Amplifier Contract:** amplifier-core PROVIDER_CONTRACT.md
 - **Status:** Specification
+- **Updated:** 2026-03-31 — Clarified mount() failure semantics
 
 ---
 
@@ -29,9 +30,15 @@ async def mount(
 
 **Behavioral Requirements:**
 - **MUST** accept `ModuleCoordinator` as first argument (type-safe)
-- **MUST** return cleanup callable or None (graceful degradation)
+- **MUST** return cleanup callable on success
+- **MUST** raise exception on failure (framework must distinguish failure from opt-out)
 - **MUST** register provider with coordinator via `coordinator.mount()`
 - **MUST** use process-level singleton for SDK client (memory efficiency)
+
+**Failure Semantics:**
+- Returning `None` indicates "provider chose not to load" (opt-out)
+- Raising an exception indicates "provider failed to load" (error)
+- **RATIONALE:** Framework needs to distinguish between a provider that doesn't apply vs one that's broken
 
 **Type Conformance:**
 - **MUST** use `ModuleCoordinator` instead of `Any` for type safety
@@ -245,7 +252,9 @@ await self._emit_event("llm:response", {
         "input": response.usage.input_tokens,
         "output": response.usage.output_tokens,
     },
-    "finish_reason": response.finish_reason or "end_turn",
+    # Per amplifier-core proto: "stop", "tool_calls", "length", "content_filter"
+    # Not "end_turn" which is an SDK-specific input value
+    "finish_reason": response.finish_reason or "stop",
     "tool_calls": len(response.tool_calls) if response.tool_calls else 0,
 })
 
@@ -301,14 +310,19 @@ await self._emit_event(PROVIDER_RETRY, {
 - **MUST** handle missing coordinator gracefully (no raise)
 - **MUST** catch and log hook emission errors (no raise)
 
+The real hook emission mechanism is the `llm_lifecycle` async context manager in `observability.py`,
+not a `_emit_event()` method. The context manager handles request, response, and retry hooks
+as a unit, ensuring the response hook always fires even on error paths.
+
 ```python
-async def _emit_event(self, event_name: str, data: dict[str, Any]) -> None:
-    """Emit observability event if coordinator supports hooks."""
-    if self._coordinator and hasattr(self._coordinator, "hooks"):
-        try:
-            await self._coordinator.hooks.emit(event_name, data)
-        except Exception as e:
-            logger.warning(f"[PROVIDER] Failed to emit '{event_name}': {e}")
+# Real pattern — observability.py llm_lifecycle context manager
+from .observability import llm_lifecycle
+
+async with llm_lifecycle(coordinator, model) as ctx:
+    await ctx.emit_request(request_payload)
+    response = await sdk_call(...)
+    await ctx.emit_response(response)
+# llm_lifecycle emits llm:response on exit even if exception raised
 ```
 
 **Test Anchors:**
@@ -349,6 +363,32 @@ async def _emit_event(self, event_name: str, data: dict[str, Any]) -> None:
 
 ---
 
+## Public API Surface
+
+### __all__ Export List
+
+The module's `__all__` defines the stable public API.
+
+**Behavioral Requirements:**
+- **MUST** export only `mount` and the provider class
+- **MUST NOT** re-export kernel types (`ModelInfo`, `ProviderInfo`)
+- **MUST** match ecosystem convention (anthropic, openai, azure-openai)
+
+**Rationale:** Kernel types belong to `amplifier_core`. Re-exporting them couples the provider's API to kernel internals and creates version skew risks.
+
+**Canonical Pattern:**
+```python
+__all__ = ["mount", "GitHubCopilotProvider"]
+```
+
+**Test Anchors:**
+| Anchor | Clause |
+|--------|--------|
+| `provider-protocol:public_api:MUST:1` | Exports only mount and provider class |
+| `provider-protocol:public_api:MUST:2` | Does not re-export kernel types |
+
+---
+
 ## Implementation Checklist
 
 - [ ] `mount()` accepts `ModuleCoordinator` type (not `Any`)
@@ -368,4 +408,4 @@ async def _emit_event(self, event_name: str, data: dict[str, Any]) -> None:
 - [ ] `complete()` emits `llm:request` before SDK call
 - [ ] `complete()` emits `llm:response` after completion (success or error)
 - [ ] Retry loop emits `PROVIDER_RETRY` before sleep
-- [ ] `_emit_event()` handles missing coordinator gracefully
+- [ ] `llm_lifecycle` context manager handles missing coordinator gracefully

@@ -21,6 +21,39 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from amplifier_module_provider_github_copilot._platform import (
+    CLI_BINARY_NAME_UNIX,
+    CLI_BINARY_NAME_WINDOWS,
+    PlatformInfo,
+)
+
+
+def _make_test_platform_info(*, is_windows: bool = False) -> PlatformInfo:
+    """Create platform info for testing.
+
+    Test-only factory — avoids patching sys.platform in tests that only need
+    a PlatformInfo value object.
+
+    Args:
+        is_windows: Whether to create Windows platform info.
+
+    Returns:
+        PlatformInfo configured for the requested platform.
+
+    """
+    if is_windows:
+        return PlatformInfo(
+            name="Windows",
+            is_windows=True,
+            cli_binary_name=CLI_BINARY_NAME_WINDOWS,
+        )
+    return PlatformInfo(
+        name="Unix",
+        is_windows=False,
+        cli_binary_name=CLI_BINARY_NAME_UNIX,
+    )
+
+
 # ============================================================================
 # Test: Platform Detection
 # ============================================================================
@@ -62,10 +95,6 @@ class TestPlatformDetection:
 
         Contract: sdk-boundary:BinaryResolution:MUST:3
         """
-        from amplifier_module_provider_github_copilot._platform import (
-            _make_test_platform_info,
-        )
-
         info = _make_test_platform_info(is_windows=True)
 
         assert info.is_windows is True
@@ -77,10 +106,6 @@ class TestPlatformDetection:
 
         Contract: sdk-boundary:BinaryResolution:MUST:3
         """
-        from amplifier_module_provider_github_copilot._platform import (
-            _make_test_platform_info,
-        )
-
         info = _make_test_platform_info(is_windows=False)
 
         assert info.is_windows is False

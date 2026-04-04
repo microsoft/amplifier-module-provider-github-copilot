@@ -94,15 +94,56 @@ class TestParseToolCalls:
         result = parse_tool_calls(response)
         assert result[0].arguments == {"command": "ls -la"}
 
-    def test_invalid_json_raises_value_error(self) -> None:
-        """Invalid JSON arguments raise ValueError."""
+    def test_invalid_json_raises_invalid_tool_call_error(self) -> None:
+        """Invalid JSON arguments raise InvalidToolCallError (error-hierarchy.md:MUST:1)."""
+        from amplifier_core.llm_errors import InvalidToolCallError
+
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(
             content=[],
             tool_calls=[MockToolCall(id="tc1", name="bash", arguments="{invalid json}")],
         )
-        with pytest.raises(ValueError, match="Invalid JSON"):
+        with pytest.raises(InvalidToolCallError, match="Invalid JSON"):
+            parse_tool_calls(response)
+
+    def test_non_dict_direct_arguments_raise_invalid_tool_call_error(self) -> None:
+        """Non-dict arguments (list, int) raise InvalidToolCallError.
+
+        Contract: error-hierarchy.md:MUST:1 — malformed tool calls use kernel error type.
+        provider-protocol.md:parse_tool_calls — arguments MUST be dict.
+        """
+        from amplifier_core.llm_errors import InvalidToolCallError
+
+        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
+
+        class BadArgsToolCall:
+            id = "tc1"
+            name = "bash"
+            arguments: list[str] = ["not", "a", "dict"]  # type: ignore[assignment]
+
+        class BadArgsResponse:
+            tool_calls = [BadArgsToolCall()]
+
+        with pytest.raises(InvalidToolCallError, match="must be dict"):
+            parse_tool_calls(BadArgsResponse())
+
+    def test_json_array_arguments_raise_invalid_tool_call_error(self) -> None:
+        """JSON string parsing to array raises InvalidToolCallError.
+
+        Contract: error-hierarchy.md:MUST:1
+        provider-protocol.md:parse_tool_calls — arguments MUST be dict (object), not array.
+        Regression guard: json.loads('[1,2]') returns list, not dict — must be caught.
+        """
+        from amplifier_core.llm_errors import InvalidToolCallError
+
+        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
+
+        response = MockChatResponse(
+            content=[],
+            tool_calls=[MockToolCall(id="tc1", name="bash", arguments='["not", "an", "object"]')],
+        )
+        with pytest.raises(InvalidToolCallError, match="object"):
             parse_tool_calls(response)
 
 

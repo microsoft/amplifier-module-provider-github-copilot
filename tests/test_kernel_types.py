@@ -6,6 +6,8 @@ These tests verify the provider returns kernel types that pass isinstance() chec
 NOTE: Tests use pytest.importorskip() to gracefully skip if amplifier_core unavailable.
 """
 
+from typing import cast
+
 import pytest
 
 # Skip entire module if amplifier_core not installed
@@ -125,6 +127,7 @@ class TestKernelTypeCompliance:
 
     def test_tool_call_is_kernel_type(self) -> None:
         """AC-3 - parse_tool_calls() returns amplifier_core.ToolCall."""
+        from amplifier_core import ChatResponse
         from amplifier_core import ToolCall as KernelToolCall
 
         from amplifier_module_provider_github_copilot import GitHubCopilotProvider
@@ -145,7 +148,7 @@ class TestKernelTypeCompliance:
             "parse_tool_calls must be a method on provider class"
         )
 
-        result = provider.parse_tool_calls(MockResponse())
+        result = provider.parse_tool_calls(cast(ChatResponse, MockResponse()))
 
         assert len(result) == 1
         assert isinstance(result[0], KernelToolCall), (

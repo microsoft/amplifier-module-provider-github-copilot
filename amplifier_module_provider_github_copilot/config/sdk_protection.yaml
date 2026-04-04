@@ -52,6 +52,56 @@ session:
   # Contract: streaming-contract:abort-on-capture:MUST:1
   idle_timeout_seconds: 30.0
 
+  # Timeout for session.disconnect() call.
+  # Prevents indefinite hang on stubborn sessions during cleanup.
+  # Contract: sdk-protection:Session:MUST:3
+  disconnect_timeout_seconds: 30.0
+
+# ============================================================================
+# Singleton Policy
+# ============================================================================
+# Contract: sdk-protection:Singleton:MUST:8
+#
+# The provider uses a process-level singleton for CopilotClientWrapper.
+# This prevents N sub-agents from each spawning a ~500MB Electron subprocess.
+
+singleton:
+  # Timeout for acquiring the singleton threading.Lock.
+  # If this fires, another mount() is deadlocked — indicates a bug.
+  # Contract: sdk-protection:Singleton:MUST:8
+  lock_timeout_seconds: 30.0
+
+# ============================================================================
+# SDK Subprocess Configuration
+# ============================================================================
+# Controls the SDK subprocess behavior (CopilotClient configuration).
+
+sdk:
+  # Log level for SDK subprocess. Writes to ~/.copilot/logs/.
+  # WARNING: debug/all logs contain full conversation data (prompts, responses).
+  log_level: "info"
+
+  # Allowlist for log_level validation (Three-Medium: policy is in YAML).
+  # Contract: sdk-protection:Subprocess:MUST:7
+  valid_log_levels:
+    - "none"
+    - "error"
+    - "warning"
+    - "info"
+    - "debug"
+    - "all"
+
+  # Environment variable to override log_level at runtime.
+  # Allows operators to enable debug without code changes.
+  log_level_env_var: "COPILOT_SDK_LOG_LEVEL"
+
+  # Pre-warm SDK subprocess at mount() time.
+  # When true, subprocess spawn (~2s) happens in background during mount(),
+  # so first complete() has ~200ms latency instead of ~2000ms.
+  # Trade-off: Subprocess memory (~100MB) allocated even if unused.
+  # Default: false (lazy initialization on first complete() call).
+  prewarm_subprocess: false
+
 # ============================================================================
 # Architecture Note: Circuit Breaker NOT Needed
 # ============================================================================

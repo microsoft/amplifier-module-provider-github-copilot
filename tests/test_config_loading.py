@@ -47,14 +47,20 @@ class TestLoadModelsConfig:
         assert "GITHUB_TOKEN" in config.credential_env_vars
 
     def test_load_models_config_returns_capabilities(self) -> None:
-        """Models config loader returns capabilities from YAML."""
+        """Models config loader returns capabilities from YAML.
+
+        Provider-level = minimum ALL models support (streaming, tools).
+        Per kernel capabilities.py: TOOLS="tools", not "tool_use".
+        Per-model capabilities (vision, thinking) come from SDK dynamically.
+        """
         from amplifier_module_provider_github_copilot.provider import (
             _load_models_config,  # type: ignore[reportPrivateUsage]  # Testing internal function
         )
 
         config = _load_models_config()
         assert "streaming" in config.capabilities
-        assert "tool_use" in config.capabilities
+        assert "tools" in config.capabilities
+        # vision NOT in provider-level - it's per-model via list_models()
 
     def test_load_models_config_returns_defaults(self) -> None:
         """Models config loader returns defaults from YAML.

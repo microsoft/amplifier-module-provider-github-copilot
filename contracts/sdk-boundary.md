@@ -277,24 +277,26 @@ for tool in tools:
 - `skip_permission: bool` — set to `False` (Amplifier handles permissions)
 - `handler: None` — **MUST exist** (SDK checks handler attribute); set to `None` so SDK skips handler registration (Amplifier handles tools at kernel layer)
 
-**Implementation:** Use `types.SimpleNamespace` for duck-typing:
+**Implementation:** Use `SDKToolWrapper` dataclass from `sdk_adapter/types.py`:
 ```python
-from types import SimpleNamespace
+# sdk_adapter/types.py — SDKToolWrapper and convert_tools_for_sdk()
+@dataclass
+class SDKToolWrapper:
+    name: str
+    description: str
+    parameters: dict[str, Any] | None = None
+    overrides_built_in_tool: bool = False
+    skip_permission: bool = False
+    handler: Any = None  # SDK checks this; None skips handler registration
 
-def convert_to_sdk_tool(amplifier_tool) -> SimpleNamespace:
-    return SimpleNamespace(
-        name=amplifier_tool.name,
-        description=amplifier_tool.description,
-        parameters=getattr(amplifier_tool, "parameters", None),
-        overrides_built_in_tool=True,  # Avoid "conflicts with built-in" error
-        skip_permission=False,
-        handler=None,  # SDK checks this; None skips handler registration
-    )
+def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:
+    # Handles both ToolSpec objects (attribute access) and dicts
+    ...
 ```
 
 **Why not SDK `Tool` dataclass?** SDK `Tool` requires a `handler: ToolHandler` callable
 with actual implementation. Amplifier tools have handlers at the kernel layer, not the
-provider layer. Using `SimpleNamespace` with `handler=None` provides required attributes
+provider layer. `SDKToolWrapper` with `handler=None` provides required attributes
 without importing SDK types, and causes SDK to skip handler registration.
 
 ### Why This Matters
@@ -305,13 +307,25 @@ Without tool definitions in `session_config["tools"]`:
 - Provider returns raw text instead of structured `tool_calls`
 - Foundation cannot render `🔧 Using tool:` formatting
 
+### Input Tool Formats
+
+The provider accepts tools from ChatRequest in two formats:
+
+1. **Nested format** (OpenAI-style): `{"function": {"name": "...", "description": "...", "parameters": {...}}}`
+   - Used when tools originate from OpenAI-compatible schemas
+   
+2. **Flat format** (Amplifier-native): `{"name": "...", "description": "...", "parameters": {...}}`
+   - Used by Amplifier's internal `ToolSpec` Pydantic model (see `message_models.py`)
+
+Both formats are valid and the provider handles them transparently during conversion to SDK format (SimpleNamespace objects).
+
 ### Test Anchors
 
 | Anchor | Clause |
 |--------|--------|
 | `sdk-boundary:ToolForwarding:MUST:1` | tools from ChatRequest forwarded to session_config["tools"] |
 | `sdk-boundary:ToolForwarding:MUST:2` | Amplifier tools converted to SDK format |
-| `sdk-boundary:ToolForwarding:MUST:3` | available_tools set to empty list |
+| `sdk-boundary:ToolForwarding:MUST:3` | available_tools set to tool names allowlist when tools provided; empty list when no tools |
 | `sdk-boundary:ToolForwarding:MUST:4` | tools and available_tools not conflated |
 
 ---
@@ -356,7 +370,7 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 2. **MUST** use `system_message.mode: "replace"` when system_message is provided
 3. **MUST** set `on_permission_request` handler on every session
 4. **MUST** set `streaming: true` for event-based tool capture
-5. **MUST** register `preToolUse` deny hook after session creation
+5. **MUST** pass deny hook via `session_config["hooks"]` at creation time (NOT registered after)
 6. **MUST NOT** include keys that are not in SDK's SessionConfig TypedDict
 
 ### Rationale
@@ -405,11 +419,11 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:Config:MUST:1` | available_tools is empty list |
+| `sdk-boundary:Config:MUST:1` | available_tools set to Amplifier tool names allowlist (or empty list if no tools) |
 | `sdk-boundary:Config:MUST:2` | system_message mode is replace |
 | `sdk-boundary:Config:MUST:3` | on_permission_request always set |
 | `sdk-boundary:Config:MUST:4` | streaming is true |
-| `sdk-boundary:Config:MUST:5` | deny hook registered post-creation |
+| `sdk-boundary:Config:MUST:5` | deny hook passed via session_config["hooks"] at creation time |
 | `sdk-boundary:Config:MUST:6` | no unknown keys in config |
 
 ### Model Discovery
@@ -606,7 +620,7 @@ The provider MUST locate and execute the Copilot CLI binary across all supported
 5. **MUST** fall back to PATH when SDK binary unavailable
 6. **MUST** set execute permission (`S_IXUSR|S_IXGRP`, NOT `S_IXOTH`) on Unix
 7. **MUST** be no-op for permissions on Windows
-8. **MUST** implement graceful degradation if binary not found (mount() returns False)
+8. **MUST** raise if binary not found (mount() signals failure, not opt-out)
 
 ### Test Anchors
 
@@ -619,7 +633,7 @@ The provider MUST locate and execute the Copilot CLI binary across all supported
 | `sdk-boundary:BinaryResolution:MUST:5` | PATH fallback |
 | `sdk-boundary:BinaryResolution:MUST:6` | Execute permission |
 | `sdk-boundary:BinaryResolution:MUST:7` | Windows no-op |
-| `sdk-boundary:BinaryResolution:MUST:8` | Graceful degradation |
+| `sdk-boundary:BinaryResolution:MUST:8` | Raises if binary not found (mount() failure, not opt-out) |
 
 ---
 

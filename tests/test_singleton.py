@@ -36,13 +36,11 @@ class TestSingletonLifecycle:
 
         provider_module._shared_client = None
         provider_module._shared_client_refcount = 0
-        provider_module._shared_client_lock = None
 
         yield
 
         provider_module._shared_client = None
         provider_module._shared_client_refcount = 0
-        provider_module._shared_client_lock = None
 
     @pytest.mark.asyncio
     async def test_acquire_creates_client_on_first_call(self) -> None:
@@ -203,13 +201,11 @@ class TestHealthCheck:
 
         provider_module._shared_client = None
         provider_module._shared_client_refcount = 0
-        provider_module._shared_client_lock = None
 
         yield
 
         provider_module._shared_client = None
         provider_module._shared_client_refcount = 0
-        provider_module._shared_client_lock = None
 
     def test_is_healthy_true_for_live_client(self) -> None:
         """is_healthy() returns True when client is alive.
@@ -297,47 +293,79 @@ class TestLockTimeout:
 
         provider_module._shared_client = None
         provider_module._shared_client_refcount = 0
-        provider_module._shared_client_lock = None
 
         yield
 
         provider_module._shared_client = None
         provider_module._shared_client_refcount = 0
-        provider_module._shared_client_lock = None
 
     @pytest.mark.asyncio
     async def test_lock_timeout_raises_timeout_error(self) -> None:
-        """30s lock timeout raises TimeoutError."""
+        """30s lock timeout raises TimeoutError when lock is held.
+
+        Contract: sdk-protection:Singleton:MUST:8
+        Timeout value sourced from sdk_protection.yaml singleton.lock_timeout_seconds.
+        """
+        import threading
+
         import amplifier_module_provider_github_copilot as provider_module
 
-        # Create a lock that's already held
-        lock = asyncio.Lock()
-        await lock.acquire()
+        # Hold the threading.Lock from a background thread to simulate deadlock
+        lock_held = threading.Event()
+        release_signal = threading.Event()
 
-        # Set a very short timeout for testing
-        with (
-            patch.object(provider_module, "_get_lock", return_value=lock),
-            patch.object(provider_module, "_LOCK_TIMEOUT_SECONDS", 0.01),
-        ):
-            with pytest.raises(TimeoutError):
-                await provider_module._acquire_shared_client()
+        def hold_lock() -> None:
+            provider_module._state_lock.acquire()
+            lock_held.set()
+            release_signal.wait(timeout=5.0)
+            provider_module._state_lock.release()
 
-    @pytest.mark.asyncio
-    async def test_lazy_lock_creation(self) -> None:
-        """_get_lock() creates lock lazily (no asyncio.Lock at import time)."""
+        t = threading.Thread(target=hold_lock, daemon=True)
+        t.start()
+        try:
+            lock_held.wait(timeout=1.0)
+            # Patch config to return a tiny timeout so the test runs fast.
+            # Contract: sdk-protection:Singleton:MUST:8 — timeout sourced from YAML
+            mock_config = MagicMock()
+            mock_config.singleton.lock_timeout_seconds = 0.01
+            with patch(
+                "amplifier_module_provider_github_copilot.load_sdk_protection_config",
+                return_value=mock_config,
+            ):
+                with pytest.raises(TimeoutError):
+                    await provider_module._acquire_shared_client()
+        finally:
+            release_signal.set()
+            t.join(timeout=2.0)
+
+    def test_state_lock_is_eager_threading_lock(self) -> None:
+        """_state_lock is a threading.Lock, eagerly initialized at import time.
+
+        Contract: sdk-protection:Singleton:MUST:8
+        No asyncio.Lock at module level — threading.Lock is event-loop-safe.
+        """
+        import threading
+
         import amplifier_module_provider_github_copilot as provider_module
 
-        # Lock should be None at import time
-        assert provider_module._shared_client_lock is None
+        assert isinstance(provider_module._state_lock, type(threading.Lock()))
 
-        # _get_lock() should create it
-        lock = provider_module._get_lock()
-        assert lock is not None
-        assert isinstance(lock, asyncio.Lock)
+    def test_lock_timeout_in_singleton_config(self) -> None:
+        """lock_timeout_seconds must be present in SingletonConfig.
 
-        # Same lock on repeated calls
-        lock2 = provider_module._get_lock()
-        assert lock is lock2
+        Contract: sdk-protection:Singleton:MUST:8
+        Three-Medium: timeout policy lives in YAML, not as Python constant.
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_sdk_protection_config,
+        )
+
+        config = load_sdk_protection_config()
+        assert hasattr(config.singleton, "lock_timeout_seconds"), (
+            "SdkProtectionConfig.singleton must have lock_timeout_seconds field"
+        )
+        assert isinstance(config.singleton.lock_timeout_seconds, float)
+        assert config.singleton.lock_timeout_seconds > 0
 
 
 # ============================================================================
@@ -394,7 +422,6 @@ class TestMountIntegration:
 
         monkeypatch.setattr(provider_module, "_shared_client", None)
         monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
-        monkeypatch.setattr(provider_module, "_shared_client_lock", None)
 
     @pytest.mark.asyncio
     async def test_mount_creates_shared_client(self) -> None:
@@ -451,6 +478,48 @@ class TestMountIntegration:
 
             await cleanup()
             mock_release.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_cancels_provider_emit_tasks(self) -> None:
+        """Cleanup from mount() calls provider.cancel_emit_tasks() before release.
+
+        Contract: streaming-contract:ProgressiveStreaming:SHOULD:3
+        """
+        import amplifier_module_provider_github_copilot as provider_module
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.mount = AsyncMock()
+
+        cancel_tasks_called = False
+
+        async def mock_cancel_emit_tasks() -> None:
+            nonlocal cancel_tasks_called
+            cancel_tasks_called = True
+
+        # Patch on the class that mount() actually uses (via __init__.py's namespace),
+        # not a freshly re-imported copy that may differ after sys.modules manipulation.
+        with (
+            patch.object(
+                provider_module, "_acquire_shared_client", new_callable=AsyncMock
+            ) as mock_acquire,
+            patch.object(provider_module, "_release_shared_client", new_callable=AsyncMock),
+            patch.object(provider_module, "CopilotClientWrapper"),
+            patch.object(
+                provider_module.GitHubCopilotProvider,
+                "cancel_emit_tasks",
+                side_effect=mock_cancel_emit_tasks,
+            ),
+        ):
+            mock_client = MagicMock(spec=CopilotClientWrapper)
+            mock_client.close = AsyncMock()
+            mock_acquire.return_value = mock_client
+
+            cleanup = await provider_module.mount(mock_coordinator)
+            assert cleanup is not None
+
+            await cleanup()
+
+        assert cancel_tasks_called
 
     @pytest.mark.asyncio
     async def test_mount_failure_releases_reference_and_raises(self) -> None:
@@ -533,7 +602,6 @@ class TestConcurrentAccess:
 
         monkeypatch.setattr(provider_module, "_shared_client", None)
         monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
-        monkeypatch.setattr(provider_module, "_shared_client_lock", None)
 
     @pytest.mark.asyncio
     async def test_concurrent_mounts_serialized(self) -> None:
@@ -584,11 +652,9 @@ class TestAcquireSharedClientFailurePaths:
 
         m._shared_client = None
         m._shared_client_refcount = 0
-        m._shared_client_lock = None
         yield
         m._shared_client = None
         m._shared_client_refcount = 0
-        m._shared_client_lock = None
 
     @pytest.mark.asyncio
     async def test_wrapper_creation_failure_clears_state(self) -> None:
@@ -649,11 +715,9 @@ class TestReleaseSharedClientClosureErrors:
 
         m._shared_client = None
         m._shared_client_refcount = 0
-        m._shared_client_lock = None
         yield
         m._shared_client = None
         m._shared_client_refcount = 0
-        m._shared_client_lock = None
 
     @pytest.mark.asyncio
     async def test_close_error_on_last_release_is_swallowed(self) -> None:
@@ -684,7 +748,6 @@ class TestMountExceptionPaths:
 
         monkeypatch.setattr(m, "_shared_client", None)
         monkeypatch.setattr(m, "_shared_client_refcount", 0)
-        monkeypatch.setattr(m, "_shared_client_lock", None)
 
     @pytest.mark.asyncio
     async def test_mount_coordinator_exception_raises(self) -> None:
@@ -775,7 +838,6 @@ class TestSessionIsolation:
 
         monkeypatch.setattr(provider_module, "_shared_client", None)
         monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
-        monkeypatch.setattr(provider_module, "_shared_client_lock", None)
 
     @pytest.mark.asyncio
     async def test_provider_instances_are_independent(self) -> None:

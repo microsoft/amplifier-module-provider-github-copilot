@@ -348,6 +348,125 @@ class TestLlmResponseEvent:
         assert data["provider"] == "github-copilot"
         assert "usage" in data
 
+    @pytest.mark.asyncio
+    async def test_llm_response_contains_sdk_session_id(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """llm:response should include sdk_session_id for log correlation.
+
+        Contract: observability:SHOULD:1 — include correlation IDs for tracing
+
+        The sdk_session_id enables foreign-key correlation between Amplifier logs
+        and Copilot SDK logs (~/.copilot/logs/) for billing/token forensics.
+        """
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import (
+            MockCopilotClientWrapper,
+            text_delta_event,
+        )
+
+        # Create mock client with events - session will have session_id
+        events = [text_delta_event("Hello")]
+        mock_client = MockCopilotClientWrapper(events=events)
+
+        # Inject mock client and coordinator
+        provider = GitHubCopilotProvider(
+            client=mock_client,  # type: ignore[arg-type]
+            coordinator=mock_coordinator,
+        )
+
+        # Create request
+        request = MagicMock()
+        request.model = "gpt-4"
+        request.messages = [MagicMock(role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        # Call complete - this uses production path with mock client
+        await provider.complete(request)
+
+        # Find llm:response call and validate sdk_session_id
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1, "Expected llm:response event"
+        data = response_calls[0][0][1]
+
+        # Verify sdk_session_id is present
+        assert "sdk_session_id" in data, (
+            "llm:response must include sdk_session_id for log correlation"
+        )
+        # Verify it's the mock session ID
+        assert data["sdk_session_id"] == "mock-sdk-session-id"
+
+    @pytest.mark.asyncio
+    async def test_llm_response_contains_sdk_pid(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """llm:response should include sdk_pid for SDK log file correlation.
+
+        Contract: observability:Events:SHOULD:3 — include sdk_pid in llm:response
+
+        The sdk_pid enables direct lookup of SDK log files at:
+        ~/.copilot/logs/process-{timestamp}-{pid}.log
+
+        Without sdk_pid, tooling must grep through ALL log files (O(n)).
+        With sdk_pid, tooling does O(1) direct file access.
+        """
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import (
+            MockCopilotClientWrapper,
+            text_delta_event,
+        )
+
+        # Create mock client with events and mock PID
+        events = [text_delta_event("Hello")]
+        mock_client = MockCopilotClientWrapper(events=events)
+        # Set mock PID (simulates what real client captures from subprocess)
+        mock_client._mock_copilot_pid = "12345"  # pyright: ignore[reportPrivateUsage]
+
+        # Inject mock client and coordinator
+        provider = GitHubCopilotProvider(
+            client=mock_client,  # type: ignore[arg-type]
+            coordinator=mock_coordinator,
+        )
+
+        # Create request
+        request = MagicMock()
+        request.model = "gpt-4"
+        request.messages = [MagicMock(role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        # Call complete - this uses production path with mock client
+        await provider.complete(request)
+
+        # Find llm:response call and validate sdk_pid
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1, "Expected llm:response event"
+        data = response_calls[0][0][1]
+
+        # Verify sdk_pid is present
+        assert "sdk_pid" in data, (
+            "llm:response must include sdk_pid for log correlation"
+        )
+        # Verify it's the mock PID
+        assert data["sdk_pid"] == "12345"
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Event Ordering Tests

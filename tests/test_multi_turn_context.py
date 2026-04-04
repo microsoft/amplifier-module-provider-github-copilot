@@ -109,8 +109,16 @@ class TestRolePreservation:
         assert "user" in prompt.lower() or "User:" in prompt
         assert "assistant" in prompt.lower() or "Assistant:" in prompt
 
-    def test_system_message_preserved(self) -> None:
-        """System message role should be preserved."""
+    def test_system_message_not_in_prompt(self) -> None:
+        """C-4: system messages MUST NOT be included in the prompt body.
+
+        Contract: sdk-boundary:Config:MUST:2 — system_message goes to SDK session config
+        (mode=replace), NOT to the prompt body.  Including it in the prompt ALSO causes
+        a dual-path injection: the model sees the system instructions both via
+        `session_config.system_message` AND repeated verbatim in the conversation.
+
+        extract_prompt_from_chat_request() MUST skip role=="system" messages.
+        """
         request = MockChatRequest(
             messages=[
                 MockMessage(role="system", content="You are a helpful assistant."),
@@ -120,8 +128,29 @@ class TestRolePreservation:
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # System role should be indicated
-        assert "system" in prompt.lower() or "System:" in prompt
+        # MUST NOT include system message in prompt body
+        assert "You are a helpful assistant." not in prompt, (
+            "System message must not be in the prompt body — "
+            "it goes through SDK session_config.system_message instead"
+        )
+        # User message MUST still be present
+        assert "Hello!" in prompt or "user" in prompt.lower()
+
+    def test_system_message_preserved(self) -> None:
+        """System message role should be preserved (in session config, not in prompt body)."""
+        request = MockChatRequest(
+            messages=[
+                MockMessage(role="system", content="You are a helpful assistant."),
+                MockMessage(role="user", content="Hello!"),
+            ]
+        )
+
+        prompt = _extract_prompt_from_chat_request(request)
+
+        # System content must NOT be in prompt body — it's routed through session config
+        assert "You are a helpful assistant." not in prompt
+        # User message must still be in prompt
+        assert "Hello!" in prompt or "user" in prompt.lower()
 
 
 class TestContentTypePreservation:
@@ -264,8 +293,8 @@ class TestMultiTurnConversation:
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # All key content should be present
-        assert "coding assistant" in prompt.lower() or "system" in prompt.lower()
+        # All key content should be present (system message is NOT in prompt —
+        # it goes via session config).
         assert "Read the file" in prompt or "config.yaml" in prompt
         assert "8080" in prompt
         assert "What port" in prompt or "port" in prompt
@@ -470,3 +499,37 @@ class TestContentExtractionEdgeCases:
 
         # Should not crash, unknown block content not included
         assert "should not appear" not in prompt
+
+    def test_tool_result_includes_tool_call_id(self) -> None:
+        """L-2: ToolResultContent.tool_call_id MUST appear in serialized prompt.
+
+        Contract: provider-protocol:complete:MUST — MUST preserve tool call IDs
+        for result correlation.
+
+        When the model receives multi-turn context as a prompt string, EACH tool
+        result MUST include the originating tool_call_id so the model can correlate
+        results back to calls.  Without it, out-of-order or multiple-tool turns
+        cannot be resolved.
+        """
+        request = MockChatRequest(
+            messages=[
+                MockMessage(
+                    role="user",
+                    content=[
+                        MockToolResultContent(
+                            tool_call_id="call_abc123",
+                            output="file contents here",
+                        ),
+                    ],
+                ),
+            ]
+        )
+
+        prompt = _extract_prompt_from_chat_request(request)
+
+        # MUST include tool_call_id for correlation (not just the output)
+        assert "call_abc123" in prompt, (
+            "Tool result MUST include tool_call_id in serialized prompt for correlation. "
+            f"Prompt was: {prompt!r}"
+        )
+        assert "file contents here" in prompt

@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 # Re-export kernel error types for use by other modules in this package
 __all__ = [
     # Kernel error types (re-exported from amplifier_core.llm_errors)
+    "AbortError",
     "AuthenticationError",
     "ConfigurationError",
     "LLMError",
@@ -355,6 +356,9 @@ def _create_kernel_error_safely(
     Some accept retry_after, others don't.
     Try with full args first, fall back to minimal args on TypeError.
 
+    H-5 Fix: Log debug messages when fallback paths are taken, aiding debugging
+    without spamming logs. Contract: behaviors:Logging:SHOULD:1
+
     Args:
         error_class: The kernel error class to instantiate.
         message: Error message.
@@ -367,6 +371,8 @@ def _create_kernel_error_safely(
         Instantiated kernel error.
 
     """
+    error_class_name = error_class.__name__
+
     # First, try with retry_after (most error classes support it)
     try:
         return error_class(
@@ -376,8 +382,12 @@ def _create_kernel_error_safely(
             retryable=retryable,
             retry_after=retry_after,
         )
-    except TypeError:
-        pass
+    except TypeError as e:
+        logger.debug(
+            "[ERROR_TRANSLATION] %s constructor failed with retry_after: %s",
+            error_class_name,
+            e,
+        )
 
     # Fall back without retry_after (e.g., InvalidToolCallError, AbortError)
     try:
@@ -387,8 +397,12 @@ def _create_kernel_error_safely(
             model=model,
             retryable=retryable,
         )
-    except TypeError:
-        pass
+    except TypeError as e:
+        logger.debug(
+            "[ERROR_TRANSLATION] %s constructor failed without retry_after: %s",
+            error_class_name,
+            e,
+        )
 
     # Final fallback: minimal constructor
     try:
@@ -396,8 +410,14 @@ def _create_kernel_error_safely(
             message,
             provider=provider,
         )
-    except TypeError:
+    except TypeError as e:
         # Last resort: return ProviderUnavailableError
+        logger.warning(
+            "[ERROR_TRANSLATION] %s constructor failed with minimal args, "
+            "falling back to ProviderUnavailableError: %s",
+            error_class_name,
+            e,
+        )
         return ProviderUnavailableError(
             message,
             provider=provider,

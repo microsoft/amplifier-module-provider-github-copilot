@@ -1314,3 +1314,113 @@ class TestRuntimeConfigOverride:
         # Cached config should still have original YAML default
         # (not mutated by either provider)
         assert cached_config.defaults["model"] in ["claude-opus-4.5", "gpt-4", "gpt-4o"]
+
+
+# =============================================================================
+# C-2: asyncio.CancelledError translation
+# =============================================================================
+
+
+class TestCancelledErrorTranslation:
+    """C-2: asyncio.CancelledError MUST translate to AbortError.
+
+    Contract: error-hierarchy:AbortError:MUST:1
+
+    asyncio.CancelledError inherits from BaseException since Python 3.9, NOT Exception.
+    A bare ``except Exception`` in provider.complete() silently misses it, causing
+    the raw CancelledError to escape to the kernel as an unhandled BaseException —
+    violating the error-hierarchy contract and breaking observability (emit_response_error
+    never fires).
+
+    Fix: add ``except asyncio.CancelledError`` BEFORE each ``except Exception`` block,
+    translate to ``AbortError(retryable=False)``, emit error event, and re-raise the
+    translated error.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_from_session_becomes_abort_error(self) -> None:
+        """error-hierarchy:AbortError:MUST:1 — CancelledError from SDK → AbortError.
+
+        This is the FAILING test for C-2.  Before the fix, asyncio.CancelledError
+        escapes ``except Exception`` and propagates as raw BaseException.
+        After the fix it MUST be caught and re-raised as AbortError.
+        """
+        import asyncio
+
+        from amplifier_core.llm_errors import AbortError
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
+
+        # Inject CancelledError at session-creation time (before first SDK call)
+        mock_client = MockCopilotClientWrapper(
+            events=[],
+            raise_on_session=asyncio.CancelledError("task cancelled"),  # type: ignore[arg-type]
+        )
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        request = MagicMock()
+        request.model = "gpt-4"
+        request.messages = [MagicMock(role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        # MUST raise AbortError — NOT raw asyncio.CancelledError
+        with pytest.raises(AbortError) as exc_info:
+            await provider.complete(request)
+
+        assert exc_info.value.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_not_retried(self) -> None:
+        """error-hierarchy:AbortError:MUST:1 — CancelledError MUST NOT trigger retry loop.
+
+        AbortError has retryable=False, so only one attempt must be made.
+        """
+        import asyncio
+
+        from amplifier_core.llm_errors import AbortError
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
+
+        call_count = 0
+
+        class CountingCancelMock(MockCopilotClientWrapper):
+            @property  # type: ignore[override]
+            def _raise_on_session(self) -> asyncio.CancelledError:  # type: ignore[override]
+                return asyncio.CancelledError("cancelled")
+
+            @_raise_on_session.setter
+            def _raise_on_session(self, value: object) -> None:
+                pass  # ignore assignment from __init__
+
+            from contextlib import asynccontextmanager as _acm
+
+            @_acm
+            async def session(self, model=None, *, system_message=None, tools=None):  # type: ignore[override]
+                nonlocal call_count
+                call_count += 1
+                raise asyncio.CancelledError("cancelled")
+                yield  # noqa: unreachable
+
+        mock_client = CountingCancelMock(events=[])
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        request = MagicMock()
+        request.model = "gpt-4"
+        request.messages = [MagicMock(role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        with pytest.raises(AbortError):
+            await provider.complete(request)
+
+        # AbortError is non-retryable → exactly 1 attempt
+        assert call_count == 1, f"Expected 1 attempt (no retry), got {call_count}"

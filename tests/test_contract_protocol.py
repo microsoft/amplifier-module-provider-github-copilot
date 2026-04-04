@@ -48,11 +48,20 @@ class TestProtocolGetInfo:
         assert info.capabilities is not None
 
     def test_includes_capabilities(self, provider: GitHubCopilotProvider) -> None:
-        """provider-protocol:get_info:MUST:2 - Includes capabilities."""
+        """provider-protocol:get_info:MUST:2 - Includes capabilities.
+
+        Contract: Capabilities SHOULD use kernel constants from
+        amplifier_core.capabilities (PROVIDER_CONTRACT.md:97).
+        Using "tools" (not "tool_use") per kernel canonical naming.
+
+        Provider-level capabilities = minimum ALL models support.
+        Per-model capabilities (vision, thinking) are reported via list_models().
+        """
         info = provider.get_info()
 
+        # Per kernel capabilities.py constants: STREAMING="streaming", TOOLS="tools"
         assert "streaming" in info.capabilities
-        assert "tool_use" in info.capabilities
+        assert "tools" in info.capabilities
 
 
 class TestProtocolListModels:
@@ -139,6 +148,37 @@ class TestProtocolParseToolCalls:
         tool_calls = provider.parse_tool_calls(response)
 
         assert tool_calls[0].id == "unique_id_123"
+
+    def test_generates_id_when_sdk_omits_it(self, provider: GitHubCopilotProvider) -> None:
+        """provider-protocol:parse_tool_calls:MUST:3 — C-3 regression guard.
+
+        When the SDK emits a tool call with no id or an empty-string id,
+        ``parse_tool_calls`` MUST return a ToolCall with a non-empty id so
+        the kernel can use it for tool-result correlation.  An empty string silently
+        breaks the correlation loop.
+        """
+        # SDK omitted the id entirely
+        tc_no_id = MagicMock(spec=["name", "arguments"])
+        tc_no_id.name = "get_weather"
+        tc_no_id.arguments = {"city": "Seattle"}
+
+        # SDK provided an empty-string id
+        tc_empty_id = MagicMock()
+        tc_empty_id.id = ""
+        tc_empty_id.name = "list_files"
+        tc_empty_id.arguments = {}
+
+        response = MagicMock()
+        response.tool_calls = [tc_no_id, tc_empty_id]
+
+        tool_calls = provider.parse_tool_calls(response)
+
+        assert len(tool_calls) == 2
+        # MUST have non-empty ids (generated UUID fallback)
+        assert tool_calls[0].id, "ToolCall with missing id MUST get a generated id"
+        assert tool_calls[1].id, "ToolCall with empty-string id MUST get a generated id"
+        # Generated ids must be distinct (two separate UUIDs)
+        assert tool_calls[0].id != tool_calls[1].id
 
     def test_uses_arguments_not_input(self, provider: GitHubCopilotProvider) -> None:
         """provider-protocol:parse_tool_calls:MUST:4 - Uses 'arguments' field, not 'input'."""

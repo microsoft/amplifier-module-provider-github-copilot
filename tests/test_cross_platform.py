@@ -406,3 +406,74 @@ class TestPermissionsModuleExists:
 
         # Result depends on implementation - just verify it doesn't crash
         assert result is not None or result is None  # Either is OK
+
+
+class TestWSLDetection:
+    """PlatformInfo reports WSL vs native Linux distinctly.
+
+    Contract: sdk-boundary:BinaryResolution:MUST:1 — platform detection must
+    accurately detect the running environment. WSL has different binary
+    resolution characteristics than native Linux.
+    """
+
+    def test_platform_info_has_is_wsl_field(self) -> None:
+        """PlatformInfo must have an is_wsl field.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:1
+        """
+        from amplifier_module_provider_github_copilot._platform import get_platform_info
+
+        info = get_platform_info()
+        assert hasattr(info, "is_wsl"), (
+            "PlatformInfo must expose is_wsl field to distinguish WSL from native Linux"
+        )
+
+    def test_wsl_detected_from_proc_version(self) -> None:
+        """is_wsl=True when /proc/version contains 'microsoft'.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:1
+        """
+        from unittest.mock import mock_open, patch
+
+        from amplifier_module_provider_github_copilot._platform import (
+            PlatformInfo,
+            get_platform_info,
+        )
+
+        get_platform_info.cache_clear()
+
+        wsl_proc_version = "Linux version 5.15.0-microsoft-standard-WSL2"
+
+        with (
+            patch("sys.platform", "linux"),
+            patch("builtins.open", mock_open(read_data=wsl_proc_version)),
+        ):
+            info = get_platform_info()
+
+        get_platform_info.cache_clear()
+
+        assert info.is_wsl is True, "Should detect WSL from /proc/version"
+        assert isinstance(info, PlatformInfo)
+
+    def test_non_wsl_linux_has_is_wsl_false(self) -> None:
+        """is_wsl=False on native Linux (no 'microsoft' in /proc/version).
+
+        Contract: sdk-boundary:BinaryResolution:MUST:1
+        """
+        from unittest.mock import mock_open, patch
+
+        from amplifier_module_provider_github_copilot._platform import get_platform_info
+
+        get_platform_info.cache_clear()
+
+        native_proc_version = "Linux version 5.15.0-91-generic (ubuntu)"
+
+        with (
+            patch("sys.platform", "linux"),
+            patch("builtins.open", mock_open(read_data=native_proc_version)),
+        ):
+            info = get_platform_info()
+
+        get_platform_info.cache_clear()
+
+        assert info.is_wsl is False

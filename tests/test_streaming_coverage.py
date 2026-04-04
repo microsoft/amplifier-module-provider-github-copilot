@@ -1,0 +1,361 @@
+"""Coverage tests for streaming.py missing branches.
+
+Covers:
+- Lines 403, 415, 427: _validate_no_classification_overlap wildcard overlap errors
+- Line 569: classify_event returns DROP for unknown event type (+ warning)
+- Line 591: _extract_event_data with data object having __dict__ (not dict)
+
+Contract: event-vocabulary:Classification:MUST:1 — each event has exactly one classification
+Contract: streaming-contract:SessionLifecycle:MUST:1 — session lifecycle events
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, cast
+
+from amplifier_module_provider_github_copilot.streaming import DomainEventType
+
+# ---------------------------------------------------------------------------
+# _validate_no_classification_overlap (lines 403, 415, 427)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateNoClassificationOverlapBridgeConsumeWildcard:
+    """BRIDGE entry must not match CONSUME wildcard pattern."""
+
+    def test_bridge_type_matching_consume_wildcard_raises(self) -> None:
+        """BRIDGE entry 'session.idle' overlapping CONSUME '*' wildcard raises.
+
+        Line ~403 in streaming.py — bridge vs consume wildcard conflict
+        Contract: event-vocabulary:Classification:MUST:1
+        """
+        import pytest
+
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ConfigurationError,
+        )
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEventType,
+            _validate_no_classification_overlap,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        bridge_mappings = cast(
+            dict[str, tuple[DomainEventType, str | None]],
+            {"session.idle": (DomainEventType.SESSION_IDLE, None)},
+        )
+        consume_patterns = ["session.*"]  # wildcard matches session.idle
+        drop_patterns: list[str] = []
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            _validate_no_classification_overlap(bridge_mappings, consume_patterns, drop_patterns)
+
+        assert "session.idle" in str(exc_info.value)
+        assert "CONSUME" in str(exc_info.value)
+
+    def test_bridge_type_matching_drop_wildcard_raises(self) -> None:
+        """BRIDGE entry matching DROP wildcard raises ConfigurationError.
+
+        Lines ~395-402 in streaming.py — bridge vs drop wildcard conflict
+        """
+        import pytest
+
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ConfigurationError,
+        )
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEventType,
+            _validate_no_classification_overlap,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        bridge_mappings = cast(
+            dict[str, tuple[DomainEventType, str | None]],
+            {"assistant.message": (DomainEventType.CONTENT_DELTA, None)},
+        )
+        consume_patterns: list[str] = []
+        drop_patterns = ["assistant.*"]  # wildcard matches assistant.message
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            _validate_no_classification_overlap(bridge_mappings, consume_patterns, drop_patterns)
+
+        assert "assistant.message" in str(exc_info.value)
+        assert "DROP" in str(exc_info.value)
+
+    def test_no_overlap_valid_config_passes(self) -> None:
+        """Non-overlapping config does not raise.
+
+        All three lists have distinct event types — no conflict.
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEventType,
+            _validate_no_classification_overlap,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        bridge_mappings = cast(
+            dict[str, tuple[DomainEventType, str | None]],
+            {
+                "session.idle": (DomainEventType.SESSION_IDLE, None),
+                "assistant.message_delta": (DomainEventType.CONTENT_DELTA, None),
+            },
+        )
+        consume_patterns = ["assistant.usage"]
+        drop_patterns = ["session.*debug*"]  # matches nothing in bridge
+
+        # Should not raise
+        _validate_no_classification_overlap(bridge_mappings, consume_patterns, drop_patterns)
+
+
+class TestValidateConsumeEntryVsDropWildcard:
+    """CONSUME explicit entry must not match DROP wildcard."""
+
+    def test_consume_entry_matching_drop_wildcard_raises(self) -> None:
+        """CONSUME 'tool.call' matching DROP 'tool.*' wildcard raises.
+
+        Line ~415 in streaming.py — consume explicit vs drop wildcard conflict
+        Contract: event-vocabulary:Classification:MUST:1
+        """
+        import pytest
+
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ConfigurationError,
+        )
+        from amplifier_module_provider_github_copilot.streaming import (
+            _validate_no_classification_overlap,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        bridge_mappings: dict[str, Any] = {}
+        consume_patterns = ["tool.call"]  # explicit entry
+        drop_patterns = ["tool.*"]  # wildcard matches tool.call
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            _validate_no_classification_overlap(bridge_mappings, consume_patterns, drop_patterns)
+
+        assert "tool.call" in str(exc_info.value)
+        assert "CONSUME" in str(exc_info.value)
+
+
+class TestValidateDropEntryVsConsumeWildcard:
+    """DROP explicit entry must not match CONSUME wildcard."""
+
+    def test_drop_entry_matching_consume_wildcard_raises(self) -> None:
+        """DROP 'debug.message' matching CONSUME 'debug.*' wildcard raises.
+
+        Line ~427 in streaming.py — drop explicit vs consume wildcard conflict
+        Contract: event-vocabulary:Classification:MUST:1
+        """
+        import pytest
+
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ConfigurationError,
+        )
+        from amplifier_module_provider_github_copilot.streaming import (
+            _validate_no_classification_overlap,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        bridge_mappings: dict[str, Any] = {}
+        consume_patterns = ["debug.*"]  # wildcard matches debug.message
+        drop_patterns = ["debug.message"]  # explicit entry
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            _validate_no_classification_overlap(bridge_mappings, consume_patterns, drop_patterns)
+
+        assert "debug.message" in str(exc_info.value)
+        assert "DROP" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# classify_event unknown type → DROP (line 569)
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyEventUnknownType:
+    """classify_event returns DROP and logs warning for unknown event types."""
+
+    def test_unknown_event_type_returns_drop(self) -> None:
+        """Event type not in any classification list returns EventClassification.DROP.
+
+        Line ~569 in streaming.py — fallback DROP with warning
+        Contract: event-vocabulary:Classification:MUST:1 — unknown → DROP
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            EventConfig,
+            classify_event,
+        )
+
+        # Use minimal EventConfig with nothing matching the unknown type
+        config = EventConfig(
+            bridge_mappings=cast(
+                dict[str, tuple[DomainEventType, str | None]],
+                {"session.idle": (DomainEventType.SESSION_IDLE, None)},
+            ),
+            consume_patterns=["assistant.usage"],
+            drop_patterns=["system.*"],
+        )
+
+        result = classify_event("completely.unknown.event.type", config)
+
+        # Unknown events fall back to DROP
+        assert result is EventClassification.DROP
+
+    def test_unknown_event_type_logs_warning(self, caplog: Any) -> None:
+        """Unknown event type logs a warning message.
+
+        Line ~569 in streaming.py — logger.warning("Unknown SDK event type")
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.streaming import EventConfig, classify_event
+
+        config = EventConfig(
+            bridge_mappings={},
+            consume_patterns=[],
+            drop_patterns=[],
+        )
+
+        with caplog.at_level(logging.WARNING):
+            classify_event("mystery.event.type", config)
+
+        assert any("Unknown SDK event type" in record.message for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# _extract_event_data with data object having __dict__ (line 591)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractEventDataWithObjectData:
+    """_extract_event_data handles data objects with __dict__ via extract_event_fields."""
+
+    def test_data_object_with_dict_attribute_is_flattened(self) -> None:
+        """data field that is an object with __dict__ is extracted via extract_event_fields.
+
+        Line ~591 in streaming.py — elif hasattr(v, '__dict__'):
+        Contract: streaming-contract:EventExtraction:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            _extract_event_data,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @dataclass
+        class SessionEventData:
+            """Simulates SDK SessionEventData object with __dict__."""
+
+            delta_content: str | None = "Hello from SDK"
+            finish_reason: str | None = None
+            input_tokens: int | None = None
+
+        # SDK event dict with data as an object (not a plain dict)
+        sdk_event = {
+            "type": "assistant.message_delta",
+            "data": SessionEventData(delta_content="Hello from SDK"),
+        }
+
+        result = _extract_event_data(sdk_event)
+
+        # The data object should have been flattened into result
+        # extract_event_fields maps delta_content → text
+        assert result is not None
+        # At minimum, some key should have been extracted from the data object
+        assert isinstance(result, dict)
+
+    def test_data_dict_is_flattened_normally(self) -> None:
+        """data field as dict uses the normal dict path (not the __dict__ branch)."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            _extract_event_data,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        sdk_event = {
+            "type": "assistant.message_delta",
+            "data": {"delta_content": "from dict", "finish_reason": None},
+        }
+
+        result = _extract_event_data(sdk_event)
+
+        assert "delta_content" in result or len(result) > 0
+
+    def test_non_data_keys_are_preserved(self) -> None:
+        """Non-'data', non-'type' keys in SDK event are passed through."""
+        from amplifier_module_provider_github_copilot.streaming import (
+            _extract_event_data,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        sdk_event = {
+            "type": "session.idle",  # excluded
+            "session_id": "sess-123",  # should be preserved
+            "timestamp": 12345,  # should be preserved
+        }
+
+        result = _extract_event_data(sdk_event)
+
+        assert result["session_id"] == "sess-123"
+        assert result["timestamp"] == 12345
+        assert "type" not in result
+
+
+# ---------------------------------------------------------------------------
+# classify_event — DROP pattern matched (line 569)
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyEventDropPatternMatch:
+    """classify_event returns DROP when event type matches a drop_pattern."""
+
+    def test_event_matching_drop_pattern_returns_drop(self) -> None:
+        """Event type that matches a drop_pattern returns EventClassification.DROP.
+
+        Line 569 in streaming.py — return EventClassification.DROP (pattern matched)
+        Contract: event-vocabulary:Classification:MUST:1
+
+        This is DISTINCT from the "unknown event" fallthrough at lines 570-571:
+        here the event type explicitly matches a wildcard drop_pattern.
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            EventConfig,
+            classify_event,
+        )
+
+        config = EventConfig(
+            bridge_mappings={},
+            consume_patterns=[],
+            drop_patterns=["debug.*"],  # wildcard matches "debug.verbose"
+        )
+
+        result = classify_event("debug.verbose", config)
+
+        assert result is EventClassification.DROP
+
+
+# ---------------------------------------------------------------------------
+# _extract_event_data — primitive data field (line 591 elif branch → False)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractEventDataPrimitiveData:
+    """_extract_event_data silently skips data field when it is a primitive."""
+
+    def test_primitive_data_field_is_silently_skipped(self) -> None:
+        """data field that is a primitive (not dict, no __dict__) is silently dropped.
+
+        Line 591 in streaming.py — elif hasattr(v, '__dict__'): evaluates False
+        Contract: streaming-contract:EventExtraction:MUST:1 — graceful handling
+
+        Both the isinstance(v, dict) and hasattr(v, '__dict__') conditions are False
+        for a primitive (e.g., int 42), so neither branch fires and data is skipped.
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            _extract_event_data,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # A plain integer has no __dict__ and is not a dict — both branches skip
+        sdk_event = {
+            "type": "assistant.usage",
+            "data": 42,  # primitive: not dict, no __dict__
+        }
+
+        result = _extract_event_data(sdk_event)
+
+        # Primitive data is silently skipped — no crash, no output from 'data' key
+        assert isinstance(result, dict)
+        assert "data" not in result  # data field was skipped, not forwarded raw

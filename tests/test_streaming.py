@@ -452,6 +452,50 @@ class TestStreamingAccumulator:
         result = accumulator.get_result()
         assert result.text_content == "No block type"
 
+    def test_text_block_boundaries_preserved_around_tool_call(self) -> None:
+        """H-4: streaming-contract:Accumulation:MUST:2 — block boundaries maintained.
+
+        When the SDK emits text → tool_call → text in one turn, the two text
+        segments MUST end up in SEPARATE TextBlocks in the final ChatResponse.
+        content.  Before the fix, all text is concatenated into one TextBlock,
+        losing the boundary that separates pre-tool text from post-tool text.
+        """
+        from amplifier_core.message_models import TextBlock
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        # First text block
+        accumulator.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "Hello "}, "TEXT"))
+        accumulator.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "world"}, "TEXT"))
+        # Tool call event — signals boundary between text blocks
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc1", "name": "read_file", "arguments": {}},
+            )
+        )
+        # Second text block (post-tool commentary)
+        accumulator.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "Done."}, "TEXT"))
+        accumulator.add(DomainEvent(DomainEventType.TURN_COMPLETE, {}))
+
+        response = accumulator.to_chat_response()
+
+        # Count TextBlock instances in content
+        text_blocks = [b for b in response.content if isinstance(b, TextBlock)]
+
+        # MUST have two separate TextBlocks — one before tool call, one after
+        assert len(text_blocks) == 2, (
+            f"Expected 2 TextBlocks (pre-tool and post-tool), got {len(text_blocks)}. "
+            f"Content: {response.content}"
+        )
+        assert text_blocks[0].text == "Hello world"
+        assert text_blocks[1].text == "Done."
+
 
 class TestAccumulatedResponse:
     """Tests for AccumulatedResponse dataclass."""
@@ -972,10 +1016,12 @@ class TestProgressiveStreamingEmission:
 
         coordinator = MagicMock()
         coordinator.hooks = MagicMock()
+
         # Make emit wait so task stays pending
-        coordinator.hooks.emit = AsyncMock(
-            side_effect=lambda *a: asyncio.sleep(0.1)  # pyright: ignore[reportUnknownLambdaType]
-        )
+        async def _slow_emit(*a: object, **kw: object) -> None:
+            await asyncio.sleep(0.1)
+
+        coordinator.hooks.emit = AsyncMock(side_effect=_slow_emit)
 
         provider = GitHubCopilotProvider(
             config={},
