@@ -327,6 +327,40 @@ class TestClassifyEventDropPatternMatch:
         assert result is EventClassification.DROP
 
 
+class TestSDKVersionSkewDropEvents:
+    """New SDK events from CLI version-skew are explicitly classified as DROP.
+
+    Contract: event-vocabulary:Drop:MUST:2
+    """
+
+    def test_session_custom_agents_updated_is_dropped_silently(self, caplog: Any) -> None:
+        """session.custom_agents_updated (SDK v0.2.1+) is classified as DROP without warning.
+
+        Contract: event-vocabulary:Drop:MUST:2
+
+        Introduced in SDK v0.2.1 CLI binary. Represents an internal session-state
+        notification with no domain value. Must be silently dropped — not cause
+        an 'Unknown SDK event type' warning that pollutes production logs.
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+
+        with caplog.at_level(logging.WARNING):
+            result = classify_event("session.custom_agents_updated", config)
+
+        assert result is EventClassification.DROP
+        assert not any("Unknown SDK event type" in record.message for record in caplog.records), (
+            "session.custom_agents_updated must be silently dropped, not logged as unknown"
+        )
+
+
 # ---------------------------------------------------------------------------
 # _extract_event_data — primitive data field (line 591 elif branch → False)
 # ---------------------------------------------------------------------------

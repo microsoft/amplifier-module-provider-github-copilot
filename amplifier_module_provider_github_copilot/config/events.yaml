@@ -84,6 +84,7 @@ event_classifications:
     - session.mode_changed
     - session.model_change
     - session.tools_updated
+    - session.custom_agents_updated  # CLI binary sends this on session init; no domain value
     - session.handoff
     - session.resume
     - session.task_complete

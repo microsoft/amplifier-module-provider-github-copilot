@@ -59,13 +59,16 @@ Events processed internally but not forwarded.
 | `system_notification` | Log internally | Legacy underscore alias |
 
 ### DROP Events
-Events ignored entirely.
+Events ignored entirely. The authoritative list is `config/events.yaml`; this table shows representative examples.
+
+**SDK version-skew rule:** The Copilot CLI binary may emit new `session.*` events before the Python SDK documents them. Any such event with no domain value MUST be added to the DROP list in `events.yaml`. It MUST NOT produce a warning log in production.
 
 | SDK Event | Reason |
 |-----------|--------|
 | `debug.*` | Development only |
 | `heartbeat` | Connection keepalive |
 | `session.compaction.*` | Internal optimization |
+| `session.custom_agents_updated` | SDK v0.2.1+ session-state notification; no domain value |
 
 ---
 
@@ -255,6 +258,7 @@ finish_reason_map:
 | Anchor | Clause |
 |--------|--------|
 | `event-vocabulary:Drop:MUST:1` | DROP events ignored |
+| `event-vocabulary:Drop:MUST:2` | New session.* events from CLI binary version-skew added to DROP in events.yaml; MUST NOT produce warning log |
 
 ### FinishReason
 

@@ -461,9 +461,7 @@ class TestLlmResponseEvent:
         data = response_calls[0][0][1]
 
         # Verify sdk_pid is present
-        assert "sdk_pid" in data, (
-            "llm:response must include sdk_pid for log correlation"
-        )
+        assert "sdk_pid" in data, "llm:response must include sdk_pid for log correlation"
         # Verify it's the mock PID
         assert data["sdk_pid"] == "12345"
 
