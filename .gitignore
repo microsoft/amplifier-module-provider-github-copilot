@@ -108,3 +108,6 @@ mydocs
 run_parallel_tests.ps1
 test_results.txt
 .tools/
+
+# VS Code multi-root workspace files (local developer config, not for repo)
+*.code-workspace
