@@ -18,40 +18,63 @@ from __future__ import annotations
 # Using importlib.metadata avoids importing the SDK itself at module load time.
 # Contract: sdk-boundary.md MUST:5
 #
-# Security: SDK check bypass requires both env var AND pytest in sys.modules.
-# This prevents production misuse while preserving test functionality.
+# SDK check bypass: test-only convenience guard — NOT a security boundary.
+# Requires both env var AND pytest in sys.modules to reduce accidental misuse.
 import asyncio
 import os as _os
-import sys as _sys
 import threading
 from importlib.metadata import PackageNotFoundError as _PkgNotFoundError
 from importlib.metadata import version as _pkg_version
 
-
-def _is_pytest_running() -> bool:
-    """Check if pytest is running (for test-only SDK check bypass)."""
-    return "pytest" in _sys.modules
-
+# Single source of truth for pytest detection — defined in _platform.py.
+# Both __init__.py and sdk_adapter/_imports.py import from there.
+from ._platform import is_pytest_running  # noqa: E402 (before SDK check block)
 
 # Only skip SDK check if BOTH conditions are met:
 # 1. SKIP_SDK_CHECK env var is set
-# 2. pytest is actually running (prevents production misuse)
-_skip_sdk_check = _os.environ.get("SKIP_SDK_CHECK") and _is_pytest_running()
+# 2. pytest is actually running (convenience guard, NOT a security boundary)
+_SKIP_SDK_CHECK = _os.environ.get("SKIP_SDK_CHECK") and is_pytest_running()
 
-if not _skip_sdk_check:  # pragma: no cover
+
+def _check_sdk_version(version_str: str) -> None:
+    """Raise ImportError if SDK version does not satisfy >=0.2.0.
+
+    Extracted for testability — module-level code that runs under SKIP_SDK_CHECK
+    cannot be reached by unit tests; this function can be imported and tested
+    directly.
+
+    Contract: sdk-boundary:Membrane:MUST:5
+    """
     try:
-        _pkg_version("github-copilot-sdk")
+        ver_parts = tuple(int(x) for x in version_str.split(".")[:2] if x.isdigit())
+    except (ValueError, TypeError):
+        ver_parts = (0, 0)
+    if ver_parts < (0, 2):
+        raise ImportError(
+            f"github-copilot-sdk=={version_str} is installed but >=0.2.0 is required. "
+            "Upgrade with: pip install 'github-copilot-sdk>=0.2.0,<0.3.0' "
+            "or reinstall the provider: amplifier provider install --force github-copilot"
+        )
+
+
+if not _SKIP_SDK_CHECK:  # pragma: no cover
+    try:
+        _sdk_version = _pkg_version("github-copilot-sdk")
     except _PkgNotFoundError as _e:
         # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
             "Install with:  pip install 'github-copilot-sdk>=0.2.0,<0.3.0'"
         ) from _e
+    # Contract: sdk-boundary:Membrane:MUST:5 — fail at import time on wrong version.
+    # Presence-only check passes silently for SDK 0.1.x which lacks SubprocessConfig,
+    # causing a cryptic ConfigurationError deep in the init flow instead.
+    _check_sdk_version(_sdk_version)
 
 # E402: These imports are intentionally after SDK check - we verify SDK
 # installation before importing modules that depend on it (Three-Medium).
 from collections.abc import Awaitable, Callable  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import Any, NoReturn  # noqa: E402
 
 from amplifier_core import ModuleCoordinator  # noqa: E402
 
@@ -341,7 +364,7 @@ __all__ = ["mount", "GitHubCopilotProvider"]
 # See MIGRATION.md for complete migration guide.
 
 
-def __getattr__(name: str) -> None:
+def __getattr__(name: str) -> NoReturn:
     """Raise ImportError with helpful migration message for removed v1.x symbols.
 
     This enables users upgrading from v1.x to get clear guidance on replacements

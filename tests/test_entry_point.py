@@ -170,3 +170,82 @@ class TestModuleGetattr:
 
         with pytest.raises(ImportError):
             _ = getattr(m, removed_name)
+
+
+class TestSDKVersionCheck:
+    """sdk-boundary:Membrane:MUST:5 — fail at import time on wrong SDK version.
+
+    Regression guard for the clean-machine init bug:
+    When SDK 0.1.x is installed, SubprocessConfig is absent but the old
+    presence-only check passed silently, causing a cryptic ConfigurationError
+    deep in the init flow instead of a clear ImportError at module load.
+
+    All tests call the REAL _check_sdk_version() from __init__.py, not a copy.
+    This ensures changes to the actual function are caught by the test suite.
+
+    Contract: sdk-boundary:Membrane:MUST:5
+    """
+
+    def test_old_sdk_version_raises_import_error(self) -> None:
+        """_check_sdk_version MUST raise ImportError for SDK < 0.2.0.
+
+        Contract: sdk-boundary:Membrane:MUST:5
+        """
+        from amplifier_module_provider_github_copilot import _check_sdk_version
+
+        for old_ver in ("0.1.0", "0.1.28", "0.0.1", "0.1.99"):
+            with pytest.raises(ImportError, match="github-copilot-sdk"):
+                _check_sdk_version(old_ver)
+
+        # Correct versions — must NOT raise
+        for good_ver in ("0.2.0", "0.2.1", "0.2.99", "1.0.0"):
+            _check_sdk_version(good_ver)  # no exception
+
+    def test_correct_sdk_version_installed(self) -> None:
+        """SDK installed in test environment MUST be >= 0.2.0.
+
+        Contract: sdk-boundary:Membrane:MUST:5 (negative case)
+        """
+        import importlib.metadata
+
+        version = importlib.metadata.version("github-copilot-sdk")
+        parts = tuple(int(x) for x in version.split(".")[:2] if x.isdigit())
+        assert parts >= (0, 2), (
+            f"Test environment has SDK {version} which is < 0.2.0. "
+            "Install 'github-copilot-sdk>=0.2.0' to run these tests."
+        )
+
+    def test_version_check_error_message_is_actionable(self) -> None:
+        """ImportError message MUST name the package, installed version, and fix command.
+
+        Users must know how to fix it from the error message alone.
+        Contract: sdk-boundary:Membrane:MUST:5
+        """
+        from amplifier_module_provider_github_copilot import _check_sdk_version
+
+        with pytest.raises(ImportError) as exc_info:
+            _check_sdk_version("0.1.28")
+
+        error_msg = str(exc_info.value)
+        assert "0.1.28" in error_msg, "Error must include the installed version"
+        assert "0.2.0" in error_msg, "Error must state the required version"
+        assert "github-copilot-sdk" in error_msg, "Error must name the package"
+        assert "amplifier provider install" in error_msg, (
+            "Error must include the amplifier provider install command"
+        )
+
+    def test_malformed_version_string_does_not_raise_unhandled(self) -> None:
+        """Malformed SDK version string MUST NOT produce an unhandled exception.
+
+        Pre-release suffix, empty string, or non-numeric must be safely handled.
+        Contract: sdk-boundary:Membrane:MUST:5 (robustness)
+        """
+        from amplifier_module_provider_github_copilot import _check_sdk_version
+
+        # These have no valid semver minor → treated as (0, 0) → raise ImportError
+        for weird_ver in ("", "unknown", "0.1.0rc1"):
+            with pytest.raises(ImportError):
+                _check_sdk_version(weird_ver)
+
+        # "0.2.0b1" → "0" and "2" are digits → ver_parts = (0, 2) → does NOT raise
+        _check_sdk_version("0.2.0b1")

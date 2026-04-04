@@ -327,6 +327,64 @@ class TestSDKImportsRealPath:
                     original_module
                 )
 
+    def test_subprocess_config_loads_when_copilot_types_absent(self) -> None:
+        """SubprocessConfig MUST resolve even when copilot.types does not exist.
+
+        Regression test for SDK 0.2.1 breaking change: copilot.types was removed.
+        SubprocessConfig moved to copilot.client, re-exported from copilot root.
+
+        Before fix: from copilot.types import SubprocessConfig → ModuleNotFoundError
+                    → SubprocessConfig = None → ConfigurationError with any GitHub token
+        After fix:  fallback to from copilot import SubprocessConfig → succeeds
+
+        Contract: sdk-boundary:Membrane:MUST:5
+        """
+        original_skip = os.environ.get("SKIP_SDK_CHECK")
+        original_module = sys.modules.pop(
+            "amplifier_module_provider_github_copilot.sdk_adapter._imports", None
+        )
+
+        try:
+            os.environ.pop("SKIP_SDK_CHECK", None)
+
+            # Simulate SDK 0.2.1: copilot root has SubprocessConfig,
+            # but copilot.types does NOT exist.
+            mock_subprocess_config = MagicMock(name="SubprocessConfig")
+            mock_copilot = MagicMock()
+            mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
+            mock_copilot.SubprocessConfig = mock_subprocess_config
+
+            with patch.dict(
+                "sys.modules",
+                {
+                    "copilot": mock_copilot,
+                    "copilot.types": None,  # None → ModuleNotFoundError on import
+                },
+            ):
+                mod = importlib.import_module(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports"
+                )
+
+            # SubprocessConfig MUST NOT be None — it must have been resolved from copilot root
+            assert mod.SubprocessConfig is not None, (
+                "SubprocessConfig is None when copilot.types is absent (SDK 0.2.1 regression). "
+                "_imports.py must fall back to 'from copilot import SubprocessConfig'."
+            )
+            assert mod.SubprocessConfig is mock_subprocess_config
+
+        finally:
+            if original_skip is not None:
+                os.environ["SKIP_SDK_CHECK"] = original_skip
+            else:
+                os.environ["SKIP_SDK_CHECK"] = "1"
+
+            sys.modules.pop("amplifier_module_provider_github_copilot.sdk_adapter._imports", None)
+
+            if original_module is not None:
+                sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
+                    original_module
+                )
+
 
 class TestMembraneAPIPattern:
     """Verify domain code uses sdk_adapter package API, not submodule imports.

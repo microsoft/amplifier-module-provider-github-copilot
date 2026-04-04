@@ -31,6 +31,7 @@ __all__ = [
     "get_sdk_binary_path",
     "find_cli_in_path",
     "locate_cli_binary",
+    "is_pytest_running",
 ]
 
 # Binary name constants
@@ -200,3 +201,17 @@ def locate_cli_binary() -> Path | None:
 
     # Fallback to PATH
     return find_cli_in_path()
+
+
+def is_pytest_running() -> bool:
+    """Check if pytest is currently executing as the test runner.
+
+    Used as a guard in test-only SDK bypass logic. Centralised here
+    (single source of truth) so both __init__.py and sdk_adapter/_imports.py
+    share the same implementation.
+
+    Note: Test-only convenience bypass — NOT a security boundary.
+    An adversary can bypass this by importing pytest before setting
+    SKIP_SDK_CHECK. Guards against accidental misuse only.
+    """
+    return "pytest" in sys.modules
