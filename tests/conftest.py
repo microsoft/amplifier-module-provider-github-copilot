@@ -199,7 +199,7 @@ async def sdk_client() -> AsyncIterator[Any]:
     on_permission_request moves to create_session().
     """
     copilot = pytest.importorskip("copilot", reason="github-copilot-sdk not installed")
-    from copilot.types import SubprocessConfig  # type: ignore[import-not-found]
+    from copilot.client import SubprocessConfig  # type: ignore[import-not-found]
 
     token = _get_github_token()
     if not token:

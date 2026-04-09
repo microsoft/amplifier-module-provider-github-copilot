@@ -139,7 +139,7 @@ async def live_client():
         pytest.fail("copilot SDK not installed. Install it or fix the test environment.")
 
     import copilot  # type: ignore[import-not-found]
-    from copilot.types import SubprocessConfig  # type: ignore[import-not-found]
+    from copilot.client import SubprocessConfig  # type: ignore[import-not-found]
 
     # Get token - fails test if not available
     token = _get_token()
@@ -376,7 +376,7 @@ class TestAuthErrorPatterns:
         If not, update errors.yaml.
         """
         import copilot  # type: ignore[import-not-found]
-        from copilot.types import SubprocessConfig  # type: ignore[import-not-found]
+        from copilot.client import SubprocessConfig  # type: ignore[import-not-found]
 
         # Create client with KNOWN INVALID token
         # SDK v0.2.0: Use SubprocessConfig
