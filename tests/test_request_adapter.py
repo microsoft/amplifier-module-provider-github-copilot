@@ -733,7 +733,8 @@ class TestExtractContentBlockImageS3:
 
         result = _extract_content_block(BlobLikeBlock())
         assert result == "[Image]", (
-            f"Duck-typed blob block (source attr) must return '[Image]' placeholder, got: {result!r}"
+            f"Duck-typed blob block (source attr) must return '[Image]' placeholder, "
+            f"got: {result!r}"
         )
 
     def test_text_block_unchanged_by_image_fix(self) -> None:
