@@ -728,3 +728,195 @@ class TestEventRouterErrorRedaction:
         assert REDACTED in error_message, (
             f"REDACTED placeholder missing in error_holder: {error_message}"
         )
+
+
+
+class TestS2PemBlockRedaction:
+    """S2 Fix: PEM private keys and certificates MUST be redacted before opaque token pattern.
+
+    Contract: behaviors:Logging:MUST:4
+    """
+
+    def test_rsa_private_key_block_redacted(self) -> None:
+        """RSA private key PEM block is fully replaced with [REDACTED]."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            REDACTED,
+            redact_sensitive_text,
+        )
+
+        pem = (
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEowIBAAKCAQEA1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n"
+            "OPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR\n"
+            "-----END RSA PRIVATE KEY-----"
+        )
+        result = redact_sensitive_text(pem)
+
+        assert "BEGIN RSA PRIVATE KEY" not in result, (
+            f"PEM header must not appear in output. Got: {result!r}"
+        )
+        assert "MIIEowIBAAK" not in result, (
+            f"Key material must not appear in output. Got: {result!r}"
+        )
+        assert REDACTED in result, (
+            f"REDACTED placeholder must appear. Got: {result!r}"
+        )
+
+    def test_certificate_block_redacted(self) -> None:
+        """CERTIFICATE PEM block is fully replaced with [REDACTED]."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            REDACTED,
+            redact_sensitive_text,
+        )
+
+        cert = (
+            "-----BEGIN CERTIFICATE-----\n"
+            "MIIDazCCAlOgAwIBAgIUQW1plZ8X5678901234abcdefghijkl\n"
+            "-----END CERTIFICATE-----"
+        )
+        result = redact_sensitive_text(cert)
+
+        assert "BEGIN CERTIFICATE" not in result, (
+            f"Certificate header must not appear. Got: {result!r}"
+        )
+        assert "MIIDazCCAlO" not in result, (
+            f"Certificate body must not appear. Got: {result!r}"
+        )
+        assert REDACTED in result
+
+    def test_context_around_pem_block_preserved(self) -> None:
+        """Text surrounding the PEM block is preserved after redaction."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            redact_sensitive_text,
+        )
+
+        text = (
+            "TLS handshake failed:\n"
+            "-----BEGIN CERTIFICATE-----\nMIIDa1234abc\n-----END CERTIFICATE-----\n"
+            "Please check your certificate configuration."
+        )
+        result = redact_sensitive_text(text)
+
+        assert "TLS handshake failed" in result, "Context before PEM block must be preserved"
+        assert "Please check your certificate configuration" in result, (
+            "Context after PEM block must be preserved"
+        )
+        assert "MIIDa1234abc" not in result, "PEM body must be redacted"
+
+
+class TestS2DbUriRedaction:
+    """S2 Fix: Database connection URI passwords MUST be redacted.
+
+    Contract: behaviors:Logging:MUST:4
+    """
+
+    def test_postgresql_uri_password_redacted(self) -> None:
+        """postgresql:// password is replaced with [REDACTED]; scheme+user+host preserved."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            REDACTED,
+            redact_sensitive_text,
+        )
+
+        uri = "postgresql://admin:secretpassword@prod-db.example.com:5432/mydb"
+        result = redact_sensitive_text(uri)
+
+        assert "secretpassword" not in result, (
+            f"Password must not appear in output. Got: {result!r}"
+        )
+        assert REDACTED in result
+        # Scheme and user are preserved for debugging context
+        assert "postgresql://" in result
+        assert "admin" in result
+
+    def test_mysql_uri_password_redacted(self) -> None:
+        """mysql:// password is replaced with [REDACTED]."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            REDACTED,
+            redact_sensitive_text,
+        )
+
+        uri = "mysql://dbuser:mypassword123@db.internal:3306/production"
+        result = redact_sensitive_text(uri)
+
+        assert "mypassword123" not in result
+        assert REDACTED in result
+
+    def test_redis_uri_password_redacted(self) -> None:
+        """redis:// password is replaced with [REDACTED]."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            REDACTED,
+            redact_sensitive_text,
+        )
+
+        uri = "redis://default:r3d1sSecr3t@cache.example.com:6379"
+        result = redact_sensitive_text(uri)
+
+        assert "r3d1sSecr3t" not in result
+        assert REDACTED in result
+
+    def test_https_uri_without_credentials_unchanged(self) -> None:
+        """HTTPS URIs without embedded credentials are not redacted (no false positives)."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            redact_sensitive_text,
+        )
+
+        uri = "https://api.github.com/v1/chat/completions"
+        result = redact_sensitive_text(uri)
+
+        assert "api.github.com" in result, (
+            f"HTTPS URI without credentials must not be redacted. Got: {result!r}"
+        )
+
+
+class TestS1SafeLogMessageRedaction:
+    """S1 Fix: safe_log_message MUST redact the message string itself, not just args.
+
+    Contract: behaviors:Logging:MUST:4
+    """
+
+    def test_token_in_fstring_message_is_redacted(self) -> None:
+        """Token embedded in message via f-string misuse is redacted from output."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            REDACTED,
+            safe_log_message,
+        )
+
+        # Simulates API misuse: f-string bakes token into message before safe_log_message sees it
+        token = "ghp_1234567890abcdefghijklmnopqrst"
+        result = safe_log_message(f"Calling API with token={token}")
+
+        # S1 Fix: message position (index 0) must not contain the raw token
+        assert token not in result[0], (
+            f"Token leaked in message via f-string misuse. Got: {result[0]!r}"
+        )
+        assert REDACTED in result[0]
+
+    def test_token_as_format_arg_is_redacted(self) -> None:
+        """Token passed as format arg is redacted in arg position (regression guard)."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            REDACTED,
+            safe_log_message,
+        )
+
+        token = "ghp_abcdefghij1234567890ABCDEFGHIJ"
+        result = safe_log_message("Processing request with token: %s", token)
+
+        assert token not in result[1], (
+            f"Token leaked in arg position. Got: {result[1]!r}"
+        )
+        assert REDACTED in result[1]
+
+    def test_plain_format_string_not_over_redacted(self) -> None:
+        """Plain format strings without secrets are preserved after S1 fix."""
+        from amplifier_module_provider_github_copilot.security_redaction import (
+            safe_log_message,
+        )
+
+        result = safe_log_message("Processing request %d of %d", 1, 10)
+
+        assert "Processing request" in result[0], (
+            f"Format string context must be preserved. Got: {result[0]!r}"
+        )
+        # Numeric args converted to str by redact_sensitive_text(str(arg)) — not over-redacted
+        assert result[1] == "1"
+        assert result[2] == "10"
