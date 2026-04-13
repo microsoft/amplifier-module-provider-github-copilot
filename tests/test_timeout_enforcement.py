@@ -93,7 +93,7 @@ class TestTimeoutEnforcement:
     async def test_timeout_from_config_default(self) -> None:
         """availability:timeout:MUST:2 — timeout should use config value.
 
-        The timeout value should come from config/models.yaml (timeout field)
+        The timeout value should come from config/_models.py (timeout field)
         or fall back to a sensible default.
         """
         from amplifier_module_provider_github_copilot.provider import (

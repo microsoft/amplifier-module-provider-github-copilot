@@ -2,72 +2,30 @@
 
 Contract: contracts/behaviors.md (ModelCache section)
 
-Three-Medium Architecture:
-- Python: Cache mechanism (this module)
-- YAML: TTL policy values (config/model_cache.yaml)
-- Markdown: Requirements (contracts/behaviors.md)
-
+TTL policy values come from config/policy.py (CacheConfig dataclass).
 Philosophy: Fail clearly rather than fail silently with stale data.
-No hardcoded fallback dicts — cache is transparent layer only.
 """
 
 from __future__ import annotations
 
-import functools
-import importlib.resources
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import yaml
+from .config._policy import load_cache_config
 
 if TYPE_CHECKING:
     from .models import CopilotModelInfo
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
-# Cache Policy Loading (Three-Medium Architecture: YAML = policy)
-# =============================================================================
-
-
-@functools.lru_cache(maxsize=1)
-def load_cache_config() -> dict[str, Any]:
-    """Load cache policy from config/model_cache.yaml.
-
-    Contract: behaviors:ModelCache:SHOULD:2
-    Three-Medium Architecture: Policy values come from YAML
-
-    Returns:
-        Dictionary with cache policy settings.
-    """
-    try:
-        # Try package resources first (installed wheel)
-        files = importlib.resources.files("amplifier_module_provider_github_copilot")
-        config_path = files.joinpath("config", "model_cache.yaml")
-        content = config_path.read_text(encoding="utf-8")
-        return yaml.safe_load(content)  # type: ignore[no-any-return]
-    except Exception:
-        # Fallback to file path (development)
-        config_file = Path(__file__).parent / "config" / "model_cache.yaml"
-        if config_file.exists():
-            content = config_file.read_text(encoding="utf-8")
-            return yaml.safe_load(content)  # type: ignore[no-any-return]
-
-        # Return sensible defaults if config missing
-        logger.warning("model_cache.yaml not found, using defaults")
-        return {
-            "cache": {
-                "disk_ttl_seconds": 86400,
-                "max_stale_seconds": 604800,
-                "cache_filename": "models_cache.json",
-            }
-        }
+# Supported cache schema version (S8 Fix: version was written but never checked on read).
+# Old caches without a version field are treated as "1.0" (backward compat).
+_SUPPORTED_CACHE_VERSION = "1.0"
 
 
 def get_cache_ttl_seconds() -> int:
@@ -75,16 +33,12 @@ def get_cache_ttl_seconds() -> int:
 
     Contract: behaviors:ModelCache:SHOULD:2
     """
-    config = load_cache_config()
-    cache_config = config.get("cache", {})
-    return int(cache_config.get("disk_ttl_seconds", 86400))
+    return load_cache_config().disk_ttl_seconds
 
 
 def get_cache_filename() -> str:
     """Get cache filename from config."""
-    config = load_cache_config()
-    cache_config = config.get("cache", {})
-    return str(cache_config.get("cache_filename", "models_cache.json"))
+    return load_cache_config().cache_filename
 
 
 # =============================================================================
@@ -201,7 +155,7 @@ def read_cache(
 
     Contract: behaviors:ModelCache:SHOULD:1, SHOULD:2
     - SHOULD cache SDK models to disk for session persistence
-    - SHOULD respect TTL from config/model_cache.yaml
+    - SHOULD respect TTL from config/policy.py (CacheConfig)
 
     Args:
         cache_file: Optional path override (for testing). Uses default if None.
@@ -229,6 +183,18 @@ def read_cache(
         logger.warning("Failed to read cache: %s", redact_sensitive_text(e))
         return None
 
+    # S8: Validate cache schema version before parsing.
+    # Missing version treated as "1.0" (backward compat for pre-version caches).
+    # Mismatched version forces cache miss to avoid parsing unknown schemas.
+    cache_version = data.get("version", _SUPPORTED_CACHE_VERSION)
+    if cache_version != _SUPPORTED_CACHE_VERSION:
+        logger.debug(
+            "Cache version %r unsupported (expected %r); ignoring",
+            cache_version,
+            _SUPPORTED_CACHE_VERSION,
+        )
+        return None
+
     # Check timestamp / TTL
     if max_age_seconds is None:
         max_age_seconds = get_cache_ttl_seconds()
@@ -242,28 +208,42 @@ def read_cache(
         logger.debug("Cache stale: age=%.0f seconds, max=%d", age, max_age_seconds)
         return None
 
-    # Parse models
-    try:
-        models = [
-            CopilotModelInfo(
-                id=m["id"],
-                name=m["name"],
-                context_window=m["context_window"],
-                max_output_tokens=m["max_output_tokens"],
-                supports_vision=m.get("supports_vision", False),
-                supports_reasoning_effort=m.get("supports_reasoning_effort", False),
-                supported_reasoning_efforts=tuple(m.get("supported_reasoning_efforts", [])),
-                default_reasoning_effort=m.get("default_reasoning_effort"),
+    # Parse models per-entry: preserves valid entries even when some are malformed.
+    # S5 Fix: list comprehension raised on first bad entry, discarding all valid entries.
+    raw_models = data.get("models", [])
+    models: list[CopilotModelInfo] = []
+    for idx, m in enumerate(raw_models):
+        try:
+            models.append(
+                CopilotModelInfo(
+                    id=m["id"],
+                    name=m["name"],
+                    context_window=m["context_window"],
+                    max_output_tokens=m["max_output_tokens"],
+                    supports_vision=m.get("supports_vision", False),
+                    supports_reasoning_effort=m.get("supports_reasoning_effort", False),
+                    supported_reasoning_efforts=tuple(m.get("supported_reasoning_efforts", [])),
+                    default_reasoning_effort=m.get("default_reasoning_effort"),
+                )
             )
-            for m in data.get("models", [])
-        ]
-        logger.debug("Read %d models from cache", len(models))
-        return models
-    except (KeyError, TypeError) as e:
-        from .security_redaction import redact_sensitive_text
+        except (KeyError, TypeError) as e:
+            from .security_redaction import redact_sensitive_text
 
-        logger.warning("Invalid cache data: %s", redact_sensitive_text(e))
+            logger.warning(
+                "Cache entry %d malformed (%s); skipping",
+                idx,
+                redact_sensitive_text(e),
+            )
+    if not models and raw_models:
+        # All entries malformed — treat as cache miss so live API is called.
+        logger.debug("All %d cache entries invalid; forcing live API call", len(raw_models))
         return None
+    logger.debug(
+        "Read %d models from cache (%d skipped)",
+        len(models),
+        len(raw_models) - len(models),
+    )
+    return models
 
 
 # =============================================================================

@@ -12,28 +12,18 @@ a generous timeout to avoid premature timeouts.
 
 from pathlib import Path
 
-import yaml
-
 
 class TestDefaultTimeout:
     """Verify default timeout is aligned with official provider."""
 
     def test_default_timeout_is_3600_in_config(self) -> None:
-        """AC-1: config/models.yaml has timeout: 3600.
+        """AC-1: config/models.py has timeout: 3600.
 
         Contract: behaviors.md:Config:SHOULD:1
         """
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        timeout = data["provider"]["defaults"]["timeout"]
+        timeout = _models.PROVIDER["defaults"]["timeout"]
         assert timeout == 3600, (
             f"Default timeout must be 3600s (1 hour) to match official provider. Got {timeout}s."
         )
@@ -52,7 +42,7 @@ class TestDefaultTimeout:
 
         # Should be 3600 from config
         assert config_timeout == 3600, (
-            f"Provider config timeout should be 3600s from models.yaml. Got {config_timeout}s"
+            f"Provider config timeout should be 3600s from config/_models.py. Got {config_timeout}s"
         )
 
     def test_timeout_can_be_overridden_via_kwargs(self) -> None:
@@ -94,35 +84,38 @@ class TestConfigComment:
     """Verify config documents the reasoning model rationale."""
 
     def test_config_mentions_timeout(self) -> None:
-        """AC-3: Config file documents timeout value.
+        """AC-3: Config file (models.py) documents timeout value.
 
         Documentation check for maintainability.
+        Updated: models.yaml migrated to config/_models.py Python module.
         """
+        from pathlib import Path
+
         config_path = (
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
-            / "models.yaml"
+            / "_models.py"
         )
 
         content = config_path.read_text(encoding="utf-8")
 
-        # Verify timeout value is present
-        assert "timeout:" in content, "Config must have timeout key"
+        # Verify timeout value is present in the Python config module
+        assert "timeout" in content, "Config must have timeout key"
         assert "3600" in content, "Config must have 3600 timeout value"
 
 
 class TestNoHardcodedTimeouts:
-    """Verify timeout comes from YAML config, not hardcoded Python values.
+    """Verify timeout comes from config module, not hardcoded Python values.
 
-    Three-Medium Architecture: All policy values come from YAML.
+    Two-Medium Architecture: All policy values come from config/_models.py.
     """
 
     def test_yaml_timeout_is_authoritative(self) -> None:
-        """YAML timeout value is authoritative (no Python constant fallback).
+        """Config timeout value is authoritative (no Python constant fallback).
 
-        Three-Medium: YAML is authoritative source for all policy values.
-        Python code loads from YAML, no hardcoded DEFAULT_TIMEOUT_SECONDS.
+        Two-Medium: config/_models.py is the authoritative source for all policy values.
+        Python code loads from config module, no hardcoded DEFAULT_TIMEOUT_SECONDS.
         """
         from amplifier_module_provider_github_copilot.config_loader import load_models_config
 
@@ -135,9 +128,9 @@ class TestNoHardcodedTimeouts:
         )
 
     def test_real_sdk_path_reads_from_config(self) -> None:
-        """Real SDK path must read timeout from YAML config (direct access).
+        """Real SDK path must read timeout from config module (direct access).
 
-        Three-Medium: No hardcoded fallbacks - YAML is authoritative.
+        Two-Medium: No hardcoded fallbacks — config/_models.py is authoritative.
         """
         provider_path = (
             Path(__file__).parent.parent

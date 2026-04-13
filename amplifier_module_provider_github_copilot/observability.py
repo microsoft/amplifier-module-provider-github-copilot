@@ -10,7 +10,7 @@ MUST constraints:
 - MUST NOT assume coordinator.hooks.emit() exists (observability:Events:MUST:5)
 
 Three-Medium Architecture:
-- Event names loaded from config/observability.yaml (YAML = policy)
+- Event names defined as frozen dataclass defaults (Python = single source of truth)
 - This module provides emission helpers (Python = mechanism)
 - Exception: PROVIDER_RETRY uses kernel constant (protocol constant, not policy)
 """
@@ -23,10 +23,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
-import yaml
 
 # Use kernel constant for PROVIDER_RETRY to ensure protocol compliance
 # This is a protocol constant, not a policy value - must match kernel
@@ -46,13 +43,13 @@ __all__ = [
 
 
 # ============================================================================
-# Config Loading (Three-Medium: Load policy from YAML)
+# Observability Policy (frozen dataclass defaults = single source of truth)
 # ============================================================================
 
 
 @dataclass
 class EventNames:
-    """Event name policy from config/observability.yaml."""
+    """Event name constants for observability hooks."""
 
     llm_request: str = "llm:request"
     llm_response: str = "llm:response"
@@ -61,7 +58,7 @@ class EventNames:
 
 @dataclass
 class StatusValues:
-    """Status value policy from config/observability.yaml."""
+    """Status value constants for observability hooks."""
 
     ok: str = "ok"
     error: str = "error"
@@ -69,9 +66,9 @@ class StatusValues:
 
 @dataclass
 class FinishReasons:
-    """Finish reason policy from config/observability.yaml."""
+    """Finish reason constants for observability hooks."""
 
-    tool_use: str = "tool_use"
+    tool_use: str = "tool_calls"
     end_turn: str = "end_turn"
     stop: str = "stop"
     length: str = "length"
@@ -80,7 +77,7 @@ class FinishReasons:
 
 @dataclass
 class ObservabilityConfig:
-    """Observability policy loaded from config/observability.yaml."""
+    """Observability policy. Defaults are the production values."""
 
     provider_name: str = "github-copilot"
     event_names: EventNames = field(default_factory=EventNames)
@@ -89,95 +86,15 @@ class ObservabilityConfig:
     raw_payloads: bool = False
 
 
-def _default_observability_config() -> ObservabilityConfig:
-    """Return default observability config (fallback)."""
-    return ObservabilityConfig()
-
-
 @functools.lru_cache(maxsize=1)
 def load_observability_config() -> ObservabilityConfig:
-    """Load observability policy from config/observability.yaml.
+    """Return observability policy.
 
-    Config lives inside the wheel at amplifier_module_provider_github_copilot/config/
-    Uses importlib.resources for installed wheel, falls back to filesystem for dev.
-
-    Returns default config on error (graceful degradation per contract).
+    Dataclass defaults ARE the production values.
+    Cached for consistency with callers that expect lru_cache semantics
+    (e.g., load_observability_config.cache_clear()).
     """
-    yaml_text: str | None = None
-
-    # Try importlib.resources first (installed wheel scenario)
-    try:
-        from importlib import resources
-
-        config_files = resources.files("amplifier_module_provider_github_copilot.config")
-        config_file = config_files.joinpath("observability.yaml")
-        yaml_text = config_file.read_text(encoding="utf-8")
-    except (ModuleNotFoundError, FileNotFoundError, TypeError):
-        # Fall back to filesystem path (dev scenario)
-        config_path = Path(__file__).parent / "config" / "observability.yaml"
-        if config_path.exists():
-            yaml_text = config_path.read_text(encoding="utf-8")
-        else:
-            logger.warning(
-                "[OBSERVABILITY] Config not found via importlib.resources or path. Using defaults."
-            )
-            return _default_observability_config()
-
-    if not yaml_text:
-        return _default_observability_config()
-
-    try:
-        data = yaml.safe_load(yaml_text)
-
-        if not data:
-            return _default_observability_config()
-
-        # Parse event names
-        event_names_data = data.get("event_names", {})
-        event_names = EventNames(
-            llm_request=event_names_data.get("llm_request", "llm:request"),
-            llm_response=event_names_data.get("llm_response", "llm:response"),
-            provider_retry=event_names_data.get("provider_retry", "provider:retry"),
-        )
-
-        # Parse status values
-        status_data = data.get("status", {})
-        status = StatusValues(
-            ok=status_data.get("ok", "ok"),
-            error=status_data.get("error", "error"),
-        )
-
-        # Parse finish reasons
-        finish_data = data.get("finish_reasons", {})
-        finish_reasons = FinishReasons(
-            tool_use=finish_data.get("tool_use", "tool_use"),
-            end_turn=finish_data.get("end_turn", "end_turn"),
-            stop=finish_data.get("stop", "stop"),
-            length=finish_data.get("length", "length"),
-            content_filter=finish_data.get("content_filter", "content_filter"),
-        )
-
-        # Parse events config
-        events_data = data.get("events", {})
-
-        return ObservabilityConfig(
-            provider_name=data.get("provider_name", "github-copilot"),
-            event_names=event_names,
-            status=status,
-            finish_reasons=finish_reasons,
-            raw_payloads=events_data.get("raw_payloads", False),
-        )
-
-    except Exception as e:
-        from .security_redaction import redact_sensitive_text
-
-        # P3 Fix: Re-raise to prevent lru_cache from caching the failure.
-        # Returning a fallback here would poison the cache for the process lifetime.
-        logger.warning(
-            "[OBSERVABILITY] Failed to load config: %s. Re-raising to avoid cache poison.",
-            redact_sensitive_text(e),
-        )
-        raise
+    return ObservabilityConfig()
 
 
 # ============================================================================

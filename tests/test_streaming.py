@@ -1253,3 +1253,172 @@ class TestConfigurationFailFast:
         # Config should have required fields populated
         assert config.idle_event_types, "idle_events should be populated"
         assert config.bridge_mappings is not None, "bridge_mappings should exist"
+
+
+class TestParseToolArguments:
+    """Tests for S4 fix: _parse_tool_arguments handles str|dict|other SDK argument variance.
+
+    Contract: streaming-contract:ToolCallBlock:MUST:1
+    """
+
+    def test_dict_args_returned_as_is(self) -> None:
+        """dict arguments are returned unchanged (no-op, regression-safe)."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        args = {"key": "value", "count": 42}
+        result = _parse_tool_arguments(args)
+        assert result == args
+
+    def test_json_string_args_parsed(self) -> None:
+        """JSON string arguments are parsed to dict."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments('{"file": "main.py", "line": 10}')
+        assert result == {"file": "main.py", "line": 10}
+
+    def test_malformed_json_returns_empty_dict(self) -> None:
+        """Malformed JSON string returns {} without raising."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments("not json at all {{")
+        assert result == {}
+
+    def test_none_returns_empty_dict(self) -> None:
+        """None (missing arguments) returns {}."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments(None)
+        assert result == {}
+
+    def test_json_array_returns_empty_dict(self) -> None:
+        """JSON array (not a dict) returns {} — non-dict parsed values are malformed."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments("[1, 2, 3]")
+        assert result == {}
+
+    def test_empty_dict_args_returned(self) -> None:
+        """Empty dict is a valid (no-arg) tool call — returned as-is."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments({})
+        assert result == {}
+
+    def test_nested_dict_preserved(self) -> None:
+        """Nested dict values are preserved when input is a dict."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        args = {"query": "test", "options": {"limit": 10, "offset": 0}}
+        result = _parse_tool_arguments(args)
+        assert result == args
+
+    # -----------------------------------------------------------------------
+    # Integration tests: JSON-string arguments through the full accumulator →
+    # to_chat_response() pipeline.  These tests exercise the CALL SITE in
+    # StreamingAccumulator.to_chat_response(), NOT just the helper in isolation.
+    # They MUST fail if the call site still uses the old isinstance guard.
+    # Contract: streaming-contract:ToolCallBlock:MUST:1
+    # -----------------------------------------------------------------------
+
+    def test_json_string_args_parsed_end_to_end(self) -> None:
+        """JSON-string arguments are parsed through the full accumulator pipeline.
+
+        S4 Fix integration test: proves the call site in to_chat_response() uses
+        _parse_tool_arguments(), not the old isinstance guard that silently returned {}.
+
+        The SDK sends arguments as a JSON string. This test feeds that exact shape
+        through StreamingAccumulator.add() → to_chat_response() and asserts the
+        parsed dict appears in BOTH tool_calls AND content (ToolCallBlock.input).
+
+        Contract: streaming-contract:ToolCallBlock:MUST:1
+        """
+        from amplifier_core import ToolCall, ToolCallBlock
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        # SDK sends arguments as a JSON string — the shape that triggered the bug.
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={
+                    "id": "tc-integration-01",
+                    "name": "read_file",
+                    "arguments": '{"path": "src/main.py", "encoding": "utf-8"}',
+                },
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "tool_use"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        expected_args = {"path": "src/main.py", "encoding": "utf-8"}
+
+        # Assert tool_calls list — ToolCall.arguments must be the parsed dict.
+        assert response.tool_calls is not None, "tool_calls must not be None"
+        assert len(response.tool_calls) == 1, "Expected exactly 1 tool call"
+        tc = response.tool_calls[0]
+        assert isinstance(tc, ToolCall), f"Expected ToolCall, got {type(tc)}"
+        assert tc.arguments == expected_args, (
+            f"ToolCall.arguments not parsed from JSON string. "
+            f"Expected {expected_args!r}, got {tc.arguments!r}. "
+            "This means the call site still uses the old isinstance guard — "
+            "replace it with _parse_tool_arguments(tc.get('arguments'))."
+        )
+
+        # Assert content list — ToolCallBlock.input must also be the parsed dict.
+        assert response.content, "content must not be empty"
+        tcb = response.content[0]
+        assert isinstance(tcb, ToolCallBlock), f"Expected ToolCallBlock, got {type(tcb)}"
+        assert tcb.input == expected_args, (
+            f"ToolCallBlock.input not parsed from JSON string. "
+            f"Expected {expected_args!r}, got {tcb.input!r}."
+        )
+
+    def test_json_string_args_malformed_end_to_end(self) -> None:
+        """Malformed JSON-string arguments produce {} through the full pipeline.
+
+        When the SDK sends a malformed JSON string, the accumulator must NOT raise.
+        It must fall back to {} and log a warning, preserving the tool call with
+        empty arguments rather than crashing the entire request.
+
+        Contract: streaming-contract:ToolCallBlock:MUST:1
+        """
+        from amplifier_core import ToolCall
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={
+                    "id": "tc-malformed-01",
+                    "name": "bash",
+                    "arguments": "not valid json {{{{",
+                },
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "tool_use"})
+        )
+
+        # Must not raise, even with malformed JSON
+        response = accumulator.to_chat_response()
+
+        assert response.tool_calls is not None, "tool_calls must not be None"
+        tc = response.tool_calls[0]
+        assert isinstance(tc, ToolCall)
+        assert tc.arguments == {}, (
+            f"Malformed JSON string must fall back to {{}}. Got: {tc.arguments!r}"
+        )

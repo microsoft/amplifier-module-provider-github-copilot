@@ -2,11 +2,7 @@
 Tests for model cache disk persistence.
 
 Contract: contracts/behaviors.md (ModelCache section)
-
-Three-Medium Architecture:
-- Python: Cache mechanism (model_cache.py)
-- YAML: TTL policy values (config/model_cache.yaml)
-- Markdown: Requirements (contracts/behaviors.md)
+TTL policy values: config/policy.py (CacheConfig dataclass)
 """
 
 from __future__ import annotations
@@ -298,20 +294,19 @@ class TestReadCache:
 
 
 # =============================================================================
-# Phase 2a: Cache Policy from YAML
-# Contract: behaviors:ModelCache:SHOULD:2 (Three-Medium Architecture)
+# Phase 2a: Cache Policy
+# Contract: behaviors:ModelCache:SHOULD:2
 # =============================================================================
 
 
 class TestCachePolicy:
-    """Test that cache policy is loaded from YAML.
+    """Test cache policy configuration.
 
     Contract: behaviors:ModelCache:SHOULD:2
-    Three-Medium Architecture: Policy values come from YAML
     """
 
     def test_cache_config_exists(self) -> None:
-        """config/model_cache.yaml MUST exist."""
+        """load_cache_config() MUST return a valid config."""
         from amplifier_module_provider_github_copilot.model_cache import (
             load_cache_config,
         )
@@ -320,13 +315,14 @@ class TestCachePolicy:
         assert config is not None
 
     def test_cache_config_has_ttl(self) -> None:
-        """config/model_cache.yaml MUST define disk_ttl_seconds."""
+        """CacheConfig MUST define disk_ttl_seconds."""
         from amplifier_module_provider_github_copilot.model_cache import (
             load_cache_config,
         )
 
         config = load_cache_config()
-        assert "disk_ttl_seconds" in config or "cache" in config
+        assert hasattr(config, "disk_ttl_seconds")
+        assert isinstance(config.disk_ttl_seconds, int)
 
     def test_ttl_is_reasonable(self) -> None:
         """TTL SHOULD be at least 1 hour and at most 7 days."""
@@ -475,19 +471,20 @@ class TestWriteCacheErrorHandling:
 
 
 class TestLoadCacheConfigFallback:
-    """Tests for load_cache_config fallback behavior."""
+    """Tests for load_cache_config return value."""
 
     def test_load_cache_config_returns_valid_config(self) -> None:
-        """load_cache_config() returns valid configuration."""
+        """load_cache_config() returns a CacheConfig with expected fields."""
+        from amplifier_module_provider_github_copilot.config._policy import CacheConfig
         from amplifier_module_provider_github_copilot.model_cache import (
             load_cache_config,
         )
 
         config = load_cache_config()
 
-        assert isinstance(config, dict)
-        assert "cache" in config
-        assert "disk_ttl_seconds" in config["cache"]
+        assert isinstance(config, CacheConfig)
+        assert config.disk_ttl_seconds == 86400
+        assert config.cache_filename == "models_cache.json"
 
 
 class TestCacheFileOperations:
@@ -573,33 +570,6 @@ class TestInvalidateCacheErrorHandling:
 
         # File still exists since unlink failed
         # The important thing is no exception was raised
-
-
-class TestLoadCacheConfigImportlibFallback:
-    """Tests for load_cache_config importlib.resources fallback."""
-
-    def test_load_cache_config_uses_filesystem_fallback(self, tmp_path: Path, caplog: Any) -> None:
-        """load_cache_config() falls back to filesystem when importlib fails."""
-        import logging
-
-        from amplifier_module_provider_github_copilot.model_cache import load_cache_config
-
-        # Clear the lru_cache to test fresh load
-        load_cache_config.cache_clear()
-
-        # Mock importlib.resources.files to fail
-        with patch("importlib.resources.files") as mock_files:
-            mock_files.side_effect = Exception("importlib failed")
-
-            with caplog.at_level(logging.DEBUG):
-                config = load_cache_config()
-
-        # Should still return valid config from filesystem fallback
-        assert isinstance(config, dict)
-        assert "cache" in config
-
-        # Clear cache again for other tests
-        load_cache_config.cache_clear()
 
 
 # =============================================================================
@@ -688,40 +658,199 @@ class TestInvalidateCacheEdgeCases:
             invalidate_cache(cache_file=cache_file)
 
 
-class TestLoadCacheConfigMissingFile:
-    """Tests for load_cache_config when config file is missing.
+class TestReadCachePartialRecovery:
+    """Tests for S5 fix: malformed cache entries are skipped; valid entries preserved.
 
-    Covers lines 63-64: default fallback when config missing.
+    Before fix: list comprehension raised KeyError on first bad entry → entire cache discarded.
+    After fix: per-entry try/except skips bad entries while preserving valid ones.
     """
 
-    def test_load_cache_config_missing_both_sources(self, tmp_path: Path) -> None:
-        """load_cache_config() returns defaults when both sources fail."""
-        from unittest.mock import patch
+    def test_valid_entries_returned_when_one_malformed(self, tmp_path: Path) -> None:
+        """One malformed entry is skipped; valid entry is returned."""
+        import json
+        import time
 
-        from amplifier_module_provider_github_copilot.model_cache import load_cache_config
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
 
-        # Clear cache to test fresh load
-        load_cache_config.cache_clear()
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {
+                    "id": "good-model",
+                    "name": "Good Model",
+                    "context_window": 4096,
+                    "max_output_tokens": 1024,
+                },
+                {
+                    # Missing required 'id' and 'name' fields — must be skipped
+                    "context_window": 999,
+                    "max_output_tokens": 100,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
 
-        # Mock both importlib and filesystem to fail
-        with patch("importlib.resources.files") as mock_files:
-            mock_files.side_effect = ModuleNotFoundError("No module")
+        result = read_cache(cache_file=cache_file)
 
-            # Also mock Path.exists to return False
-            original_exists = Path.exists
+        # S5: should recover 1 valid model, not discard entire cache
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].id == "good-model"
 
-            def mock_exists(self: Path) -> bool:
-                if "model_cache.yaml" in str(self):
-                    return False
-                return original_exists(self)
+    def test_all_malformed_entries_triggers_cache_miss(self, tmp_path: Path) -> None:
+        """When ALL entries are malformed, returns None (cache miss) — not an empty list.
 
-            with patch.object(Path, "exists", mock_exists):
-                config = load_cache_config()
+        S5 Fix: when every entry is corrupt the correct behaviour is to force a
+        live API call (return None), not return [] which would signal 'no models
+        available'.  The live API will repopulate the cache with valid data.
+        """
+        import json
+        import time
 
-        # Should return defaults
-        assert isinstance(config, dict)
-        assert "cache" in config
-        assert "disk_ttl_seconds" in config["cache"]
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
 
-        # Clear cache for other tests
-        load_cache_config.cache_clear()
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {"missing_required_fields": True},
+                {"also_missing": "required_id_and_name"},
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        # None = cache miss: all entries corrupt, must call live API to repopulate.
+        assert result is None, (
+            f"Expected None (cache miss) when all entries are malformed, got: {result!r}"
+        )
+
+    def test_multiple_valid_entries_all_returned(self, tmp_path: Path) -> None:
+        """All valid entries are returned when there are no malformed entries."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {
+                    "id": "model-a",
+                    "name": "Model A",
+                    "context_window": 4096,
+                    "max_output_tokens": 1024,
+                },
+                {
+                    "id": "model-b",
+                    "name": "Model B",
+                    "context_window": 8192,
+                    "max_output_tokens": 2048,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        assert result is not None
+        assert len(result) == 2
+        assert {m.id for m in result} == {"model-a", "model-b"}
+
+
+class TestReadCacheVersionCheck:
+    """Tests for S8 fix: cache schema version is validated on read.
+
+    Before fix: version was written to cache but never checked on read.
+    After fix: unsupported versions force a cache miss to avoid parsing unknown schemas.
+    """
+
+    def test_supported_version_accepted(self, tmp_path: Path) -> None:
+        """Cache with version='1.0' is accepted and parsed normally."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {
+                    "id": "model-v1",
+                    "name": "Model V1",
+                    "context_window": 4096,
+                    "max_output_tokens": 1024,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].id == "model-v1"
+
+    def test_unsupported_version_returns_none(self, tmp_path: Path) -> None:
+        """Cache with unknown future version forces cache miss (returns None)."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "2.0",  # Unsupported future version
+            "models": [
+                {
+                    "id": "future-model",
+                    "name": "Future",
+                    "context_window": 8192,
+                    "max_output_tokens": 2048,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        # Version mismatch → cache miss → force live API call
+        assert result is None
+
+    def test_missing_version_treated_as_supported(self, tmp_path: Path) -> None:
+        """Old caches without 'version' field are treated as '1.0' (backward compat)."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            # No 'version' key — pre-versioning cache format
+            "models": [
+                {
+                    "id": "legacy-model",
+                    "name": "Legacy",
+                    "context_window": 2048,
+                    "max_output_tokens": 512,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        # Missing version defaults to "1.0" → accepted (backward compat)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].id == "legacy-model"

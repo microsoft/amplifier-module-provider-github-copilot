@@ -398,6 +398,7 @@ class TestToolCallIdAndNameFallback:
 
         class MockToolResultEvent:
             """Mimics a SDK tool_result event with tool_call_id, not id."""
+
             type = "tool_result"
             tool_call_id = "tc-fallback-99"
             # Deliberately no 'id' attribute
@@ -421,6 +422,7 @@ class TestToolCallIdAndNameFallback:
 
         class MockToolNameEvent:
             """Mimics a SDK event with tool_name, not name."""
+
             type = "tool_use_complete"
             tool_name = "read_file_fallback"
             # Deliberately no 'name' attribute

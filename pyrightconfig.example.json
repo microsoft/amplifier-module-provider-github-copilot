@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to pyrightconfig.json and set pythonPath to your local venv. reportMissingModuleSource is warning because amplifier_core is runtime-injected by the Amplifier kernel and pyright cannot find its source tree.",
+  "include": [
+    "amplifier_module_provider_github_copilot",
+    "tests"
+  ],
+  "stubPath": "typings",
+  "pythonVersion": "3.14",
+  "pythonPath": "<path-to-your-venv>/bin/python",
+  "typeCheckingMode": "standard",
+  "reportMissingModuleSource": "warning",
+  "reportMissingImports": "warning"
+}

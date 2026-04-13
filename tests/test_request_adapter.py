@@ -649,6 +649,136 @@ class TestPromptInjectionPrevention:
             f"Tool result content must be preserved after escaping. Got: {result!r}"
         )
         # tool_call_id must still appear for correlation
-        assert "tc-77" in result, (
-            f"tool_call_id must be preserved in tool result. Got: {result!r}"
+        assert "tc-77" in result, f"tool_call_id must be preserved in tool result. Got: {result!r}"
+
+
+class TestExtractContentBlockImageS3:
+    """Tests for S3 fix: image blocks return placeholder instead of empty string.
+
+    Contract: behaviors:Security:MUST:1 (content integrity — model context preserved)
+    """
+
+    def test_explicit_image_block_returns_placeholder(self) -> None:
+        """block_type=='image' → '[Image]' placeholder (not empty string)."""
+        from dataclasses import dataclass as _dc
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @_dc
+        class ImageBlock:
+            type: str = "image"
+
+        result = _extract_content_block(ImageBlock())
+        assert result == "[Image]", (
+            f"Image block must return '[Image]' placeholder, got: {result!r}"
+        )
+
+    def test_image_block_with_mime_type_includes_mime(self) -> None:
+        """Image block with media_type → '[Image: image/png]' (not bare '[Image]')."""
+        from dataclasses import dataclass as _dc
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @_dc
+        class ImageBlockWithMime:
+            type: str = "image"
+            media_type: str = "image/png"
+
+        result = _extract_content_block(ImageBlockWithMime())
+        assert result == "[Image: image/png]", (
+            f"Image block with media_type must include MIME, got: {result!r}"
+        )
+
+    def test_duck_typed_image_returns_placeholder(self) -> None:
+        """Object with 'url' attr but no 'type'/'text'/'output' → '[Image]' placeholder.
+
+        ImageContent objects from amplifier_core carry url/source but no text field.
+        The duck-type check handles them even without an explicit 'image' type marker.
+        """
+        from dataclasses import dataclass as _dc
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @_dc
+        class ImageLikeBlock:
+            url: str = "https://example.com/img.png"
+
+        result = _extract_content_block(ImageLikeBlock())
+        assert result == "[Image]", (
+            f"Duck-typed image block must return '[Image]' placeholder, got: {result!r}"
+        )
+
+    def test_duck_typed_image_source_attr_returns_placeholder(self) -> None:
+        """Object with 'source' attr but no 'type'/'text'/'output' → '[Image]' placeholder.
+
+        BlobAttachment objects from amplifier_core carry a 'source' attribute, not 'url'.
+        The duck-type heuristic covers both paths — this test proves the 'source' branch.
+        Contract: behaviors:Security:MUST:1 (content integrity in history)
+        """
+        from dataclasses import dataclass as _dc
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @_dc
+        class BlobLikeBlock:
+            source: str = "data:image/png;base64,abc123"
+
+        result = _extract_content_block(BlobLikeBlock())
+        assert result == "[Image]", (
+            f"Duck-typed blob block (source attr) must return '[Image]' placeholder, "
+            f"got: {result!r}"
+        )
+
+    def test_text_block_unchanged_by_image_fix(self) -> None:
+        """Text blocks must still return their text — regression guard for S3 fix."""
+        from dataclasses import dataclass as _dc
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @_dc
+        class TextBlock:
+            type: str = "text"
+            text: str = "Hello from a text block."
+
+        result = _extract_content_block(TextBlock())
+        assert result == "Hello from a text block.", (
+            f"Text block must return its text content unchanged. Got: {result!r}"
+        )
+
+    def test_image_block_logs_warning(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        """Warning MUST be logged when an image block is replaced with a placeholder.
+
+        Contract: behaviors:Logging:MUST:1 — silent data changes are forbidden.
+        """
+        import logging
+        from dataclasses import dataclass as _dc
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @_dc
+        class ImageBlock:
+            type: str = "image"
+
+        with caplog.at_level(logging.WARNING):
+            _extract_content_block(ImageBlock())
+
+        assert any(
+            "replaced" in record.message or "image" in record.message.lower()
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+        ), (
+            "A WARNING must be logged when image block is replaced with placeholder. "
+            f"caplog: {caplog.text!r}"
         )

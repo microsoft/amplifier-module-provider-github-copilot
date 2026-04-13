@@ -137,41 +137,43 @@ class TestSdkProtectionConfigValues:
         assert 10.0 <= config.session.idle_timeout_seconds <= 300.0
 
 
-class TestSdkProtectionYamlExists:
-    """Test that the YAML config file exists and is valid."""
+class TestSdkProtectionPythonModule:
+    """Test that the Python config module exists and has correct defaults.
 
-    def test_sdk_protection_yaml_exists(self) -> None:
-        """config/sdk_protection.yaml exists in package."""
-        from pathlib import Path
+    Replaces TestSdkProtectionYamlExists — sdk_protection.yaml was migrated
+    to config/sdk_protection.py (Python dataclasses with hardcoded defaults).
+    """
 
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "sdk_protection.yaml"
-        )
-        assert config_path.exists(), f"SDK protection config not found at {config_path}"
-
-    def test_sdk_protection_yaml_is_valid(self) -> None:
-        """config/sdk_protection.yaml parses without error."""
-        from pathlib import Path
-
-        import yaml
-
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "sdk_protection.yaml"
+    def test_sdk_protection_python_module_importable(self) -> None:
+        """config/sdk_protection.py is importable as a Python module."""
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SdkProtectionConfig,
         )
 
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        assert SdkProtectionConfig is not None
 
-        assert data is not None
-        assert "tool_capture" in data
-        assert "session" in data
-        assert "sdk" in data
+    def test_sdk_protection_config_instantiates_with_no_args(self) -> None:
+        """SdkProtectionConfig() instantiates with hardcoded defaults (no I/O)."""
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SdkProtectionConfig,
+        )
+
+        config = SdkProtectionConfig()
+
+        assert hasattr(config, "tool_capture")
+        assert hasattr(config, "session")
+        assert hasattr(config, "sdk")
+        assert hasattr(config, "singleton")
+
+    def test_sdk_protection_module_has_all_dataclasses(self) -> None:
+        """All expected dataclasses are exported from the module."""
+        import amplifier_module_provider_github_copilot.config._sdk_protection as mod
+
+        assert hasattr(mod, "ToolCaptureConfig")
+        assert hasattr(mod, "SessionProtectionConfig")
+        assert hasattr(mod, "SingletonConfig")
+        assert hasattr(mod, "SdkConfig")
+        assert hasattr(mod, "SdkProtectionConfig")
 
 
 class TestSdkConfigLoading:
@@ -317,3 +319,102 @@ class TestSDKConfigValidation:
         assert isinstance(config.tool_capture.log_capture_events, bool)
         assert isinstance(config.session.explicit_abort, bool)
         assert isinstance(config.sdk.prewarm_subprocess, bool)
+
+
+class TestFrozenInvariantEnforcement:
+    """Safety-critical configs are frozen — mutation raises FrozenInstanceError.
+
+    Contract: sdk-protection:ToolCapture:MUST:1,2
+    Contract: sdk-protection:Session:MUST:3,4
+
+    The @lru_cache loader returns a shared singleton. Without frozen=True,
+    any caller mutating a field silently corrupts all other callers in the
+    process. frozen=True makes the invariant enforced by Python, not convention.
+    """
+
+    def test_tool_capture_config_is_frozen(self) -> None:
+        """ToolCaptureConfig raises FrozenInstanceError on field assignment.
+
+        Contract: sdk-protection:ToolCapture:MUST:1
+        """
+        from dataclasses import FrozenInstanceError
+
+        import pytest
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            ToolCaptureConfig,
+        )
+
+        config = ToolCaptureConfig()
+
+        with pytest.raises(FrozenInstanceError):
+            config.first_turn_only = False  # type: ignore[misc]
+
+    def test_tool_capture_deduplicate_is_frozen(self) -> None:
+        """ToolCaptureConfig.deduplicate cannot be mutated post-construction.
+
+        Contract: sdk-protection:ToolCapture:MUST:2
+        """
+        from dataclasses import FrozenInstanceError
+
+        import pytest
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            ToolCaptureConfig,
+        )
+
+        config = ToolCaptureConfig()
+
+        with pytest.raises(FrozenInstanceError):
+            config.deduplicate = False  # type: ignore[misc]
+
+    def test_session_protection_config_is_frozen(self) -> None:
+        """SessionProtectionConfig raises FrozenInstanceError on field assignment.
+
+        Contract: sdk-protection:Session:MUST:3
+        """
+        from dataclasses import FrozenInstanceError
+
+        import pytest
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SessionProtectionConfig,
+        )
+
+        config = SessionProtectionConfig()
+
+        with pytest.raises(FrozenInstanceError):
+            config.explicit_abort = False  # type: ignore[misc]
+
+    def test_session_abort_timeout_is_frozen(self) -> None:
+        """SessionProtectionConfig abort timeout cannot be mutated post-construction.
+
+        Contract: sdk-protection:Session:MUST:4
+        """
+        from dataclasses import FrozenInstanceError
+
+        import pytest
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SessionProtectionConfig,
+        )
+
+        config = SessionProtectionConfig()
+
+        with pytest.raises(FrozenInstanceError):
+            config.abort_timeout_seconds = 0.0  # type: ignore[misc]
+
+    def test_construct_with_override_still_works(self) -> None:
+        """frozen=True does not break construct-with-override pattern.
+
+        Callers that need non-default values pass them via constructor.
+        This is the only supported override mechanism for frozen configs.
+        """
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            ToolCaptureConfig,
+        )
+
+        config = ToolCaptureConfig(first_turn_only=False, deduplicate=False)
+
+        assert config.first_turn_only is False
+        assert config.deduplicate is False

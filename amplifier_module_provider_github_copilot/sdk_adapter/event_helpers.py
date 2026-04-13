@@ -8,7 +8,8 @@ These helpers handle two SDK event shapes:
 - Dict events: {"type": "session.idle"}  (used in tests)
 - Object events: event.type.value or str(event.type)  (real SDK)
 
-Three-Medium Architecture: Event type sets loaded from events.yaml session_lifecycle.
+Two-Medium Architecture: Event type sets loaded from config/data/events.yaml
+(session_lifecycle section).
 """
 
 from __future__ import annotations

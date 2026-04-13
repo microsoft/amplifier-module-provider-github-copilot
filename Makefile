@@ -15,7 +15,7 @@
 #
 # =============================================================================
 
-.PHONY: install test smoke coverage lint format check clean help sdk-assumptions
+.PHONY: install test live smoke coverage coverage-check lint format check check-full clean help sdk-assumptions
 
 # Default Python - override with: make test PYTHON=python3.12
 # Use python3 for Linux/macOS compatibility (Debian/Ubuntu lack 'python' symlink)
@@ -45,6 +45,11 @@ test:
 sdk-assumptions:
 	$(PYTHON) -m pytest tests/test_sdk_assumptions.py -v --tb=long
 
+# Run live integration tests (requires GITHUB_TOKEN, makes real API calls)
+# Schedule: nightly only. Not for PR runs.
+live:
+	$(PYTHON) -m pytest tests/ -m live -v --tb=short
+
 # Quick smoke test - validates provider works E2E in seconds
 # Use after code changes, SDK upgrades, or to debug cross-platform issues
 smoke:
@@ -52,12 +57,12 @@ smoke:
 
 # Run tests with coverage
 coverage:
-	$(PYTHON) -m pytest --cov=$(PACKAGE) --cov-report=term-missing --cov-report=html tests/
+	$(PYTHON) -m pytest --cov=$(PACKAGE) --cov-branch --cov-report=term-missing --cov-report=html tests/ -m "not live"
 	@echo "Coverage report generated in htmlcov/index.html"
 
 # Run tests with coverage and fail if under threshold
 coverage-check:
-	$(PYTHON) -m pytest --cov=$(PACKAGE) --cov-fail-under=80 tests/
+	$(PYTHON) -m pytest --cov=$(PACKAGE) --cov-branch --cov-fail-under=90 tests/ -m "not live"
 
 # -----------------------------------------------------------------------------
 # Code Quality
@@ -103,12 +108,14 @@ clean:
 help:
 	@echo "Available targets:"
 	@echo "  install         - Install dev dependencies"
-	@echo "  test            - Run all tests"
-	@echo "  sdk-assumptions - Run SDK assumption tests only"
-	@echo "  coverage        - Run tests with coverage report"
-	@echo "  coverage-check  - Run tests with coverage threshold enforcement"
+	@echo "  test            - Run all unit tests (excludes live)"
+	@echo "  live            - Run live integration tests (requires GITHUB_TOKEN)"
+	@echo "  sdk-assumptions - Run SDK assumption tests only (use when upgrading SDK)"
+	@echo "  coverage        - Run unit tests with branch coverage report"
+	@echo "  coverage-check  - Run unit tests with 90% threshold enforcement"
 	@echo "  lint            - Check code style"
 	@echo "  format          - Auto-format code"
-	@echo "  check           - Run lint + test"
+	@echo "  check           - Run lint + unit tests"
 	@echo "  check-full      - Run lint + coverage with threshold"
+	@echo "  smoke           - Quick E2E smoke test"
 	@echo "  clean           - Remove build artifacts"

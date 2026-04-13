@@ -106,6 +106,7 @@ class TestKernelTypeCompliance:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
         config = load_error_config(config_path)
@@ -325,7 +326,13 @@ class TestErrorTypeHierarchy:
             translate_sdk_error,
         )
 
-        config_path = Path(__file__).parent.parent / "config" / "errors.yaml"
+        config_path = (
+            Path(__file__).parent.parent
+            / "amplifier_module_provider_github_copilot"
+            / "config"
+            / "data"
+            / "errors.yaml"
+        )
         config = load_error_config(config_path)
 
         # Trigger default fallback

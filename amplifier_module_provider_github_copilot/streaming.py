@@ -2,6 +2,7 @@
 
 import fnmatch
 import functools
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -42,6 +43,45 @@ __all__ = [
     "extract_response_content",
     "translate_event",
 ]
+
+
+def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
+    """Parse tool call arguments from str | dict SDK responses.
+
+    The Copilot SDK may deliver ``arguments`` as a JSON string or a dict.
+    S4 Fix: The original guard ``isinstance(args, dict) else {}`` silently
+    discarded ALL tool arguments when the SDK sent them as a JSON string.
+
+    Contract: streaming-contract:ToolCallBlock:MUST:1
+
+    Args:
+        arguments: Raw arguments value from the SDK tool_call block.
+            May be ``None`` (no args), ``dict`` (already parsed), or
+            ``str`` (JSON-encoded dict).
+
+    Returns:
+        Parsed argument dict. Returns ``{}`` for None/unparseable inputs.
+    """
+    if isinstance(arguments, dict):
+        return arguments
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            logger.warning(
+                "Tool call arguments are not valid JSON; falling back to {}: %r",
+                arguments[:200],
+            )
+            return {}
+        if not isinstance(parsed, dict):
+            logger.warning(
+                "Tool call arguments parsed to %s (expected dict); falling back to {}",
+                type(parsed).__name__,
+            )
+            return {}
+        return parsed
+    # None or unexpected type — treat as empty
+    return {}
 
 
 class StreamingChatResponse(ChatResponse):
@@ -284,9 +324,7 @@ class StreamingAccumulator:
                 tc = block["data"]
                 tool_call_id = tc.get("id", "") or str(uuid.uuid4())
                 tc_name = tc.get("name", "")
-                tc_args: dict[str, Any] = (
-                    tc.get("arguments", {}) if isinstance(tc.get("arguments"), dict) else {}
-                )
+                tc_args: dict[str, Any] = _parse_tool_arguments(tc.get("arguments"))
                 # ToolCallBlock in content (ContentBlockUnion member); field is `input`
                 # Contract: streaming-contract:ToolCallBlock:MUST:1
                 content.append(ToolCallBlock(id=tool_call_id, name=tc_name, input=tc_args))
@@ -578,7 +616,7 @@ def load_event_config(config_path: str | Path | None = None) -> EventConfig:
     Config lives inside the wheel at amplifier_module_provider_github_copilot/config/
     """
     if config_path is None:
-        config_path = str(Path(__file__).parent / "config" / "events.yaml")
+        config_path = str(Path(__file__).parent / "config" / "data" / "events.yaml")
     else:
         config_path = str(config_path)
     config = _load_event_config_cached(config_path)

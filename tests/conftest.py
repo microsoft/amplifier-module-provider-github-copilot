@@ -34,7 +34,7 @@ _original_fetch_and_map_models = _models_module.fetch_and_map_models
 if sys.platform == "win32":
     import asyncio
 
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # pyright: ignore[reportAttributeAccessIssue]
 
 # P1-6 Security Fix: Clear GitHub token env vars for non-live tests.
 # This prevents the fail-closed security behavior from triggering when
@@ -66,12 +66,13 @@ def clear_config_caches() -> None:
         load_models_config,
         load_retry_config,
         load_sdk_protection_config,
+        load_streaming_config,
     )
     from amplifier_module_provider_github_copilot.error_translation import (
         _load_error_config_cached,  # pyright: ignore[reportPrivateUsage]
     )
     from amplifier_module_provider_github_copilot.fake_tool_detection import (
-        _load_fake_tool_detection_config_cached,  # pyright: ignore[reportPrivateUsage]
+        load_fake_tool_detection_config,
     )
     from amplifier_module_provider_github_copilot.model_cache import load_cache_config
     from amplifier_module_provider_github_copilot.streaming import (
@@ -80,12 +81,11 @@ def clear_config_caches() -> None:
 
     load_models_config.cache_clear()
     load_retry_config.cache_clear()
+    load_streaming_config.cache_clear()
     load_sdk_protection_config.cache_clear()
     load_cache_config.cache_clear()
     _load_error_config_cached.cache_clear()
-    _load_fake_tool_detection_config_cached.cache_clear()
-    _load_event_config_cached.cache_clear()
-    _load_fake_tool_detection_config_cached.cache_clear()
+    load_fake_tool_detection_config.cache_clear()
     _load_event_config_cached.cache_clear()
 
 

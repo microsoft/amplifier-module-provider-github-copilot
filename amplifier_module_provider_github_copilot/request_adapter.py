@@ -251,6 +251,30 @@ def _extract_content_block(block: Any) -> str:
             return f"[Tool Result: {sanitized_output}]"
         return ""
 
+    # Image block — SDK cannot re-process images from prior turns; replace with placeholder.
+    # S3 Fix: image blocks fell through to the fallback and returned "" silently,
+    # losing the model's context that an image existed in that turn.
+    # Contract: behaviors:Security:MUST:1 (content integrity in history)
+    if block_type == "image" or (
+        block_type is None
+        and (hasattr(block, "url") or hasattr(block, "source"))
+        and not hasattr(block, "text")
+        and not hasattr(block, "output")
+    ):
+        mime: str | None = (
+            getattr(block, "media_type", None)
+            or getattr(block, "mime_type", None)
+            or _get("media_type")
+            or _get("mime_type")
+        )
+        placeholder = f"[Image: {mime}]" if mime else "[Image]"
+        logger.warning(
+            "Image block in conversation history replaced with %r "
+            "(SDK cannot re-process images from prior turns)",
+            placeholder,
+        )
+        return placeholder
+
     # Fallback - try common text attributes
     for attr in ("text", "content", "value"):
         val: Any = getattr(block, attr, None) or _get(attr)

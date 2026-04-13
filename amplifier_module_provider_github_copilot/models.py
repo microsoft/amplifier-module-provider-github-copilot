@@ -2,9 +2,8 @@
 
 Contract: contracts/sdk-boundary.md (ModelDiscovery section)
 
-Three-Medium Architecture:
-- Python: Type translation logic (this module)
-- YAML: Fallback policy values (config/models.yaml)
+Two-Medium Architecture:
+- Python: Type translation logic (this module) + policy values (config/_models.py)
 - Markdown: Requirements (contracts/sdk-boundary.md)
 
 Type Translation Chain:
@@ -48,9 +47,9 @@ except ImportError:  # pragma: no cover
 
 
 # =============================================================================
-# Fallback Policy Values (from models.yaml)
-# Three-Medium Architecture: Python calls YAML for policy values
-# Contract: behaviors:ConfigLoading:MUST:1 — YAML authoritative, fail-fast on missing
+# Policy Values (from config/_models.py)
+# Two-Medium Architecture: Python is the authoritative source for policy values
+# Contract: behaviors:ConfigLoading:MUST:1
 # =============================================================================
 
 

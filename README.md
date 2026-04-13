@@ -1,8 +1,6 @@
 # Amplifier GitHub Copilot Provider Module
 
-> This module is created by HDMowri
-
-GitHub Copilot SDK integration for Amplifier via Copilot CLI.
+Enables GitHub Enterprise Subscription users to leverage the Copilot SDK as a provider and access available LLM models through Amplifier
 
 ## Prerequisites
 
@@ -178,24 +176,32 @@ pip install -e ".[dev]"
 ### Testing
 
 ```bash
-make test          # Run tests
-make coverage      # Run with coverage report
-make sdk-assumptions  # Before upgrading SDK
-make check         # Full check (lint + test)
+make test          # Run unit tests (excludes live API calls)
+make live          # Run live integration tests (requires GITHUB_TOKEN)
+make coverage      # Run with branch coverage report
+make check         # Full check (lint + type-check + test)
 ```
 
 ### Live Integration Tests
 
-Live tests require `RUN_LIVE_TESTS=1` and valid GitHub Copilot authentication:
+Live tests make real API calls and require valid GitHub Copilot authentication:
 
 ```bash
-RUN_LIVE_TESTS=1 python -m pytest tests/integration/ -v
+export GITHUB_TOKEN=$(gh auth token)
+make live
+```
+
+Or run directly:
+
+```bash
+python -m pytest tests/ -m live -v --tb=short
 ```
 
 On Windows PowerShell:
 
 ```powershell
-$env:RUN_LIVE_TESTS="1"; python -m pytest tests/integration/ -v
+$env:GITHUB_TOKEN = (gh auth token)
+python -m pytest tests/ -m live -v --tb=short
 ```
 
 ## Project Status

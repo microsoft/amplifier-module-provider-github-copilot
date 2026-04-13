@@ -90,6 +90,24 @@ _OPAQUE_TOKEN_PATTERN = re.compile(
     r"\b[A-Za-z0-9_-]{32,}\b"  # 32+ chars, likely a token
 )
 
+# PEM block pattern (private keys, certificates, etc.)
+# S2 Fix: PEM blocks MUST be redacted BEFORE _OPAQUE_TOKEN_PATTERN, which would
+# match individual 64-char base64 lines inside the block leaving the block header/footer.
+# Contract: behaviors:Logging:MUST:4
+_PEM_BLOCK_PATTERN = re.compile(
+    r"-----BEGIN [A-Z ]+-----[\s\S]*?-----END [A-Z ]+-----",
+    re.DOTALL,
+)
+
+# Database connection URI pattern.
+# Matches: postgresql://user:pass@host, mysql://user:pass@host, redis://user:pass@host, etc.
+# Captures and redacts ONLY the password segment; preserves scheme://user@host for context.
+# Contract: behaviors:Logging:MUST:4
+_DB_URI_PATTERN = re.compile(
+    r"((?:postgresql|mysql|mssql|mongodb|redis|amqp)://[^:@\s]+):([^@\s]+)(@)",
+    re.IGNORECASE,
+)
+
 
 def redact_sensitive_text(value: object) -> str:
     """Return a log-safe string with secret values redacted.
@@ -134,7 +152,14 @@ def redact_sensitive_text(value: object) -> str:
     # P2-9: Redact JWT-like tokens (base64.base64.base64)
     text = _JWT_PATTERN.sub(REDACTED, text)
 
-    # P2-9: Redact opaque tokens (40+ char alphanumeric strings)
+    # S2: Redact PEM blocks BEFORE _OPAQUE_TOKEN_PATTERN, which would otherwise
+    # match individual 64-char base64 lines, leaving block headers/footers intact.
+    text = _PEM_BLOCK_PATTERN.sub(REDACTED, text)
+
+    # S2: Redact database connection URI passwords (preserves scheme://user@host).
+    text = _DB_URI_PATTERN.sub(r"\1:" + REDACTED + r"\3", text)
+
+    # P2-9: Redact opaque tokens (32+ char alphanumeric strings)
     # Only if they look like tokens (not already redacted, not common words)
     text = _OPAQUE_TOKEN_PATTERN.sub(REDACTED, text)
 
@@ -151,6 +176,9 @@ def _count_secrets(text: str) -> int:
     # P2-9: Include JWT and opaque tokens in count
     count += len(_JWT_PATTERN.findall(text))
     count += len(_OPAQUE_TOKEN_PATTERN.findall(text))
+    # S2: Include PEM blocks and DB URI passwords in count
+    count += len(_PEM_BLOCK_PATTERN.findall(text))
+    count += len(_DB_URI_PATTERN.findall(text))
     return count
 
 
@@ -227,5 +255,9 @@ def safe_log_message(message: str, *args: Any) -> tuple[str, ...]:
     Contract: behaviors:Logging:MUST:4
 
     """
+    # S1 Fix: Redact the message itself to catch accidental f-string misuse.
+    # WRONG: safe_log_message(f"Token: {token}")  ← token embedded before redaction
+    # RIGHT: safe_log_message("Token: %s", token) ← token passed as arg, redacted
+    redacted_message = redact_sensitive_text(message)
     redacted_args = tuple(redact_sensitive_text(arg) for arg in args)
-    return (message, *redacted_args)
+    return (redacted_message, *redacted_args)

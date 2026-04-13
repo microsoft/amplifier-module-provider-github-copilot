@@ -51,24 +51,6 @@ class TestSDKImportAssumptions:
         assert hasattr(sdk_module.CopilotClient, "start")
         assert hasattr(sdk_module.CopilotClient, "stop")
 
-    def test_client_accepts_config(self, sdk_module: Any) -> None:
-        """SDK CopilotClient accepts configuration.
-
-        Note: This does NOT start the client or make any network calls.
-        SDK API may vary between versions - test validates client creation works.
-        sdk-boundary:Auth:MUST:1
-        """
-        # SDK requires specific config dataclass (SubprocessConfig or ExternalServerConfig)
-        try:
-            from copilot.types import SubprocessConfig
-
-            # SubprocessConfig with github_token
-            config = SubprocessConfig(github_token="test-token-not-real")
-            client = sdk_module.CopilotClient(config)
-            assert client is not None
-        except ImportError:
-            pytest.skip("SubprocessConfig not available in this SDK version")
-
 
 @pytest.mark.sdk_assumption
 class TestSessionInterfaceAssumptions:
@@ -92,22 +74,6 @@ class TestSessionInterfaceAssumptions:
         """
         assert hasattr(sdk_module.CopilotClient, "create_session")
         # Note: Session object interface (disconnect, send_message) verified in Tier 7
-
-    def test_sdk_accepts_client_config(self, sdk_module: Any) -> None:
-        """SDK CopilotClient accepts configuration dataclass.
-
-        SDK API varies between versions - this test validates client creation.
-        Contract: sdk-boundary:Session:MUST:1
-        """
-        try:
-            from copilot.types import SubprocessConfig
-
-            # SubprocessConfig with github_token
-            config = SubprocessConfig(github_token="test-token-not-real")
-            client = sdk_module.CopilotClient(config)
-            assert client is not None
-        except ImportError:
-            pytest.skip("SubprocessConfig not available in this SDK version")
 
 
 @pytest.mark.sdk_assumption

@@ -3,7 +3,7 @@
 Contract: contracts/behaviors.md (Three-Medium Architecture)
 
 Tests verify that module-level complete() function loads timeout from
-config/models.yaml instead of using hardcoded 120.0 value.
+config/_models.py instead of using hardcoded 120.0 value.
 """
 
 from __future__ import annotations
@@ -60,22 +60,13 @@ class TestTimeoutConfigValue:
     """Tests for timeout configuration values."""
 
     def test_models_yaml_has_timeout_3600(self) -> None:
-        """models.yaml defaults.timeout should be 3600.
+        """config/models.py PROVIDER.defaults.timeout should be 3600.
 
         Contract anchor: behaviors.md:Config:SHOULD:1
         """
-        import yaml
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        assert data["provider"]["defaults"]["timeout"] == 3600
+        assert _models.PROVIDER["defaults"]["timeout"] == 3600
 
     def test_yaml_timeout_is_3600(self) -> None:
         """YAML timeout value is 3600 (1 hour for reasoning models).

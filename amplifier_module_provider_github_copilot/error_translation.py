@@ -169,14 +169,14 @@ def _load_error_config_cached(config_path_str: str | None) -> ErrorConfig:
             from importlib import resources
 
             config_text = (
-                resources.files("amplifier_module_provider_github_copilot.config")
+                resources.files("amplifier_module_provider_github_copilot.config.data")
                 .joinpath("errors.yaml")
                 .read_text(encoding="utf-8")
             )
             data = yaml.safe_load(config_text)
         except Exception:
             # importlib.resources failed, fall back to file path
-            config_path_str = str(Path(__file__).parent / "config" / "errors.yaml")
+            config_path_str = str(Path(__file__).parent / "config" / "data" / "errors.yaml")
 
     if data is None and config_path_str is not None:
         # Load from file path

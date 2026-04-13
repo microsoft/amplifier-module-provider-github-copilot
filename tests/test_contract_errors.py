@@ -28,6 +28,7 @@ def error_config() -> ErrorConfig:
         Path(__file__).parent.parent
         / "amplifier_module_provider_github_copilot"
         / "config"
+        / "data"
         / "errors.yaml"
     )
     return load_error_config(config_path)
@@ -143,7 +144,7 @@ class TestErrorTranslationFunction:
 
 
 class TestErrorConfigFile:
-    """Test that config/errors.yaml exists and is valid.
+    """Test that config/data/errors.yaml exists and is valid.
 
     Uses __file__-relative paths for robust resolution.
     """
@@ -155,9 +156,10 @@ class TestErrorConfigFile:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
-        assert config_path.exists(), f"config/errors.yaml must exist at {config_path}"
+        assert config_path.exists(), f"config/data/errors.yaml must exist at {config_path}"
 
     def test_errors_yaml_valid_yaml(self) -> None:
         """Config file must be valid YAML."""
@@ -166,6 +168,7 @@ class TestErrorConfigFile:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
         content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -180,6 +183,7 @@ class TestErrorConfigFile:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
         content = yaml.safe_load(config_path.read_text(encoding="utf-8"))

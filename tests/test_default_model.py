@@ -2,59 +2,39 @@
 
 Contract: contracts/provider-protocol.md
 
-Three-Medium Architecture: Default model comes from YAML, not Python code.
-Tests verify that models.yaml has correct values and load_models_config() reads them.
+Two-Medium Architecture: Default model comes from config/_models.py, not Python code.
+Tests verify that config/_models.py has correct values and load_models_config() reads them.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-import yaml
 
 
 class TestModelsYamlDefaults:
-    """Tests for models.yaml default values.
+    """Tests for models config default values.
 
-    Three-Medium: YAML is authoritative source for all policy values.
+    Three-Medium: config/models.py is authoritative source for all policy values.
     """
 
     def test_models_yaml_has_default_model(self) -> None:
-        """models.yaml must have provider.defaults.model.
+        """config/models.py must have PROVIDER.defaults.model.
 
         Contract: behaviors:Config:MUST:2
-        Three-Medium: YAML is authoritative.
         """
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        assert "provider" in data
-        assert "defaults" in data["provider"]
-        assert "model" in data["provider"]["defaults"]
+        assert "defaults" in _models.PROVIDER
+        assert "model" in _models.PROVIDER["defaults"]
 
     def test_models_yaml_has_timeout(self) -> None:
-        """models.yaml must have provider.defaults.timeout.
+        """config/models.py must have PROVIDER.defaults.timeout == 3600.
 
         Contract: behaviors:Config:MUST:2
-        Three-Medium: YAML is authoritative.
         """
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        assert data["provider"]["defaults"]["timeout"] == 3600
+        assert _models.PROVIDER["defaults"]["timeout"] == 3600
 
     def test_load_models_config_reads_yaml(self) -> None:
         """load_models_config() reads values from YAML.
@@ -72,75 +52,45 @@ class TestModelsYamlDefaults:
 
 
 class TestModelsYamlClaudeOpus:
-    """Tests for models.yaml claude-opus-4.5 configuration."""
+    """Tests for config/models.py claude-opus-4.5 configuration."""
 
     def test_models_yaml_default_model_is_claude_opus_45(self) -> None:
-        """models.yaml defaults.model is claude-opus-4.5.
+        """config/models.py PROVIDER.defaults.model is claude-opus-4.5.
 
         Contract anchor: provider-protocol:get_info:MUST:1
         """
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        assert data["provider"]["defaults"]["model"] == "claude-opus-4.5"
+        assert _models.PROVIDER["defaults"]["model"] == "claude-opus-4.5"
 
     def test_models_yaml_context_window_200000(self) -> None:
-        """models.yaml defaults.context_window is 200000.
+        """config/models.py PROVIDER.defaults.context_window is 200000.
 
         Contract anchor: provider-protocol:get_info:MUST:2
         """
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        assert data["provider"]["defaults"]["context_window"] == 200000
+        assert _models.PROVIDER["defaults"]["context_window"] == 200000
 
     def test_models_yaml_max_output_tokens_32000(self) -> None:
-        """models.yaml defaults.max_output_tokens is 32000.
+        """config/models.py PROVIDER.defaults.max_output_tokens is 32000.
 
         SDK limits: max_context_window=200000, max_prompt_tokens=168000
         Therefore: max_output_tokens = 200000 - 168000 = 32000
-
-        This is the OUTPUT budget used by context manager for budget calculation.
         Contract anchor: provider-protocol:get_info:MUST:1
         """
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        assert data["provider"]["defaults"]["max_output_tokens"] == 32000
+        assert _models.PROVIDER["defaults"]["max_output_tokens"] == 32000
 
     def test_models_yaml_contains_claude_opus_45_model_entry(self) -> None:
-        """models.yaml contains claude-opus-4.5 in models list.
+        """config/models.py MODELS list contains claude-opus-4.5.
 
         Contract anchor: provider-protocol:list_models:MUST:1
         """
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "models.yaml"
-        )
-        with config_path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        model_ids = [m["id"] for m in data["models"]]
+        model_ids = [m["id"] for m in _models.MODELS]
         assert "claude-opus-4.5" in model_ids
 
 

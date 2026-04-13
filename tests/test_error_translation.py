@@ -83,10 +83,10 @@ class MockNotFoundError(MockLLMError):
 # Test fixtures
 @pytest.fixture
 def error_config() -> ErrorConfig:
-    """Load error config from YAML."""
+    """Load error config from Python config module."""
     from amplifier_module_provider_github_copilot.error_translation import load_error_config
 
-    return load_error_config("config/errors.yaml")
+    return load_error_config()
 
 
 @pytest.fixture
@@ -127,16 +127,7 @@ class TestErrorTranslationBasic:
 
 
 class TestErrorConfigLoading:
-    """Test error config loading from YAML."""
-
-    def test_load_config_from_yaml(self) -> None:
-        """AC-2: Can load config from errors.yaml."""
-        from amplifier_module_provider_github_copilot.error_translation import load_error_config
-
-        config = load_error_config("config/errors.yaml")
-        assert config is not None
-        assert hasattr(config, "mappings")
-        assert hasattr(config, "default_error")
+    """Test error config loading from Python config module."""
 
     def test_config_has_default_error(self) -> None:
         """Config specifies default error type."""

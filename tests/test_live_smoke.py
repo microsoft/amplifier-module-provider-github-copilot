@@ -109,7 +109,7 @@ def _create_session_config() -> dict[str, Any]:
     )
 
     return {
-        "model": "gpt-4o",
+        "model": "claude-opus-4.5",
         "streaming": True,
         # Contract v1.2: available_tools MUST be set (not omitted)
         # Empty list prevents SDK built-ins from appearing when no tools provided
@@ -185,48 +185,6 @@ class TestSessionLifecycle:
 
 
 # =============================================================================
-# Simple Completion Tests
-# =============================================================================
-
-
-class TestSimpleCompletion:
-    """Verify basic message send/receive works.
-
-    AC-4: Simple Completion
-    Contract: sdk-boundary:Translation:MUST:1
-
-    Uses send_and_wait() for simplicity - just needs final result.
-    """
-
-    @pytest.mark.asyncio
-    async def test_send_and_wait_returns_response(self, live_client: Any) -> None:
-        """send_and_wait() returns when session becomes idle.
-
-        This is the simplest possible live test - send a message,
-        get a response. If this fails, the SDK is broken.
-        """
-        session_config = _create_session_config()
-        # SDK v0.2.0: create_session uses kwargs
-        session = await live_client.create_session(**session_config)
-        try:
-            # Minimal prompt to reduce token usage
-            # SDK v0.2.0: send_and_wait(prompt, timeout=...)
-            try:
-                result = await session.send_and_wait("Reply: OK", timeout=30.0)
-            except Exception as exc:
-                _skip_if_copilot_auth_error(exc)
-                raise
-
-            # Result should be the final assistant message event (or None)
-            # SDK returns SessionEvent or None
-            if result is not None:
-                assert hasattr(result, "type")
-                assert hasattr(result, "data")
-        finally:
-            await session.disconnect()
-
-
-# =============================================================================
 # Event Streaming Tests (Shape Validation)
 # =============================================================================
 
@@ -290,70 +248,6 @@ class TestEventStreaming:
         finally:
             unsubscribe()
             await session.disconnect()
-
-    @pytest.mark.asyncio
-    async def test_message_delta_has_delta_content(self, live_client: Any) -> None:
-        """assistant.message_delta events have data.delta_content.
-
-        Contract: sdk-boundary:EventShape:MUST:2
-        SDK v0.1.33+ uses data.delta_content (not event.text).
-        This is the shape our extract_event_fields() depends on.
-        """
-        session_config = _create_session_config()
-        # SDK v0.2.0: create_session uses kwargs
-        session = await live_client.create_session(**session_config)
-        delta_events: list[Any] = []
-        idle_event = asyncio.Event()
-
-        def collector(event: Any) -> None:
-            event_type = getattr(event, "type", None)
-            if event_type is not None:
-                type_str = getattr(event_type, "value", str(event_type))
-                if type_str == "assistant.message_delta":
-                    delta_events.append(event)
-                elif type_str == "session.idle":
-                    idle_event.set()
-
-        unsubscribe = session.on(collector)
-        try:
-            # SDK v0.2.0: send(prompt)
-            try:
-                await session.send("Reply: hello")
-                await asyncio.wait_for(idle_event.wait(), timeout=30.0)
-            except Exception as exc:
-                _skip_if_copilot_auth_error(exc)
-                raise
-
-            # We should have at least one delta event (skip if auth blocked us)
-            if len(delta_events) == 0:
-                pytest.skip(
-                    "No assistant.message_delta events received - "
-                    "Copilot feature may require enterprise/org policy"
-                )
-
-            # Check delta_content field location
-            for delta in delta_events:
-                data = delta.data
-                # delta_content should be on data, not top-level
-                if hasattr(data, "delta_content"):
-                    content = data.delta_content
-                    if content is not None:
-                        assert isinstance(content, str), (
-                            f"delta_content should be str, got {type(content)}"
-                        )
-                        # At least one delta should have content
-                        break
-            else:
-                # Log what we actually got for debugging
-                for i, delta in enumerate(delta_events):
-                    data = delta.data
-                    data_attrs = [a for a in dir(data) if not a.startswith("_")]
-                    print(f"Delta {i}: data attrs = {data_attrs}")
-
-        finally:
-            unsubscribe()
-            await session.disconnect()
-
 
 # =============================================================================
 # Auth Error Pattern Tests

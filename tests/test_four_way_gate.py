@@ -6,11 +6,8 @@ This prevents the class of bug where sources drift apart silently.
 
 import re
 from pathlib import Path
-from typing import Any, cast
 
-import yaml
-
-from amplifier_module_provider_github_copilot.streaming import DomainEventType
+from amplifier_module_provider_github_copilot.streaming import DomainEventType, load_event_config
 
 
 class TestFourWayGate:
@@ -41,26 +38,9 @@ class TestFourWayGate:
         return events
 
     def _get_config_events(self) -> set[str]:
-        """Extract domain_type values from config/events.yaml."""
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "events.yaml"
-        )
-        with open(config_path) as f:
-            config: dict[str, Any] = yaml.safe_load(f)
-
-        events: set[str] = set()
-        bridge_entries: list[Any] = config.get("event_classifications", {}).get("bridge", [])
-        for entry in bridge_entries:
-            if not isinstance(entry, dict):
-                continue
-            typed_entry = cast(dict[str, object], entry)
-            raw_val = typed_entry.get("domain_type")
-            if isinstance(raw_val, str):
-                events.add(raw_val)
-        return events
+        """Extract domain_type values from event config."""
+        config = load_event_config()
+        return {dt.name for dt, _ in config.bridge_mappings.values()}
 
     def _get_code_events(self) -> set[str]:
         """Get DomainEventType enum values."""

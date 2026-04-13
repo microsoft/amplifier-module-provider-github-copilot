@@ -47,21 +47,30 @@ class TestDenyHookNotConfigurable:
         """deny-destroy:DenyHook:MUST:3 - No config key can disable the deny hook.
 
         Expanded to check for broader patterns that could compromise sovereignty.
+        Reads Python config modules and errors.yaml (authoritative per council verdict).
         """
+        import importlib.resources
+
         import yaml
 
-        # Use __file__-relative paths for robust resolution
-        config_dir = (
-            Path(__file__).parent.parent / "amplifier_module_provider_github_copilot" / "config"
-        )
+        from amplifier_module_provider_github_copilot.config import _models as _models
 
-        config_files = list(config_dir.glob("*.yaml"))
-        # Assert files found before iterating
-        assert config_files, f"No config files found in {config_dir}"
+        # Load errors.yaml (authoritative source — kept as YAML per council verdict)
+        pkg = importlib.resources.files("amplifier_module_provider_github_copilot.config.data")
+        errors_yaml_text = (pkg / "errors.yaml").read_text(encoding="utf-8")
+        errors_data = yaml.safe_load(errors_yaml_text)
+        error_mappings = errors_data.get("error_mappings", [])
 
-        for config_file in config_files:
-            content = yaml.safe_load(config_file.read_text(encoding="utf-8"))
-            if content is None:
+        # Collect all top-level config data dicts to inspect
+        config_sources = [
+            ("models.py/PROVIDER", _models.PROVIDER),
+            ("models.py/MODELS", {"models": _models.MODELS}),
+            ("errors.yaml/error_mappings", {"error_mappings": error_mappings}),
+            ("sdk_protection.py", {}),  # dataclass-based, no dict keys to scan
+        ]
+
+        for source_name, content in config_sources:
+            if not content:
                 continue
 
             # Flatten all keys recursively
@@ -74,18 +83,17 @@ class TestDenyHookNotConfigurable:
                 # Check exact forbidden keys
                 base_key = key_lower.split(".")[-1]  # Get the leaf key name
                 assert base_key not in self.FORBIDDEN_EXACT_KEYS, (
-                    f"Config {config_file.name} has forbidden key '{key}'"
+                    f"Config {source_name} has forbidden key '{key}'"
                 )
 
                 # Check for forbidden pattern combinations
-                # Only flag if key contains both "deny"/"tool"/"hook" AND a disable-like term
                 sovereignty_terms = ["deny", "tool", "hook", "sovereignty"]
                 has_sovereignty_term = any(term in key_lower for term in sovereignty_terms)
 
                 if has_sovereignty_term:
                     for pattern in self.FORBIDDEN_PATTERNS:
                         assert pattern not in key_lower, (
-                            f"Config {config_file.name} has key '{key}' that might "
+                            f"Config {source_name} has key '{key}' that might "
                             f"disable sovereignty (contains '{pattern}')"
                         )
 

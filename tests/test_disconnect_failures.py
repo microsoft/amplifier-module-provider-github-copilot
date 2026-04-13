@@ -172,7 +172,7 @@ class TestDisconnectTimeout:
         """When disconnect() hangs past timeout, error is logged but caller not raised.
 
         The session context manager MUST NOT propagate disconnect timeout to caller.
-        The timeout is sourced from sdk_protection.yaml session.disconnect_timeout_seconds.
+        The timeout is sourced from config/_sdk_protection.py session.disconnect_timeout_seconds.
         Contract: sdk-protection:Session:MUST:3
         """
         import asyncio

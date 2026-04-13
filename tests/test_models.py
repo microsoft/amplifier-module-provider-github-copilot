@@ -6,7 +6,7 @@ Contract: contracts/behaviors.md (ModelDiscoveryError section)
 
 Three-Medium Architecture:
 - Python: Type translation logic (models.py)
-- YAML: Cache policy values (config/model_cache.yaml)
+- Python: Cache policy values (config/_policy.py)
 - Markdown: Invariants (contracts/*.md)
 """
 
@@ -856,27 +856,30 @@ class TestConfigurationFailFast:
     def test_configuration_error_raised_when_yaml_missing(self) -> None:
         """Contract: behaviors:ConfigLoading:MUST:1
 
-        ConfigurationError raised when models.yaml cannot be loaded.
+        ConfigurationError raised when config/models.py is corrupted/missing data.
         Three-Medium Architecture: fail-fast, no hardcoded Python fallbacks.
+
+        Updated: patches FALLBACKS = None to simulate broken installation.
+        sys.modules patching does not intercept already-loaded relative imports;
+        patch.object on the module attribute is the correct approach here.
         """
         from unittest.mock import patch
 
         from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config import (
+            _models as _config_models,
+        )
         from amplifier_module_provider_github_copilot.config_loader import (
             _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
 
-        # Clear cache before test
-        _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
-
-        with patch("importlib.resources.files") as mock_files:
-            mock_files.side_effect = TypeError("Resource not found")
-
+        # Simulate broken installation: FALLBACKS is not a dict (e.g. None)
+        with patch.object(_config_models, "FALLBACKS", None):
+            _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
             with pytest.raises(ConfigurationError) as exc_info:
                 _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
-            assert "models.yaml not found" in str(exc_info.value)
-            assert "YAML is authoritative" in str(exc_info.value)
+            assert "config/_models.py" in str(exc_info.value)
 
         # Clear cache after test to restore normal behavior
         _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
@@ -884,11 +887,16 @@ class TestConfigurationFailFast:
     def test_configuration_error_raised_when_fallbacks_missing(self) -> None:
         """Contract: behaviors:ConfigLoading:MUST:1
 
-        ConfigurationError raised when fallbacks section missing from YAML.
+        ConfigurationError raised when FALLBACKS dict has no required keys.
+
+        Updated: patch config.models.FALLBACKS directly (not importlib.resources).
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config import (
+            _models as _config_models,
+        )
         from amplifier_module_provider_github_copilot.config_loader import (
             _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
@@ -896,12 +904,8 @@ class TestConfigurationFailFast:
         # Clear cache before test
         _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
-        with patch("importlib.resources.files") as mock_files:
-            # Return YAML without fallbacks section
-            mock_path = MagicMock()
-            mock_path.read_text.return_value = "provider:\n  id: test\n"
-            mock_files.return_value.__truediv__.return_value = mock_path
-
+        # Patch FALLBACKS to empty dict — all required keys missing
+        with patch.object(_config_models, "FALLBACKS", {}):
             with pytest.raises(ConfigurationError) as exc_info:
                 _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
@@ -913,11 +917,16 @@ class TestConfigurationFailFast:
     def test_configuration_error_raised_when_required_keys_missing(self) -> None:
         """Contract: behaviors:ConfigLoading:MUST:1
 
-        ConfigurationError raised when required keys missing from fallbacks.
+        ConfigurationError raised when required key missing from FALLBACKS.
+
+        Updated: patch config.models.FALLBACKS directly (not importlib.resources).
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config import (
+            _models as _config_models,
+        )
         from amplifier_module_provider_github_copilot.config_loader import (
             _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
@@ -925,14 +934,8 @@ class TestConfigurationFailFast:
         # Clear cache before test
         _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
-        with patch("importlib.resources.files") as mock_files:
-            # Return YAML with incomplete fallbacks section
-            mock_path = MagicMock()
-            mock_path.read_text.return_value = (
-                "fallbacks:\n  context_window: 128000\n"  # missing max_output_tokens
-            )
-            mock_files.return_value.__truediv__.return_value = mock_path
-
+        # Patch FALLBACKS with only context_window — max_output_tokens missing
+        with patch.object(_config_models, "FALLBACKS", {"context_window": 128000}):
             with pytest.raises(ConfigurationError) as exc_info:
                 _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
@@ -944,11 +947,17 @@ class TestConfigurationFailFast:
     def test_configuration_error_raised_when_yaml_invalid(self) -> None:
         """Contract: behaviors:ConfigLoading:MUST:1
 
-        ConfigurationError raised when YAML is malformed.
+        ConfigurationError raised when FALLBACKS is not a dict (corrupted config).
+
+        Updated: patch config.models.FALLBACKS to a non-dict value to trigger
+        the isinstance(fallbacks, dict) guard in config_loader.py.
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from amplifier_module_provider_github_copilot._compat import ConfigurationError
+        from amplifier_module_provider_github_copilot.config import (
+            _models as _config_models,
+        )
         from amplifier_module_provider_github_copilot.config_loader import (
             _load_model_fallback_values,  # pyright: ignore[reportPrivateUsage]
         )
@@ -956,16 +965,12 @@ class TestConfigurationFailFast:
         # Clear cache before test
         _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
-        with patch("importlib.resources.files") as mock_files:
-            # Return invalid YAML that will cause parse error
-            mock_path = MagicMock()
-            mock_path.read_text.return_value = "fallbacks: [invalid: yaml: structure"
-            mock_files.return_value.__truediv__.return_value = mock_path
-
+        # Patch FALLBACKS to a non-dict (simulates corrupted/invalid config)
+        with patch.object(_config_models, "FALLBACKS", "invalid_string"):
             with pytest.raises(ConfigurationError) as exc_info:
                 _load_model_fallback_values()  # pyright: ignore[reportPrivateUsage]
 
-            assert "Failed to parse models.yaml" in str(exc_info.value)
+            assert "config/_models.py" in str(exc_info.value)
 
         # Clear cache after test
         _load_model_fallback_values.cache_clear()  # pyright: ignore[reportPrivateUsage]

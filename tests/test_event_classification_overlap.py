@@ -10,161 +10,22 @@ from pathlib import Path
 
 import pytest
 
-from amplifier_module_provider_github_copilot.streaming import load_event_config
+from amplifier_module_provider_github_copilot._compat import ConfigurationError
+from amplifier_module_provider_github_copilot.streaming import (
+    DomainEventType,
+    _validate_no_classification_overlap,
+    load_event_config,
+)
 
 
 class TestEventClassificationOverlapValidation:
-    """Validate no overlap between BRIDGE, CONSUME, and DROP categories."""
+    """Validate production event config has no overlaps.
 
-    def test_overlapping_bridge_and_consume_raises_error(self, tmp_path: Path) -> None:
-        """Overlap between bridge and consume must raise ConfigurationError.
-
-        Contract: event-vocabulary:Classification:MUST:1 -- each event type has exactly one
-        classification.
-        """
-        config_yaml = tmp_path / "events.yaml"
-        config_yaml.write_text(
-            """
-event_classifications:
-  bridge:
-    - sdk_type: assistant.message_delta
-      domain_type: CONTENT_DELTA
-      block_type: TEXT
-  consume:
-    - assistant.message_delta  # OVERLAP -- same as bridge entry
-  drop: []
-session_lifecycle:
-  idle_events: [session.idle]
-  error_events: []
-  usage_events: []
-"""
-        )
-
-        with pytest.raises(Exception) as exc_info:
-            load_event_config(config_yaml)
-
-        # Should be ConfigurationError with details about the conflict
-        assert "overlap" in str(exc_info.value).lower() or "assistant.message_delta" in str(
-            exc_info.value
-        )
-
-    def test_overlapping_bridge_and_drop_raises_error(self, tmp_path: Path) -> None:
-        """Overlap between bridge and drop must raise ConfigurationError.
-
-        Contract: event-vocabulary:Classification:MUST:1
-        """
-        config_yaml = tmp_path / "events.yaml"
-        config_yaml.write_text(
-            """
-event_classifications:
-  bridge:
-    - sdk_type: error
-      domain_type: ERROR
-  consume: []
-  drop:
-    - error  # OVERLAP -- same as bridge entry
-session_lifecycle:
-  idle_events: [session.idle]
-  error_events: []
-  usage_events: []
-"""
-        )
-
-        with pytest.raises(Exception) as exc_info:
-            load_event_config(config_yaml)
-
-        assert "overlap" in str(exc_info.value).lower() or "error" in str(exc_info.value)
-
-    def test_overlapping_consume_and_drop_raises_error(self, tmp_path: Path) -> None:
-        """Overlap between consume and drop must raise ConfigurationError.
-
-        Contract: event-vocabulary:Classification:MUST:1
-        """
-        config_yaml = tmp_path / "events.yaml"
-        config_yaml.write_text(
-            """
-event_classifications:
-  bridge: []
-  consume:
-    - session_created
-  drop:
-    - session_created  # OVERLAP -- same as consume entry
-session_lifecycle:
-  idle_events: [session.idle]
-  error_events: []
-  usage_events: []
-"""
-        )
-
-        with pytest.raises(Exception) as exc_info:
-            load_event_config(config_yaml)
-
-        assert "overlap" in str(exc_info.value).lower() or "session_created" in str(exc_info.value)
-
-    def test_wildcard_overlap_detected(self, tmp_path: Path) -> None:
-        """Wildcard patterns that overlap with bridge must be detected.
-
-        Contract: event-vocabulary:Classification:MUST:1
-        """
-        config_yaml = tmp_path / "events.yaml"
-        config_yaml.write_text(
-            """
-event_classifications:
-  bridge:
-    - sdk_type: tool_result_success
-      domain_type: TOOL_CALL
-  consume: []
-  drop:
-    - tool_result_*  # WILDCARD -- matches tool_result_success in bridge
-session_lifecycle:
-  idle_events: [session.idle]
-  error_events: []
-  usage_events: []
-"""
-        )
-
-        with pytest.raises(Exception) as exc_info:
-            load_event_config(config_yaml)
-
-        assert "overlap" in str(exc_info.value).lower() or "tool_result" in str(exc_info.value)
-
-    def test_clean_config_loads_without_error(self, tmp_path: Path) -> None:
-        """Clean config (no overlaps) loads successfully.
-
-        Regression test to ensure validation doesn't break valid configs.
-        """
-        config_yaml = tmp_path / "events.yaml"
-        config_yaml.write_text(
-            """
-event_classifications:
-  bridge:
-    - sdk_type: assistant.message_delta
-      domain_type: CONTENT_DELTA
-      block_type: TEXT
-    - sdk_type: error
-      domain_type: ERROR
-  consume:
-    - session_created
-    - session_destroyed
-  drop:
-    - heartbeat
-    - debug_*
-session_lifecycle:
-  idle_events: [session.idle]
-  error_events: []
-  usage_events: []
-"""
-        )
-
-        # Should NOT raise
-        config = load_event_config(config_yaml)
-
-        assert "assistant.message_delta" in config.bridge_mappings
-        assert "session_created" in config.consume_patterns
-        assert "heartbeat" in config.drop_patterns
+    Contract: event-vocabulary:Classification:MUST:1
+    """
 
     def test_production_config_loads_without_error(self) -> None:
-        """Production config/events.yaml has no overlaps.
+        """Production config has no overlaps.
 
         Regression test for actual production config.
         """
@@ -175,37 +36,6 @@ session_lifecycle:
         assert len(config.bridge_mappings) > 0
         assert len(config.consume_patterns) > 0
         assert len(config.drop_patterns) > 0
-
-    def test_error_message_includes_conflicting_entry(self, tmp_path: Path) -> None:
-        """Error message must include details about which entry conflicts.
-
-        Contract: error-hierarchy:Context:SHOULD:1 -- errors include actionable context.
-        """
-        config_yaml = tmp_path / "events.yaml"
-        config_yaml.write_text(
-            """
-event_classifications:
-  bridge:
-    - sdk_type: usage_update
-      domain_type: USAGE_UPDATE
-  consume:
-    - usage_update
-  drop: []
-session_lifecycle:
-  idle_events: [session.idle]
-  error_events: []
-  usage_events: []
-"""
-        )
-
-        with pytest.raises(Exception) as exc_info:
-            load_event_config(config_yaml)
-
-        error_msg = str(exc_info.value).lower()
-        # Error should identify the conflicting event type
-        assert "usage_update" in error_msg
-        # And ideally which categories conflict
-        assert "bridge" in error_msg or "consume" in error_msg
 
 
 class TestEventPredicateExactMatching:
@@ -625,3 +455,149 @@ class TestUsageEventHelpers:
         assert result["total_tokens"] == 275, (
             f"total_tokens should be input+output=275, got {result.get('total_tokens')}"
         )
+
+
+class TestValidateNoClassificationOverlapValidator:
+    """Direct unit tests for every raise path in _validate_no_classification_overlap.
+
+    Contract: event-vocabulary:Classification:MUST:1 — each event type has exactly
+    one classification. The validator must raise ConfigurationError on any overlap.
+
+    Tests call _validate_no_classification_overlap directly with Python structures.
+    No YAML, no file I/O — this verifies the validator logic in isolation.
+    """
+
+    def test_bridge_and_consume_exact_overlap_raises(self) -> None:
+        """Bridge key that also appears in consume_patterns must raise.
+
+        Line 404 in streaming.py: bridge vs consume exact match branch.
+        """
+        bridge: dict[str, tuple[DomainEventType, str | None]] = {
+            "session.idle": (DomainEventType.TURN_COMPLETE, None)
+        }
+        consume = ["session.idle"]  # Exact key in bridge
+
+        with pytest.raises(ConfigurationError, match="both BRIDGE and CONSUME"):
+            _validate_no_classification_overlap(bridge, consume, [])
+
+    def test_bridge_and_drop_exact_overlap_raises(self) -> None:
+        """Bridge key that also appears in drop_patterns must raise.
+
+        Line 413 in streaming.py: bridge vs drop exact match branch.
+        """
+        bridge: dict[str, tuple[DomainEventType, str | None]] = {
+            "assistant.message": (DomainEventType.TURN_COMPLETE, None)
+        }
+        drop = ["assistant.message"]  # Exact key in bridge
+
+        with pytest.raises(ConfigurationError, match="both BRIDGE and DROP"):
+            _validate_no_classification_overlap(bridge, [], drop)
+
+    def test_consume_and_drop_exact_overlap_raises(self) -> None:
+        """Pattern in both consume_patterns and drop_patterns must raise.
+
+        Line 423 in streaming.py: consume vs drop exact match branch.
+        """
+        consume = ["tool.call"]
+        drop = ["tool.call"]  # Same in both
+
+        with pytest.raises(ConfigurationError, match="both CONSUME and DROP"):
+            _validate_no_classification_overlap({}, consume, drop)
+
+    def test_bridge_type_matches_drop_wildcard_raises(self) -> None:
+        """Bridge event type matched by a drop wildcard pattern must raise.
+
+        Line 434 in streaming.py: bridge type vs drop wildcard branch.
+        """
+        bridge: dict[str, tuple[DomainEventType, str | None]] = {
+            "system.notification": (DomainEventType.TURN_COMPLETE, None)
+        }
+        drop = ["system.*"]  # Wildcard covers the bridge type
+
+        with pytest.raises(ConfigurationError, match="matches DROP wildcard"):
+            _validate_no_classification_overlap(bridge, [], drop)
+
+    def test_bridge_type_matches_consume_wildcard_raises(self) -> None:
+        """Bridge event type matched by a consume wildcard pattern must raise.
+
+        Line 442 in streaming.py: bridge type vs consume wildcard branch.
+        """
+        bridge: dict[str, tuple[DomainEventType, str | None]] = {
+            "session.idle": (DomainEventType.TURN_COMPLETE, None)
+        }
+        consume = ["session.*"]  # Wildcard covers the bridge type
+
+        with pytest.raises(ConfigurationError, match="matches CONSUME wildcard"):
+            _validate_no_classification_overlap(bridge, consume, [])
+
+    def test_consume_entry_matches_drop_wildcard_raises(self) -> None:
+        """Explicit consume entry matched by a drop wildcard must raise.
+
+        Line 454 in streaming.py: consume entry vs drop wildcard branch.
+        """
+        consume = ["tool.call"]  # Explicit (no wildcard)
+        drop = ["tool.*"]  # Wildcard covers tool.call
+
+        with pytest.raises(ConfigurationError, match="matches DROP wildcard"):
+            _validate_no_classification_overlap({}, consume, drop)
+
+    def test_drop_entry_matches_consume_wildcard_raises(self) -> None:
+        """Explicit drop entry matched by a consume wildcard must raise.
+
+        Line 466 in streaming.py: drop entry vs consume wildcard branch.
+        """
+        consume = ["assistant.*"]  # Wildcard consume pattern
+        drop = ["assistant.finished"]  # Explicit drop, matched by consume wildcard
+
+        with pytest.raises(ConfigurationError, match="matches CONSUME wildcard"):
+            _validate_no_classification_overlap({}, consume, drop)
+
+    def test_valid_disjoint_config_does_not_raise(self) -> None:
+        """Fully disjoint bridge/consume/drop must not raise (false-positive guard)."""
+        bridge: dict[str, tuple[DomainEventType, str | None]] = {
+            "session.idle": (DomainEventType.TURN_COMPLETE, None)
+        }
+        consume = ["tool.call", "tool.result"]
+        drop = ["unknown.*", "vendor.*"]
+
+        # Must not raise
+        _validate_no_classification_overlap(bridge, consume, drop)
+
+
+class TestEmptyIdleEventsRaises:
+    """Validate that load_event_config raises on empty session_lifecycle.idle_events.
+
+    Contract: streaming-contract:SessionLifecycle:MUST:1 — provider cannot detect
+    session completion without idle_events. This is fail-fast at load time.
+
+    Line 548 in streaming.py: raise ConfigurationError when idle_event_types is empty.
+    """
+
+    def test_empty_idle_events_raises_configuration_error(self, tmp_path: Path) -> None:
+        """events.yaml with empty idle_events must raise ConfigurationError.
+
+        This is the session-hang prevention guard. An empty idle_events set means
+        the provider can never detect session.idle, causing infinite wait.
+        """
+        import yaml
+
+        # Minimal YAML with empty idle_events — triggers the fail-fast guard
+        bad_yaml = {
+            "event_classifications": {
+                "bridge": [],
+                "consume": [],
+                "drop": [],
+            },
+            "finish_reasons": {},
+            "streaming_emission": {},
+            "session_lifecycle": {
+                "idle_events": [],  # Empty — must raise
+                "error_events": ["session.error"],
+                "usage_events": ["assistant.usage"],
+            },
+        }
+        config_file = tmp_path / "events.yaml"
+        config_file.write_text(yaml.dump(bad_yaml), encoding="utf-8")
+
+        with pytest.raises(ConfigurationError, match="session_lifecycle.idle_events"):
+            load_event_config(config_path=config_file)

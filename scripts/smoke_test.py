@@ -9,7 +9,7 @@ early, before running the full test suite.
 
 Why This Exists
 ---------------
-The full test suite (878+ tests) takes ~2 minutes. This smoke test runs in
+The full test suite (1100+ tests) takes ~2 minutes. This smoke test runs in
 ~5 seconds and validates the critical path:
 
   1. Provider initializes correctly
@@ -21,7 +21,7 @@ The full test suite (878+ tests) takes ~2 minutes. This smoke test runs in
 When to Use
 -----------
   - After pulling latest changes
-  - After modifying _platform.py, client.py, or provider.py
+  - After modifying _platform.py, sdk_adapter/client.py, or provider.py
   - After upgrading github-copilot-sdk
   - Before submitting a PR
   - When debugging "it works on my machine" issues
@@ -52,13 +52,9 @@ Exit Codes
 
 For Full Testing
 ----------------
-  pytest tests/test_provider.py -v    # Completion tests
-  make test                           # Full suite
+  pytest tests/ -q                    # Full suite
+  make test                           # Full suite (via make)
 
-Authors
--------
-Created during v1.0.3 hotfix testing (March 2026) to enable rapid
-cross-platform verification of Windows/WSL compatibility fixes.
 """
 import argparse
 import asyncio
@@ -223,7 +219,7 @@ Examples:
   python scripts/smoke_test.py --verbose    # Detailed output (shows model list)
   
 For full completion testing, use:
-  pytest tests/test_provider.py -v -k complete
+  pytest tests/ -q --tb=short
         """,
     )
     parser.add_argument(

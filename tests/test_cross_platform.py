@@ -312,7 +312,7 @@ class TestWindowsEventLoopPolicy:
         import asyncio
 
         policy = asyncio.get_event_loop_policy()
-        assert isinstance(policy, asyncio.WindowsSelectorEventLoopPolicy), (
+        assert isinstance(policy, asyncio.WindowsSelectorEventLoopPolicy), (  # pyright: ignore[reportAttributeAccessIssue]
             f"Expected WindowsSelectorEventLoopPolicy, got {type(policy)}"
         )
 

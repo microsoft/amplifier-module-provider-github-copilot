@@ -693,25 +693,17 @@ class TestThinkingBlockConsolidation:
 
         # 3 reasoning tokens with empty text events between them (SDK pattern)
         for i in range(3):
-            accumulator.add(
-                DomainEvent(type=CD, data={"text": ""}, block_type="TEXT")
-            )
-            accumulator.add(
-                DomainEvent(type=CD, data={"text": f"token{i}"}, block_type="THINKING")
-            )
+            accumulator.add(DomainEvent(type=CD, data={"text": ""}, block_type="TEXT"))
+            accumulator.add(DomainEvent(type=CD, data={"text": f"token{i}"}, block_type="THINKING"))
 
         accumulator.add(
-            DomainEvent(
-                type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"}
-            )
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
         )
 
         response = accumulator.to_chat_response()
 
         assert response.content_blocks is not None
-        thinking_blocks = [
-            b for b in response.content_blocks if isinstance(b, ThinkingContent)
-        ]
+        thinking_blocks = [b for b in response.content_blocks if isinstance(b, ThinkingContent)]
         assert len(thinking_blocks) == 1, (
             f"streaming-contract:Accumulation:MUST:3 — must produce ONE ThinkingContent "
             f"in content_blocks regardless of SDK interleaving. "

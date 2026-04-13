@@ -6,46 +6,6 @@ Contract: contracts/provider-protocol.md
 
 from pathlib import Path
 
-
-class TestAC1LoadEventConfigCrash:
-    """AC-1: Fix load_event_config crash on missing file."""
-
-    def test_load_event_config_missing_file_returns_default(self):
-        """load_event_config with non-existent path returns default config."""
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        result = load_event_config("/nonexistent/path/events.yaml")
-
-        # Should return default config, not crash
-        assert result is not None
-        assert hasattr(result, "bridge_mappings")
-        assert hasattr(result, "consume_patterns")
-        assert hasattr(result, "drop_patterns")
-
-    def test_load_event_config_missing_file_has_empty_defaults(self):
-        """Default config should have empty collections."""
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        result = load_event_config("/nonexistent/path/events.yaml")
-
-        assert result.bridge_mappings == {}
-        assert result.consume_patterns == []
-        assert result.drop_patterns == []
-        assert result.finish_reason_map == {}  # AC-5: verify finish_reason_map also empty
-
-    def test_load_event_config_accepts_path_object(self):
-        """load_event_config accepts Path objects (AC-1 type contract)."""
-        from pathlib import Path
-
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        # Should accept Path without error
-        result = load_event_config(Path("/nonexistent/path/events.yaml"))
-
-        assert result is not None
-        assert result.bridge_mappings == {}
-
-
 # TestAC2DeadAsserts removed - the test was for completion.py which is now deleted.
 # The production path (provider._execute_sdk_completion) uses CopilotClientWrapper
 # which is a properly implemented context manager that never yields None.
@@ -94,7 +54,7 @@ class TestAC3RetryAfterRegex:
 
 
 class TestAC5FinishReasonMap:
-    """AC-5: Load finish_reason_map from events.yaml."""
+    """AC-5: Verify finish_reason_map in event config."""
 
     def test_event_config_has_finish_reason_map(self):
         """EventConfig should have finish_reason_map field."""
@@ -107,23 +67,14 @@ class TestAC5FinishReasonMap:
         assert "finish_reason_map" in field_names, "EventConfig should have finish_reason_map field"
 
     def test_load_event_config_loads_finish_reason_map(self):
-        """load_event_config should populate finish_reason_map from YAML."""
-        from pathlib import Path
-
+        """load_event_config should populate finish_reason_map."""
         from amplifier_module_provider_github_copilot.streaming import load_event_config
 
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "events.yaml"
-        )
-
-        result = load_event_config(str(config_path))
+        result = load_event_config()
 
         assert hasattr(result, "finish_reason_map")
         assert result.finish_reason_map is not None
-        # P2 Fix #3: YAML now uses lowercase values per amplifier-core proto
+        # Values MUST be lowercase per amplifier-core proto
         # Valid values: "stop", "tool_calls", "length", "content_filter"
         assert result.finish_reason_map.get("end_turn") == "stop"
         assert result.finish_reason_map.get("stop") == "stop"
@@ -211,92 +162,19 @@ class TestAC6TombstoneFiles:
 
 
 class TestSessionLifecycleValidation:
-    """Fail-fast validation for session_lifecycle config.
+    """Verify session lifecycle config has required event types.
 
     Contract: streaming-contract:SessionLifecycle:MUST:1
-
-    session_lifecycle is CORE config, not observability:
-    - If idle_events is empty, provider cannot detect session completion
-    - This causes infinite hang with no error message
-    - Developer experience: fail loudly at startup, not silently at runtime
-
-    Bug discovery: Session hung for 4+ minutes because load_event_config
-    returned empty sets, and is_idle_event() always returned False.
     """
 
-    def test_missing_idle_events_raises_configuration_error(self, tmp_path: Path):
-        """load_event_config MUST raise ConfigurationError if idle_events is empty.
+    def test_production_config_has_valid_session_lifecycle(self):
+        """Production event config MUST have valid session_lifecycle config.
 
-        This is fail-fast at load time, not silent degradation.
-        Developers need loud failures, not 4-minute debugging sessions.
-        """
-        import pytest
-        from amplifier_core.llm_errors import ConfigurationError
-
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        # Create events.yaml without session_lifecycle
-        events_yaml = tmp_path / "events.yaml"
-        events_yaml.write_text(
-            """
-event_classifications:
-  bridge: []
-  consume: []
-  drop: []
-""",
-            encoding="utf-8",
-        )
-
-        with pytest.raises(ConfigurationError) as exc_info:
-            load_event_config(str(events_yaml))
-
-        assert "idle_events" in str(exc_info.value)
-        assert "session_lifecycle" in str(exc_info.value)
-
-    def test_empty_idle_events_raises_configuration_error(self, tmp_path: Path):
-        """Explicitly empty idle_events list MUST also raise ConfigurationError."""
-        import pytest
-        from amplifier_core.llm_errors import ConfigurationError
-
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        # Create events.yaml with empty idle_events
-        events_yaml = tmp_path / "events.yaml"
-        events_yaml.write_text(
-            """
-event_classifications:
-  bridge: []
-  consume: []
-  drop: []
-session_lifecycle:
-  idle_events: []
-  error_events: []
-  usage_events: []
-""",
-            encoding="utf-8",
-        )
-
-        with pytest.raises(ConfigurationError) as exc_info:
-            load_event_config(str(events_yaml))
-
-        assert "idle_events" in str(exc_info.value)
-
-    def test_production_events_yaml_has_valid_session_lifecycle(self):
-        """Production events.yaml MUST have valid session_lifecycle config.
-
-        This verifies our shipped YAML is correct and won't cause runtime failures.
+        Verifies the hardcoded config has the expected lifecycle event types.
         """
         from amplifier_module_provider_github_copilot.streaming import load_event_config
 
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "events.yaml"
-        )
-
-        # Should not raise - validates at load time
-        config = load_event_config(str(config_path))
+        config = load_event_config()
 
         # Verify session_lifecycle is populated
         assert config.idle_event_types, "idle_event_types must not be empty"

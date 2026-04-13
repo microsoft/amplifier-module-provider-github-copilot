@@ -27,21 +27,6 @@ import pytest
 class TestRetryConfigLoading:
     """Tests for retry config loading from YAML."""
 
-    def test_retry_config_file_exists(self) -> None:
-        """Contract: behaviors.md - retry config must be loadable.
-
-        behaviors:Retry:MUST:1 - max_attempts honored
-        """
-        from pathlib import Path
-
-        config_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "config"
-            / "retry.yaml"
-        )
-        assert config_path.exists(), "retry.yaml must exist in config/"
-
     def test_load_retry_config_returns_dataclass(self) -> None:
         """Config loader must return structured RetryConfig."""
         from amplifier_module_provider_github_copilot.provider import load_retry_config

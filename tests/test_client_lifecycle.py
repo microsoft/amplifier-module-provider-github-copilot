@@ -782,7 +782,7 @@ class TestTokenFallbackSecurity:
 class TestPrewarmSubprocess:
     """Pre-warming: SDK subprocess initialization at mount() time.
 
-    When `sdk.prewarm_subprocess: true` in sdk_protection.yaml, the SDK
+    When `sdk.prewarm_subprocess: true` in config/_sdk_protection.py, the SDK
     subprocess should be spawned during mount() rather than during the
     first complete() call. This moves ~2s latency from user-visible
     first-request time to invisible mount time.

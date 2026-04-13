@@ -174,6 +174,7 @@ class TestErrorsYamlSchema:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
         with config_path.open(encoding="utf-8") as f:
@@ -197,6 +198,7 @@ class TestErrorsYamlSchema:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
         with config_path.open(encoding="utf-8") as f:
@@ -225,6 +227,7 @@ class TestErrorsYamlSchema:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
         with config_path.open(encoding="utf-8") as f:

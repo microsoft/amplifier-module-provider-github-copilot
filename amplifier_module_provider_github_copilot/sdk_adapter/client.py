@@ -17,11 +17,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+from amplifier_core.llm_errors import ConfigurationError, ProviderUnavailableError
+
 from .._permissions import ensure_executable
 from .._platform import locate_cli_binary
 from ..config_loader import load_sdk_protection_config
-from ..error_translation import ErrorConfig, translate_sdk_error
-from ..security_redaction import safe_log_message
+
+# Domain modules are NOT imported at module level — importing CopilotClientWrapper
+# must not pull in error_translation or security_redaction as side effects.
+# translate_sdk_error and safe_log_message are resolved lazily on first use
+# and may be overridden via __init__ for testing.
+# Contract: sdk-boundary:Membrane:MUST:1 (spirit — membrane stays isolated at import)
 
 if TYPE_CHECKING:
     from .types import SessionHandle
@@ -106,15 +112,17 @@ def deny_permission_request(request: Any) -> Any:
     }
 
 
-def _load_error_config_once() -> ErrorConfig:
+def _load_error_config_once() -> Any:
     """Load error config with fallback path resolution.
 
     Delegates to load_error_config() which handles:
     - importlib.resources loading (installed wheel)
     - File path fallback (dev/test)
     - context_extraction parsing
+
+    Returns ErrorConfig at runtime; typed as Any to avoid module-level domain import.
     """
-    from ..error_translation import load_error_config
+    from ..error_translation import ErrorConfig, load_error_config
 
     # Delegate to unified load_error_config() which handles both
     # importlib.resources and file path scenarios with proper context_extraction
@@ -188,8 +196,24 @@ class CopilotClientWrapper:
     Only the auto-initialized client is owned and stopped on close().
     """
 
-    def __init__(self, *, sdk_client: Any = None) -> None:
-        """Initialize wrapper with optional pre-existing SDK client."""
+    def __init__(
+        self,
+        *,
+        sdk_client: Any = None,
+        _translate_error: Any = None,
+        _safe_log: Any = None,
+    ) -> None:
+        """Initialize wrapper with optional pre-existing SDK client.
+
+        Args:
+            sdk_client: Pre-existing SDK client (injected for testing).
+            _translate_error: Error translation callable (exc, config) -> Exception.
+                              Defaults to translate_sdk_error from error_translation.
+                              Override in tests to verify translator call sites.
+            _safe_log: Log-sanitizing callable matching safe_log_message signature.
+                       Defaults to safe_log_message from security_redaction.
+                       Override in tests to verify logging call sites.
+        """
         self._sdk_client: Any = sdk_client
         self._owned_client: Any = None  # Only set when we created the client ourselves
         self._error_config: Any = None
@@ -198,6 +222,9 @@ class CopilotClientWrapper:
         self._disconnect_failures: int = 0  # Track disconnect failures for escalation
         self._stopped: bool = False  # Track whether client has been stopped
         self._copilot_pid: int | None = None  # SDK subprocess PID for log correlation
+        # Injected or lazily resolved on first use — never None at call sites.
+        self.__translate_error: Any = _translate_error
+        self.__safe_log: Any = _safe_log
 
     def is_healthy(self) -> bool:
         """Check if the client is healthy and usable.
@@ -221,6 +248,22 @@ class CopilotClientWrapper:
         # If we have an owned client that exists, we're healthy
         # (we don't do network probes here - that happens at session creation)
         return True
+
+    def _get_translate_error(self) -> Any:
+        """Return translate_sdk_error callable, resolving lazily on first use."""
+        if self.__translate_error is None:
+            from ..error_translation import translate_sdk_error
+
+            self.__translate_error = translate_sdk_error
+        return self.__translate_error
+
+    def _get_safe_log(self) -> Any:
+        """Return safe_log_message callable, resolving lazily on first use."""
+        if self.__safe_log is None:
+            from ..security_redaction import safe_log_message
+
+            self.__safe_log = safe_log_message
+        return self.__safe_log
 
     def _get_error_config(self) -> Any:
         if self._error_config is None:
@@ -291,8 +334,6 @@ class CopilotClientWrapper:
                     # This prevents unintended privilege escalation from falling back
                     # to ambient/default authentication with potentially broader permissions.
                     # OWASP A07: Identification and Authentication Failures
-                    from ..error_translation import ConfigurationError
-
                     raise ConfigurationError(
                         "Explicit GitHub token provided via environment variable, but SDK's "
                         "SubprocessConfig is unavailable (SDK version mismatch). Cannot apply "
@@ -328,7 +369,6 @@ class CopilotClientWrapper:
                 return self._owned_client
 
             except ImportError as e:
-                from ..error_translation import ProviderUnavailableError
                 from ..security_redaction import redact_sensitive_text
 
                 raise ProviderUnavailableError(
@@ -337,7 +377,7 @@ class CopilotClientWrapper:
                 ) from e
             except Exception as e:
                 error_config = self._get_error_config()
-                raise translate_sdk_error(e, error_config) from e
+                raise self._get_translate_error()(e, error_config) from e
 
     async def prewarm(self) -> None:
         """Pre-warm SDK subprocess for lower first-request latency.
@@ -449,7 +489,7 @@ class CopilotClientWrapper:
             logger.debug("[CLIENT] Session created: %s", getattr(sdk_session, "session_id", "?"))
         except Exception as e:
             error_config = self._get_error_config()
-            raise translate_sdk_error(e, error_config) from e
+            raise self._get_translate_error()(e, error_config) from e
 
         try:
             # P2-11: Return SessionHandle façade instead of raw SDK session
@@ -471,7 +511,7 @@ class CopilotClientWrapper:
                     # Track disconnect failures and escalate after threshold
                     self._disconnect_failures += 1
                     msg = "[CLIENT] Error disconnecting session: %s"
-                    logger.warning(*safe_log_message(msg, disconnect_err))
+                    logger.warning(*self._get_safe_log()(msg, disconnect_err))
                     if self._disconnect_failures > 3:
                         logger.error(
                             "[CLIENT] Multiple disconnect failures (%d) — potential resource leak",
@@ -487,7 +527,7 @@ class CopilotClientWrapper:
                 await self._owned_client.stop()
                 logger.info("[CLIENT] Copilot client stopped")
             except Exception as e:
-                logger.warning(*safe_log_message("[CLIENT] Error stopping client: %s", e))
+                logger.warning(*self._get_safe_log()("[CLIENT] Error stopping client: %s", e))
             finally:
                 self._owned_client = None
 
@@ -513,4 +553,4 @@ class CopilotClientWrapper:
             return list(models)
         except Exception as e:
             error_config = self._get_error_config()
-            raise translate_sdk_error(e, error_config) from e
+            raise self._get_translate_error()(e, error_config) from e

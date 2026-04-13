@@ -33,6 +33,7 @@ class TestUnifiedErrorConfigLoading:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
 
@@ -91,6 +92,7 @@ class TestUnifiedErrorConfigLoading:
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
             / "config"
+            / "data"
             / "errors.yaml"
         )
 

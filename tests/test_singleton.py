@@ -304,7 +304,7 @@ class TestLockTimeout:
         """30s lock timeout raises TimeoutError when lock is held.
 
         Contract: sdk-protection:Singleton:MUST:8
-        Timeout value sourced from sdk_protection.yaml singleton.lock_timeout_seconds.
+        Timeout value sourced from config/_sdk_protection.py singleton.lock_timeout_seconds.
         """
         import threading
 

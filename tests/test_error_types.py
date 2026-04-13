@@ -31,6 +31,7 @@ def error_config() -> ErrorConfig:
         Path(__file__).parent.parent
         / "amplifier_module_provider_github_copilot"
         / "config"
+        / "data"
         / "errors.yaml"
     )
     return load_error_config(config_path)
