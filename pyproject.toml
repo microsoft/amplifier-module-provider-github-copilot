@@ -40,7 +40,7 @@ Documentation = "https://github.com/microsoft/amplifier-module-provider-github-c
 dev = [
     "ruff>=0.3.0",
     "pyright>=1.1.350",
-    "pytest>=8.0.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.21",
     "pytest-cov>=7.0.0",
     # amplifier-core from PyPI (binary wheels, no Rust compilation needed)
