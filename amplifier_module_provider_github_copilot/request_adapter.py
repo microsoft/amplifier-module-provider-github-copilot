@@ -486,9 +486,12 @@ def build_request_payload_for_observability(
     request: Any,
     internal_request: CompletionRequest,
 ) -> dict[str, Any]:
-    """Build observability payload for llm:request event.
+    """Build observability payload for llm:request event (raw=true debug mode).
 
     Contract: observability:Verbosity:MUST:1
+    Contract: observability:Debug:MUST:1 — tool_schemas (full schema per tool)
+    Contract: observability:Debug:MUST:2 — system_message_length
+    Contract: observability:Debug:MUST:3 — prompt_length (NOT full prompt text)
 
     Tool Format Support:
         This function handles two tool specification formats:
@@ -506,24 +509,36 @@ def build_request_payload_for_observability(
         internal_request: The converted internal CompletionRequest.
 
     Returns:
-        Dict suitable for raw_request parameter of emit_request().
+        Dict written under the 'raw' key in llm:request when raw=true.
+        Passed through security_redaction.redact_dict() before emission.
     """
-    # Extract tool names safely
-    # Note: tools can be ToolSpec objects (attribute access) or dicts
-    # Contract: observability:Payload:SHOULD:2 — Type-safe tool name extraction
     tool_names: list[str] = []
+    tool_schemas: list[dict[str, Any]] = []
+
     if internal_request.tools:
         for tool in internal_request.tools:
             name: str | None = None
+            description: str | None = None
+            parameters: dict[str, Any] | None = None
 
             # Format 1: ToolSpec object (Amplifier kernel passes these)
-            # Has .name attribute directly (Pydantic BaseModel)
+            # Has .name attribute directly (Pydantic BaseModel / dataclass / SimpleNamespace)
+            # Contract: observability:Payload:SHOULD:2 — Type-safe tool name extraction
             if hasattr(tool, "name") and not isinstance(tool, dict):
                 name_raw = getattr(tool, "name", None)
                 if isinstance(name_raw, str):
                     name = name_raw
+                desc_raw = getattr(tool, "description", None)
+                if isinstance(desc_raw, str):
+                    description = desc_raw[:300]  # truncate — descriptions can be large
+                params_raw = (
+                    getattr(tool, "parameters", None)
+                    or getattr(tool, "input_schema", None)
+                )
+                if isinstance(params_raw, dict):
+                    parameters = params_raw
 
-            # Format 2: Dict — check if it's a dict before calling .get()
+            # Format 2: Dict — check isinstance before .get()
             elif isinstance(tool, dict):
                 # Subformat 2a: Nested (OpenAI-style) {"function": {"name": "..."}}
                 func_raw = tool.get("function")  # type: ignore[reportUnknownMemberType,reportUnknownVariableType]
@@ -531,20 +546,47 @@ def build_request_payload_for_observability(
                     name_raw = func_raw.get("name")  # type: ignore[reportUnknownVariableType]
                     if isinstance(name_raw, str):
                         name = name_raw
+                    desc_raw = func_raw.get("description")  # type: ignore[reportUnknownVariableType]
+                    if isinstance(desc_raw, str):
+                        description = desc_raw[:300]
+                    params_raw = func_raw.get("parameters") or func_raw.get("input_schema")  # type: ignore[reportUnknownVariableType]
+                    if isinstance(params_raw, dict):
+                        parameters = params_raw
                 # Subformat 2b: Flat (Amplifier-native) {"name": "..."}
                 elif "name" in tool:
                     name_raw = tool.get("name")  # type: ignore[reportUnknownVariableType]
                     if isinstance(name_raw, str):
                         name = name_raw
+                    desc_raw = tool.get("description")  # type: ignore[reportUnknownVariableType]
+                    if isinstance(desc_raw, str):
+                        description = desc_raw[:300]
+                    params_raw = tool.get("parameters") or tool.get("input_schema")  # type: ignore[reportUnknownVariableType]
+                    if isinstance(params_raw, dict):
+                        parameters = params_raw
 
             if name:
                 tool_names.append(name)
+                schema: dict[str, Any] = {"name": name}
+                if description:
+                    schema["description"] = description
+                if parameters is not None:
+                    schema["parameters"] = parameters
+                tool_schemas.append(schema)
+
+    sys_msg = internal_request.system_message
+    prompt = internal_request.prompt or ""
 
     return {
+        # Analytics fields (always present — useful for summary views)
         "model": model,
         "message_count": len(getattr(request, "messages", [])),
         "tool_names": tool_names,
-        "has_system_message": bool(internal_request.system_message),
+        "has_system_message": bool(sys_msg),
+        # Debug fields (Contract: observability:Debug:MUST:1/2/3)
+        # These are the reason raw=true exists: actual schemas, not just names.
+        "tool_schemas": tool_schemas,
+        "system_message_length": len(sys_msg) if sys_msg else 0,
+        "prompt_length": len(prompt),
     }
 
 

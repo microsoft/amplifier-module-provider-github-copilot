@@ -1,9 +1,9 @@
 # Contract: Observability
 
 ## Version
-- **Current:** 1.2 (Dead Code Removed)
+- **Current:** 1.3 (Raw Debug Payload Defined)
 - **Module Reference:** provider, completion
-- **Config:** amplifier_module_provider_github_copilot/config/observability.yaml
+- **Config:** No file — `raw` flag is a provider `config:` key (see behaviors:Retry:MUST:7 for config key format)
 - **Status:** IMPLEMENTED (event emission)
 - **Note:** Event emission implemented. OTEL spans deferred to future version.
 
@@ -67,21 +67,44 @@ Following the verbosity collapse principle:
 2. **MUST** apply security redaction before including raw payloads
 3. **MUST NOT** create separate `:debug` or `:raw` event suffixes
 
+## Raw Payload Content Policy (Debug Mode)
+
+When `raw=true`, the `llm:request` event payload **MUST** include:
+
+1. **MUST** include `tool_schemas` — list of dicts, one per tool, each containing `name` (str) and
+   `parameters` (dict schema). This is the primary debugging value: it lets you verify the exact
+   schema sent to the SDK when tool calls fail or behave unexpectedly.
+   - `description` SHOULD be included when present, truncated to 300 chars.
+   - MUST use isinstance/hasattr guards for both ToolSpec object and dict tool formats.
+
+2. **MUST** include `system_message_length` (int) — character count of the system message passed
+   to the SDK session, or 0 if none. Allows verification that a system message was sent without
+   including its full content in the event log.
+
+3. **MUST** include `prompt_length` (int) — character count of the formatted prompt string.
+   MUST NOT include the full prompt text (user data, unbounded size).
+
+**Why not include full prompt/system_message content:**
+- Prompts are user data and can be 100k+ characters in multi-turn sessions
+- System messages contain bundle persona instructions (large, config-level data)
+- Length is sufficient to diagnose "message not sent" vs "message too large" class of bugs
+
 ---
 
 ## Config Schema
 
-```yaml
-# config/observability.yaml
-version: "1.0"
+The `raw` flag is set in the provider's `config:` block (Amplifier provider YAML), not in a
+separate observability config file. No `observability.yaml` exists.
 
-events:
-  raw: false
+```yaml
+# Example: ~/.amplifier/.../providers/github-copilot.yaml
+provider: github-copilot
+config:
+  raw: true   # NEVER commit — debug only
 ```
 
-**Note:** `events.enabled` was removed as dead config. Event emission is always on when observability is loaded. To disable events, don't subscribe to hooks.
-
-**Note:** `otel:` and `logging:` sections were removed as dead code — the Python implementation never parsed these values.
+**Note:** `events.enabled`, `otel:`, and `logging:` were removed as dead config — the Python
+implementation never parsed these values.
 
 ---
 
@@ -96,6 +119,9 @@ events:
 | `observability:Events:MUST:5` | MUST NOT assume coordinator.hooks.emit() exists |
 | `observability:Events:SHOULD:3` | Include sdk_pid in llm:response |
 | `observability:Verbosity:MUST:1` | Single raw flag |
+| `observability:Debug:MUST:1` | raw=true → tool_schemas list in llm:request raw payload |
+| `observability:Debug:MUST:2` | raw=true → system_message_length int in llm:request raw payload |
+| `observability:Debug:MUST:3` | raw=true → prompt_length int in llm:request raw payload |
 | `observability:Payload:SHOULD:1` | Type-safe content counting |
 | `observability:Payload:SHOULD:2` | Type-safe tool name extraction |
 | `observability:Redaction:SHOULD:1` | Redaction audit trail |
