@@ -63,7 +63,7 @@ Provider MAY create internal spans for:
 
 Following the verbosity collapse principle:
 
-1. **MUST** use single `raw_payloads: false` flag (not tiered debug modes)
+1. **MUST** use single `raw: false` flag (not tiered debug modes)
 2. **MUST** apply security redaction before including raw payloads
 3. **MUST NOT** create separate `:debug` or `:raw` event suffixes
 
@@ -76,7 +76,7 @@ Following the verbosity collapse principle:
 version: "1.0"
 
 events:
-  raw_payloads: false
+  raw: false
 ```
 
 **Note:** `events.enabled` was removed as dead config. Event emission is always on when observability is loaded. To disable events, don't subscribe to hooks.
@@ -95,7 +95,7 @@ events:
 | `observability:Events:MUST:4` | Work without coordinator (standalone mode) |
 | `observability:Events:MUST:5` | MUST NOT assume coordinator.hooks.emit() exists |
 | `observability:Events:SHOULD:3` | Include sdk_pid in llm:response |
-| `observability:Verbosity:MUST:1` | Single raw_payloads flag |
+| `observability:Verbosity:MUST:1` | Single raw flag |
 | `observability:Payload:SHOULD:1` | Type-safe content counting |
 | `observability:Payload:SHOULD:2` | Type-safe tool name extraction |
 | `observability:Redaction:SHOULD:1` | Redaction audit trail |

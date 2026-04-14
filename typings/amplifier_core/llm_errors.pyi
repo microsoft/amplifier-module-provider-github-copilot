@@ -8,7 +8,8 @@ class LLMError(Exception):
     message: str
     provider: str | None
     retryable: bool
-    
+    delay_multiplier: float
+
     def __init__(
         self,
         message: str,

@@ -170,6 +170,7 @@ complete() called
 | `provider-protocol:complete:MUST:6` | Detects fake tool calls and retries with correction |
 | `provider-protocol:complete:MUST:7` | Extracts images from last user message |
 | `provider-protocol:complete:MUST:8` | Forwards images as BlobAttachments to SDK |
+| `provider-protocol:complete:MUST:9` | When malformed tool sequences are detected (tool call without matching tool result in current request), MUST insert synthetic tool-result messages before prompt extraction and MUST log one WARNING per repair event; MUST NOT raise |
 
 ---
 

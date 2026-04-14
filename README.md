@@ -100,13 +100,6 @@ amplifier init
 > - **macOS:** Add `export GITHUB_TOKEN=$(gh auth token)` to `~/.zshrc`
 > - **Windows:** Add `$env:GITHUB_TOKEN = (gh auth token)` to your PowerShell profile (`$PROFILE`)
 
-### Alternative: Non-interactive
-
-```bash
-# Requires: GITHUB_TOKEN set AND provider installed
-amplifier init --yes
-```
-
 ### Bundle reference
 
 Reference the provider directly from a bundle YAML using a branch or commit SHA:
@@ -178,9 +171,35 @@ providers:
 | Key | Default | Description |
 | --- | --- | --- |
 | `default_model` | `"claude-opus-4.5"` | Model used when the caller does not specify one. Any ID from `list_models()` is valid. |
+| `raw` | `false` | Include raw SDK payloads as a `"raw"` field in `llm:request` / `llm:response` events. See [Raw Payload Logging](#raw-payload-logging). |
 
-> **Note:** Retry parameters, session timeouts, and event queue sizes use fixed defaults
-> and cannot be overridden via bundle config. The request timeout defaults to 3600 s.
+### Raw Payload Logging
+
+Set `raw: true` to capture the exact data exchanged with the Copilot SDK before any processing:
+
+```yaml
+providers:
+  - module: provider-github-copilot
+    config:
+      raw: true
+```
+
+When enabled, the standard `llm:request` and `llm:response` events include an additional `"raw"` field containing the complete, redacted payload:
+
+| Event | `"raw"` field contains |
+| --- | --- |
+| `llm:request` | Complete request payload sent to the SDK (model, prompt, tools, system message) |
+| `llm:response` | Complete response object returned by the SDK |
+
+Raw payloads pass through `redact_dict()` — tokens and credentials are scrubbed before the field is added to the event.
+
+> **Warning:** Raw events contain the full conversation content including tool definitions
+> and system messages. Use only for deep provider integration debugging. Disable in
+> production to avoid high log volume and potential data exposure.
+
+> **Note:** Accepts `true`/`false` (bool) or strings `"true"`, `"1"`, `"yes"` (truthy) /
+> anything else (falsy). The string `"false"` is correctly treated as disabled —
+> `bool("false") == True` is a Python footgun that `_parse_raw_flag` guards against.
 
 ### Retry and Error Handling
 
@@ -228,16 +247,29 @@ sleep  = max(0, delay + jitter)
 | 1 | 2 s | 2 s | 1.8 – 2.2 s |
 | 2 | 4 s | 4 s | 3.6 – 4.4 s |
 
-#### Retry Defaults
+**Example: Overloaded signal (10× multiplier, defaults)**
 
-Retry parameters are fixed and cannot be changed via bundle config.
+When a `RateLimitError` carries `delay_multiplier > 1.0` (set by the provider on overloaded responses), the base delay (after capping, with jitter) is multiplied. Default `overloaded_delay_multiplier` is `10.0`:
 
-| Parameter | Default | Description |
+| Attempt | base_delay | capped | ×10 | Sleep range (±10%) |
+| --- | --- | --- | --- | --- |
+| 0 (first retry) | 1 s | 1 s | 10 s | 9 – 11 s |
+| 1 | 2 s | 2 s | 20 s | 18 – 22 s |
+
+With default `max_retries: 2`, total wait is ≈ 30 s before the request is abandoned.
+`Retry-After` from the server header always takes precedence over the multiplied delay.
+
+#### Retry Configuration
+
+Retry parameters can be overridden via bundle config. All keys are optional; omitted keys use the defaults shown.
+
+| Config Key | Default | Description |
 | --- | --- | --- |
-| `max_attempts` | `3` | Maximum retry attempts before surfacing the error to the caller |
-| `base_delay_ms` | `1000` | Base delay in milliseconds (doubles each attempt) |
-| `max_delay_ms` | `30000` | Delay cap in milliseconds before jitter is applied |
-| `jitter_factor` | `0.1` | Jitter fraction applied as ± of the capped delay (0.0 – 1.0) |
+| `max_retries` | `2` | Number of retries after the first attempt (`0` = fail fast, single attempt) |
+| `min_retry_delay` | `1.0` | Minimum base delay in seconds (doubles each attempt) |
+| `max_retry_delay` | `30.0` | Maximum delay cap in seconds before jitter is applied |
+| `retry_jitter` | `0.1` | Jitter fraction applied as ± of the capped delay (`0.0`–`1.0`) |
+| `overloaded_delay_multiplier` | `10.0` | Multiplier applied to backoff when an overloaded signal is present (e.g. `RateLimitError` with `delay_multiplier > 1.0`); `Retry-After` still takes precedence. Must be `>= 1.0` — values below `1.0` are rejected at construction and fall back to `1.0`. |
 
 #### Retry Events
 
@@ -248,7 +280,7 @@ A `provider:retry` event is emitted before each retry sleep:
 | `provider` | Provider name (`"github-copilot"`) |
 | `model` | Model being called |
 | `attempt` | Current attempt number (1-based in event payload) |
-| `max_retries` | Configured maximum attempts |
+| `max_retries` | Total attempt count including the initial call (`max_retries + 1`); e.g. with `max_retries: 2` configured, the event emits `3` |
 | `delay` | Computed sleep duration in seconds |
 | `retry_after` | Server `Retry-After` value in seconds, or `null` |
 | `error_type` | Kernel error class name (e.g. `RateLimitError`) |
@@ -303,8 +335,10 @@ See [Retry Events](#retry-events) above.
 - Extended thinking (on supported models)
 - Vision capabilities (on supported models)
 - Token counting and management
-- Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content are escaped before the request reaches the SDK
+- Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content and tool call IDs are escaped before the request reaches the SDK
+- Tool sequence repair — orphaned tool calls are automatically repaired with synthetic results before LLM submission (see [Tool Sequence Repair](#tool-sequence-repair))
 - All log output and observability events pass through secret redaction (tokens, Bearer headers, GitHub token formats, API keys, JWTs, PEM blocks)
+- Raw payload logging — full SDK request/response capture for deep debugging (see [Raw Payload Logging](#raw-payload-logging))
 
 ## Contract
 
@@ -319,23 +353,54 @@ See [Retry Events](#retry-events) above.
 
 ## Architecture
 
-### SDK Client Singleton
+The provider uses a singleton SDK client shared across all instances, with ephemeral sessions created per `complete()` call and destroyed after each request. Tool execution remains the orchestrator's responsibility — the provider never executes tools directly.
 
-All provider instances share a single SDK client. The singleton is created on first `mount()` and released when the last mounted instance is cleaned up, ensuring efficient shared resource management across concurrent sub-agents.
-
-### Session Lifecycle
-
-A fresh SDK session is created for each `complete()` call and torn down when the call returns. This provides clean, independent context for each request. The shared client and disk model cache persist across requests intentionally — these are not session state.
-
-### Tool Isolation
-
-Only tools explicitly passed by Amplifier's orchestrator in the `ChatRequest` are available within each session. Tool execution is the orchestrator's responsibility — the provider does not execute tools directly.
+For module structure, design decisions, and contract index see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Graceful Error Recovery
 
 The provider translates all SDK errors to typed kernel errors before they reach the caller. Each `complete()` call uses an independent session — no state accumulates between requests. The shared client and disk model cache persist across requests by design.
 
 On `list_models()` failure, the provider falls back to a disk cache (24-hour TTL) before raising `ProviderUnavailableError`.
+
+## Tool Sequence Repair
+
+The provider automatically detects and repairs incomplete tool call sequences before sending the request to the LLM.
+
+**The Problem:** If a conversation history contains a tool call from the assistant that has no corresponding tool result (due to context compaction bugs, parsing errors, or state corruption), the LLM receives an incoherent message history and may produce confused or repetitive responses. The missing result is invisible to the caller.
+
+**The Solution:** Before prompt extraction, the provider scans assistant messages for tool call blocks without matching tool results. For each unmatched call, a synthetic tool-result message is inserted immediately after the offending assistant message. The LLM receives a coherent history and can acknowledge the gap and continue.
+
+**What happens:**
+
+1. Orphaned tool calls are detected (by `tool_call_id` set-difference)
+2. A synthetic user message containing a `tool_result` block is inserted after each offending assistant message
+3. One `WARNING` is logged per repair event with the count of repaired calls
+4. Prompt extraction proceeds on the repaired message list; the original request is not mutated
+
+**Synthetic result content:**
+```
+Tool result unavailable — the result for this tool call was lost. Please acknowledge this and continue.
+```
+
+**Example:**
+```python
+# Incoming messages (tool result missing)
+messages = [
+    {"role": "user",      "content": "Search for Python"},
+    {"role": "assistant", "content": [{"type": "tool_call", "tool_call_id": "call-abc", "tool_name": "search"}]},
+    # MISSING: tool_result for call-abc
+    {"role": "user",      "content": "What did you find?"}
+]
+
+# After repair, the assistant message is followed by a synthetic result:
+# {"role": "user", "content": [{"type": "tool_result", "tool_call_id": "call-abc",
+#                                "output": "Tool result unavailable — ..."}]}
+```
+
+**Observability:** Repairs are logged as `WARNING` via the module logger. Monitor for `"Malformed tool sequence repaired"` log lines to detect upstream context management issues.
+
+**Security:** `tool_call_id` values are sanitized through the same injection-prevention pipeline as user content before they are interpolated into the prompt. Role-marker sequences such as `[SYSTEM]` in a crafted ID are escaped automatically.
 
 ## Fake Tool Call Detection
 

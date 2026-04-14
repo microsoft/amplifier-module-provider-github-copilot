@@ -47,6 +47,28 @@ amplifier_module_provider_github_copilot/
 
 All `github-copilot-sdk` imports are quarantined in `sdk_adapter/_imports.py`. Domain code never imports SDK types directly. This isolates the codebase from SDK version changes.
 
+### SDK Client Singleton
+
+All provider instances share a single `CopilotClientWrapper`. The singleton is created on first `mount()` and released when the last mounted instance is cleaned up, ensuring efficient shared resource management across concurrent sub-agents.
+
+Governed by: `config/_sdk_protection.py` (singleton policy), `sdk_adapter/client.py`
+
+### Session Lifecycle
+
+A fresh SDK session is created for each `complete()` call and torn down when the call returns. This provides clean, independent context for each request.
+
+The shared SDK client and disk model cache persist across requests intentionally — these are not session state. Only the conversation session is ephemeral.
+
+Governed by: `sdk_adapter/client.py`
+
+### Tool Isolation
+
+Only tools explicitly passed by Amplifier's orchestrator in the `ChatRequest` are available within each session. When no tools are provided, `available_tools=[]` is set explicitly to block any SDK built-ins from appearing.
+
+Tool execution is the orchestrator's responsibility — the provider never executes tools directly. Incoming tool calls are returned to Amplifier as structured `tool_call` content blocks.
+
+Contract: `contracts/deny-destroy.md`
+
 ### Two-Medium Architecture
 
 Policy values live in Python config modules, not YAML:
@@ -55,10 +77,6 @@ Policy values live in Python config modules, not YAML:
 - Model defaults, timeouts: `config/_models.py`
 - Retry/streaming/cache policy: `config/_policy.py`
 - Tool capture, session, singleton policy: `config/_sdk_protection.py`
-
-### Ephemeral Sessions
-
-Sessions are created per `complete()` call and destroyed after the first turn. No session reuse.
 
 ### Error Translation
 

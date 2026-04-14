@@ -17,6 +17,7 @@ Three-Medium Architecture:
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import logging
 import time
@@ -75,7 +76,7 @@ class FinishReasons:
     content_filter: str = "content_filter"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ObservabilityConfig:
     """Observability policy. Defaults are the production values."""
 
@@ -83,7 +84,7 @@ class ObservabilityConfig:
     event_names: EventNames = field(default_factory=EventNames)
     status: StatusValues = field(default_factory=StatusValues)
     finish_reasons: FinishReasons = field(default_factory=FinishReasons)
-    raw_payloads: bool = False
+    raw: bool = False
 
 
 @functools.lru_cache(maxsize=1)
@@ -159,14 +160,7 @@ class LlmLifecycleContext:
         """Emit llm:request event.
 
         Contract: observability:Events:MUST:2
-        Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
-
-        Args:
-            message_count: Number of messages in request.
-            tool_count: Number of tools available.
-            streaming: Whether streaming is enabled.
-            timeout: Request timeout in seconds.
-            raw_request: Optional raw request payload (only included if raw_payloads=True).
+        Contract: observability:Verbosity:MUST:1 — raw flag controls inclusion
         """
         payload: dict[str, Any] = {
             "provider": self.provider_name,
@@ -177,13 +171,13 @@ class LlmLifecycleContext:
             "timeout": timeout,
         }
 
-        # P3-14: Enforce raw_payloads policy
-        if self.config.raw_payloads and raw_request:
+        # Enforce raw payload policy (contract: observability:Verbosity:MUST:1)
+        if self.config.raw and raw_request:
             from .security_redaction import redact_dict
 
             # L2 Fix: Preserve dict structure for queryability
             # Redact before including (contract: Verbosity:MUST:2)
-            payload["raw_request"] = redact_dict(raw_request)
+            payload["raw"] = redact_dict(raw_request)
 
         await emit_event(
             self.coordinator,
@@ -208,11 +202,7 @@ class LlmLifecycleContext:
 
         Contract: observability:Events:MUST:3
         Contract: observability:Events:SHOULD:3 — sdk_pid for log correlation
-        Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
-
-        Args:
-            sdk_session_id: Copilot SDK session ID for log correlation.
-            sdk_pid: SDK subprocess PID for log file correlation.
+        Contract: observability:Verbosity:MUST:1 — raw flag controls inclusion
         """
         elapsed_ms = int((time.time() - self.start_time) * 1000)
 
@@ -247,13 +237,13 @@ class LlmLifecycleContext:
         if sdk_pid:
             payload["sdk_pid"] = sdk_pid
 
-        # P3-14: Enforce raw_payloads policy
-        if self.config.raw_payloads and raw_response:
+        # Enforce raw payload policy (contract: observability:Verbosity:MUST:1)
+        if self.config.raw and raw_response:
             from .security_redaction import redact_dict
 
             # L2 Fix: Preserve dict structure for queryability
             # Redact before including (contract: Verbosity:MUST:2)
-            payload["raw_response"] = redact_dict(raw_response)
+            payload["raw"] = redact_dict(raw_response)
 
         await emit_event(
             self.coordinator,
@@ -334,6 +324,8 @@ async def llm_lifecycle(
     coordinator: ModuleCoordinator | None,
     model: str,
     config: ObservabilityConfig | None = None,
+    *,
+    raw: bool = False,
 ) -> AsyncIterator[LlmLifecycleContext]:
     """Context manager for LLM request/response lifecycle.
 
@@ -349,12 +341,20 @@ async def llm_lifecycle(
         coordinator: Amplifier kernel coordinator (may be None).
         model: Model identifier.
         config: Observability config (loaded if not provided).
+        raw: When True, raw request/response payloads are included in events.
+             Overrides config.raw if True. Reads from provider config["raw"].
 
     Yields:
         LlmLifecycleContext with emission helpers.
     """
     if config is None:
         config = load_observability_config()
+
+    # Apply per-instance raw flag override (provider config["raw"] → self._raw)
+    # Only creates a new frozen config object when raw=True (rare/debug path).
+    # Default path (raw=False) uses the cached singleton directly — zero overhead.
+    if raw and not config.raw:
+        config = dataclasses.replace(config, raw=True)
 
     ctx = LlmLifecycleContext(
         config=config,

@@ -37,6 +37,14 @@ retry:
 4. **MUST** only retry errors with `retryable=True`
 5. **MUST NOT** retry errors with `retryable=False`
 6. **MUST** honor `retry_after` when present
+7. **MUST** allow runtime provider config to override retry defaults via keys:
+   `max_retries` (retries count, 0 = no retry), `min_retry_delay` (seconds),
+   `max_retry_delay` (seconds), `retry_jitter` (float [0.0, 1.0]).
+   Absent keys fall back to policy defaults from `config/_policy.py`.
+8. **MUST** apply `overloaded_delay_multiplier` to computed backoff when an error
+   carries `delay_multiplier > 1.0` (set by error translation for errors marked
+   `overloaded: true` in `errors.yaml`). `retry_after` from server takes precedence
+   over any computed multiplied delay. Capped at `max_delay_ms * overloaded_delay_multiplier`.
 
 ### Retryable Errors (Kernel Types)
 
@@ -362,6 +370,8 @@ When the SDK is unavailable AND the disk cache is empty/invalid, the provider MU
 | `behaviors:Retry:MUST:4` | Only retries errors with retryable=True |
 | `behaviors:Retry:MUST:5` | Does NOT retry errors with retryable=False |
 | `behaviors:Retry:MUST:6` | Honors retry_after when present |
+| `behaviors:Retry:MUST:7` | Runtime config overrides retry defaults (max_retries, min_retry_delay, max_retry_delay, retry_jitter) |
+| `behaviors:Retry:MUST:8` | Applies overloaded_delay_multiplier for errors with delay_multiplier > 1.0; retry_after supersedes |
 
 ### Streaming
 

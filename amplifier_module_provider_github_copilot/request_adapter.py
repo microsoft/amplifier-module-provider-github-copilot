@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from types import SimpleNamespace
 from typing import Any, cast
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
@@ -25,6 +26,14 @@ logger = logging.getLogger(__name__)
 # Matches [WORD] where WORD is 2+ uppercase letters/underscores.
 # Contract: behaviors:Security:MUST:1 — OWASP A03: Injection prevention
 _ROLE_INJECTION_PATTERN = re.compile(r"\[([A-Z][A-Z_]{1,})\]")
+
+# Text inserted into synthetic tool-result messages when repair is needed.
+# Verified safe: contains no uppercase bracket sequences ([WORD]) so
+# _sanitize_content_for_injection is a clean no-op on this string.
+_TOOL_SEQUENCE_REPAIR_MESSAGE = (
+    "Tool result unavailable — the result for this tool call was lost. "
+    "Please acknowledge this and continue."
+)
 
 
 def _sanitize_content_for_injection(text: str) -> str:
@@ -53,6 +62,109 @@ __all__ = [
 ]
 
 
+def _repair_tool_sequence(
+    messages: list[Any],
+) -> tuple[list[Any], int]:
+    """Detect and repair malformed tool sequences by inserting synthetic results.
+
+    Scans assistant messages for tool_call blocks that have no corresponding
+    tool_result in any subsequent message. For each unmatched call, inserts a
+    synthetic user message containing a tool_result block immediately after the
+    offending assistant message. Returns a new list; original is not mutated.
+
+    Detection is scoped to the current message list only (stateless). No
+    cross-request state is needed because repair operates on a local copy.
+
+    Contract: provider-protocol:complete:MUST:9
+
+    Args:
+        messages: Ordered message list from the incoming ChatRequest.
+
+    Returns:
+        (repaired_messages, repair_count) — repaired list and number of
+        synthetic results inserted. repair_count == 0 means no repair needed.
+    """
+    # Phase 1: collect call IDs (with source msg_index) and result IDs.
+    # dict-fallbacks are mandatory: getattr({"key": "v"}, "key", None) returns None.
+    tool_calls: dict[str, tuple[int, str]] = {}  # call_id → (msg_index, tool_name)
+    unnamed_calls: list[tuple[int, str]] = []    # (msg_index, tool_name) — no call_id
+    tool_result_ids: set[str] = set()
+
+    for idx, msg in enumerate(messages):
+        role: str = getattr(msg, "role", "")
+        content: Any = getattr(msg, "content", None)
+        if content is None:
+            continue
+        blocks: list[Any] = content if isinstance(content, list) else [content]
+
+        for block in blocks:
+            if block is None:
+                continue
+            block_type: str | None = getattr(block, "type", None)
+            if isinstance(block, dict):
+                block_type = block_type or cast(dict[str, Any], block).get("type")
+
+            # Tool call block — only count those from assistant messages.
+            if role == "assistant" and (
+                block_type == "tool_call" or hasattr(block, "tool_name")
+            ):
+                call_id: str | None = getattr(block, "tool_call_id", None)
+                if isinstance(block, dict):
+                    call_id = call_id or cast(dict[str, Any], block).get("tool_call_id")
+                tool_name: str = (
+                    getattr(block, "tool_name", None)
+                    or (
+                        cast(dict[str, Any], block).get("tool_name")
+                        if isinstance(block, dict)
+                        else None
+                    )
+                    or "unknown"
+                )
+                if call_id:
+                    tool_calls[call_id] = (idx, str(tool_name))
+                else:
+                    unnamed_calls.append((idx, str(tool_name)))
+
+            # Tool result block — collect matched IDs to exclude from repair.
+            elif block_type == "tool_result" or hasattr(block, "output"):
+                result_id: str | None = getattr(block, "tool_call_id", None)
+                if isinstance(block, dict):
+                    result_id = result_id or cast(dict[str, Any], block).get("tool_call_id")
+                if result_id:
+                    tool_result_ids.add(result_id)
+
+    # Phase 2: group unmatched calls by their source assistant message index.
+    missing_by_idx: dict[int, list[str | None]] = {}
+    for call_id, (msg_idx, _) in tool_calls.items():
+        if call_id not in tool_result_ids:
+            missing_by_idx.setdefault(msg_idx, []).append(call_id)
+    for msg_idx, _ in unnamed_calls:
+        missing_by_idx.setdefault(msg_idx, []).append(None)
+
+    if not missing_by_idx:
+        return list(messages), 0
+
+    # Phase 3: insert synthetic results in reverse index order so earlier
+    # insertions don't shift the indices of later ones.
+    repaired = list(messages)
+    repair_count = 0
+
+    for msg_idx in sorted(missing_by_idx.keys(), reverse=True):
+        synthetic_blocks = [
+            {"type": "tool_result", "tool_call_id": cid, "output": _TOOL_SEQUENCE_REPAIR_MESSAGE}
+            if cid else
+            {"type": "tool_result", "output": _TOOL_SEQUENCE_REPAIR_MESSAGE}
+            for cid in missing_by_idx[msg_idx]
+        ]
+        repair_count += len(synthetic_blocks)
+        repaired.insert(
+            msg_idx + 1,
+            SimpleNamespace(role="user", content=synthetic_blocks),
+        )
+
+    return repaired, repair_count
+
+
 def convert_chat_request(
     request: Any,
     *,
@@ -63,6 +175,7 @@ def convert_chat_request(
     Contract: provider-protocol:complete:MUST:1
     Contract: provider-protocol:complete:MUST:7 — Extract images from last user message
     Contract: provider-protocol:complete:MUST:8 — Include attachments in request
+    Contract: provider-protocol:complete:MUST:9 — Repair malformed tool sequences
 
     Args:
         request: Kernel ChatRequest (or CompletionRequest passthrough).
@@ -83,8 +196,18 @@ def convert_chat_request(
         [getattr(m, "role", "?") for m in messages[:5]],  # First 5 roles
     )
 
-    # Extract prompt preserving multi-turn context
-    prompt = extract_prompt_from_chat_request(request)
+    # Contract: provider-protocol:complete:MUST:9 — repair malformed tool sequences
+    # before prompt extraction so the LLM receives coherent message history.
+    repaired_messages, repair_count = _repair_tool_sequence(messages)
+    if repair_count:
+        logger.warning(
+            "Malformed tool sequence repaired: %d tool call(s) without matching "
+            "tool result — synthetic results inserted before LLM call",
+            repair_count,
+        )
+
+    # Extract prompt using repaired messages (system/attachments use original request)
+    prompt = _extract_prompt_from_messages(repaired_messages)
 
     # Extract model and tools
     model = getattr(request, "model", None) or default_model
@@ -122,6 +245,21 @@ def extract_prompt_from_chat_request(request: Any) -> str:
         Formatted prompt string with role markers and all content types.
     """
     messages: list[Any] = getattr(request, "messages", [])
+    return _extract_prompt_from_messages(messages)
+
+
+def _extract_prompt_from_messages(messages: list[Any]) -> str:
+    """Format an ordered message list into a prompt string.
+
+    Internal helper called by both extract_prompt_from_chat_request (public API)
+    and convert_chat_request (which passes repaired messages instead of originals).
+
+    Args:
+        messages: Ordered message list (may include synthetic repair entries).
+
+    Returns:
+        Formatted prompt string with role markers and all content types.
+    """
     if not messages:
         return ""
 
@@ -241,13 +379,15 @@ def _extract_content_block(block: Any) -> str:
             tool_result_call_id: str | None = getattr(block, "tool_call_id", None) or _get(
                 "tool_call_id"
             )
-            # Contract: behaviors:Security:MUST:1 — sanitize tool result output
-            # Tool results are user-controlled (external service response).
-            # Indirect injection: malicious service returns [ROLE_MARKER] sequences
-            # which, unescaped, inject fake role boundaries into the prompt.
+            # Contract: behaviors:Security:MUST:1 — sanitize tool result output AND
+            # tool_call_id. Both are interpolated into the prompt. output is
+            # user-controlled (external service response); tool_call_id originates
+            # from the LLM but defense-in-depth requires sanitizing all interpolated
+            # values — repair paths (P0-4) now route assistant IDs through this code.
             sanitized_output = _sanitize_content_for_injection(str(output))
             if tool_result_call_id:
-                return f"[Tool Result (id={tool_result_call_id}): {sanitized_output}]"
+                sanitized_id = _sanitize_content_for_injection(str(tool_result_call_id))
+                return f"[Tool Result (id={sanitized_id}): {sanitized_output}]"
             return f"[Tool Result: {sanitized_output}]"
         return ""
 
@@ -335,7 +475,7 @@ def extract_system_message(request: Any) -> str | None:
 # =============================================================================
 # OBSERVABILITY PAYLOAD BUILDERS
 # =============================================================================
-# Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
+# Contract: observability:Verbosity:MUST:1 — raw flag controls payload inclusion
 # Separation of Concerns: Payload construction belongs in request_adapter.py,
 # not inline in provider.py. Provider stays thin, calling these helpers.
 # =============================================================================
