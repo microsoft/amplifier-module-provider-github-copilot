@@ -14,13 +14,30 @@ from dataclasses import dataclass
 class RetryPolicy:
     """Retry policy configuration.
 
-    Contract: behaviors:Retry:MUST:1,2,3
+    Contract: behaviors:Retry:MUST:1,2,3,7,8
+
+    Field naming note: `max_attempts` is the total call count including the initial
+    attempt. The user-facing config key is `max_retries` (= max_attempts - 1).
+    Example: max_retries=2 → max_attempts=3 → one initial call + two retries.
     """
 
-    max_attempts: int = 3
+    max_attempts: int = 3  # total attempts including first; user-facing key: max_retries
     base_delay_ms: int = 1000
     max_delay_ms: int = 30000
     jitter_factor: float = 0.1
+    overloaded_delay_multiplier: float = 10.0
+
+    def __post_init__(self) -> None:
+        """Validate field invariants on construction.
+
+        frozen=True means fields cannot be mutated after __init__;
+        __post_init__ can read fields and raise to reject invalid state.
+        """
+        if self.overloaded_delay_multiplier < 1.0:
+            raise ValueError(
+                f"overloaded_delay_multiplier must be >= 1.0, "
+                f"got {self.overloaded_delay_multiplier!r}"
+            )
 
 
 @dataclass(frozen=True)

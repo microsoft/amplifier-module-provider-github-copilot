@@ -26,6 +26,7 @@ error_mappings:
     kernel_error: RateLimitError
     retryable: true
     extract_retry_after: true
+    overloaded: true
 
   - sdk_patterns: ["QuotaExceededError"]
     string_patterns: ["quota exceeded", "billing"]

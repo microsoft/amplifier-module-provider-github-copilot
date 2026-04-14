@@ -76,7 +76,6 @@ from .models import (
 # Observability module for hook event emission (separation of concerns)
 from .observability import (
     llm_lifecycle,
-    load_observability_config,
 )
 
 # Request adapter for ChatRequest conversion (separation of concerns)
@@ -162,6 +161,153 @@ _get_retry_after = get_retry_after
 logger = logging.getLogger(__name__)
 
 
+def _parse_raw_flag(value: Any) -> bool:
+    """Strictly parse the raw config flag from provider config dict.
+
+    Handles string inputs so that config={"raw": "false"} is not accidentally
+    treated as True (bool("false") == True is a Python footgun).
+
+    Args:
+        value: Raw value from provider config dict.
+
+    Returns:
+        True only for bool True, string "true"/"1"/"yes", or other truthy non-string.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes")
+    return bool(value)
+
+
+def _config_int(value: Any, default: int) -> int:
+    """Safely coerce a config value to int, falling back to default on error.
+
+    None is treated as "not provided" and returns the default silently.
+    Any other unparseable value logs a warning and returns the default.
+
+    Args:
+        value: Raw value from provider config dict.
+        default: Fallback value if parsing fails.
+
+    Returns:
+        Parsed int, or default if value is None or unparseable.
+    """
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[PROVIDER] Invalid integer config value %r; using default %s",
+            value,
+            default,
+        )
+        return default
+
+
+def _config_float(value: Any, default: float) -> float:
+    """Safely coerce a config value to float, falling back to default on error.
+
+    None is treated as "not provided" and returns the default silently.
+    Any other unparseable value logs a warning and returns the default.
+
+    Args:
+        value: Raw value from provider config dict.
+        default: Fallback value if parsing fails.
+
+    Returns:
+        Parsed float, or default if value is None or unparseable.
+    """
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[PROVIDER] Invalid float config value %r; using default %s",
+            value,
+            default,
+        )
+        return default
+
+
+def _build_retry_config(config: dict[str, Any], defaults: RetryConfig) -> RetryConfig:
+    """Build per-instance RetryConfig from provider config dict.
+
+    User-facing keys match the Anthropic gold standard:
+    - max_retries:     number of retries (0 = no retry). Stored as max_attempts = retries + 1.
+    - min_retry_delay: minimum delay in seconds. Stored internally as base_delay_ms.
+    - max_retry_delay: maximum delay in seconds. Stored internally as max_delay_ms.
+    - retry_jitter:    jitter factor as float [0.0, 1.0].
+
+    When a key is absent the corresponding field from defaults is used unchanged
+    (no unit conversion on the default path avoids float round-trip arithmetic).
+
+    Contract: behaviors:Retry:MUST:7
+
+    Args:
+        config: Provider config dict from mount/routing.
+        defaults: Frozen RetryConfig with policy defaults from _policy.py.
+
+    Returns:
+        New frozen RetryConfig with per-instance overrides applied.
+    """
+    # max_retries (retries) → max_attempts (total attempts) = retries + 1.
+    # max_retries=0 is valid: single attempt, no retry. Clamp negative to 0.
+    raw_max_retries = config.get("max_retries")
+    if raw_max_retries is not None:
+        retries = max(_config_int(raw_max_retries, defaults.max_attempts - 1), 0)
+        max_attempts = retries + 1
+    else:
+        max_attempts = defaults.max_attempts
+
+    # Delay keys: user provides seconds, internal storage is milliseconds.
+    # Only convert when the key is present to avoid float round-trip on default path.
+    raw_min_delay = config.get("min_retry_delay")
+    base_delay_ms = (
+        int(_config_float(raw_min_delay, defaults.base_delay_ms / 1000.0) * 1000)
+        if raw_min_delay is not None
+        else defaults.base_delay_ms
+    )
+
+    raw_max_delay = config.get("max_retry_delay")
+    max_delay_ms = (
+        int(_config_float(raw_max_delay, defaults.max_delay_ms / 1000.0) * 1000)
+        if raw_max_delay is not None
+        else defaults.max_delay_ms
+    )
+
+    # Jitter: float [0.0, 1.0]. calculate_backoff_delay already clamps, no guard needed.
+    jitter_factor = _config_float(config.get("retry_jitter"), defaults.jitter_factor)
+
+    # Overloaded error multiplier: scales backoff for rate-limited / overloaded errors.
+    # RetryPolicy.__post_init__ enforces >= 1.0; catch ValueError and use minimum-safe
+    # value (1.0) so invalid user config degrades gracefully without retry storms.
+    raw_odm = config.get("overloaded_delay_multiplier")
+    overloaded_delay_multiplier = _config_float(raw_odm, defaults.overloaded_delay_multiplier)
+
+    try:
+        return RetryConfig(
+            max_attempts=max_attempts,
+            base_delay_ms=base_delay_ms,
+            max_delay_ms=max_delay_ms,
+            jitter_factor=jitter_factor,
+            overloaded_delay_multiplier=overloaded_delay_multiplier,
+        )
+    except ValueError as exc:
+        # overloaded_delay_multiplier < 1.0 — clamp to minimum-safe (1.0), NOT the
+        # policy default (10.0), to avoid unexpected 10× backoff for bad configs.
+        logger.warning("Invalid retry config (%s); using 1.0 for overloaded_delay_multiplier", exc)
+        return RetryConfig(
+            max_attempts=max_attempts,
+            base_delay_ms=base_delay_ms,
+            max_delay_ms=max_delay_ms,
+            jitter_factor=jitter_factor,
+            overloaded_delay_multiplier=1.0,
+        )
+
+
 class GitHubCopilotProvider:
     """Provider Protocol implementation for GitHub Copilot.
 
@@ -200,6 +346,10 @@ class GitHubCopilotProvider:
         self.coordinator = coordinator
         self._client = client if client is not None else CopilotClientWrapper()
         self._provider_config = load_models_config()
+        # Parse raw flag once at init — avoids bool("false")==True footgun at call time
+        self._raw: bool = _parse_raw_flag(self.config.get("raw", False))
+        # Parse retry config once at init — allows per-instance user overrides
+        self._retry_config: RetryConfig = _build_retry_config(self.config, load_retry_config())
         # Track pending streaming emit tasks for cleanup
         # Contract: streaming-contract:ProgressiveStreaming:SHOULD:3
         self._pending_emit_tasks: set[asyncio.Task[Any]] = set()
@@ -327,13 +477,13 @@ class GitHubCopilotProvider:
 
         # Load configs
         event_config = load_event_config()
-        obs_config = load_observability_config()
 
         # Effective model: request.model > runtime config > YAML default
         model = internal_request.model or self._effective_default_model
 
         # Create lifecycle context for observability (handles timing)
-        async with llm_lifecycle(self.coordinator, model, obs_config) as ctx:
+        # raw=self._raw passes per-instance flag parsed once in __init__
+        async with llm_lifecycle(self.coordinator, model, raw=self._raw) as ctx:
             # Real SDK path: use client wrapper with STREAMING
             # Three-Medium: timeout from YAML config
             timeout_seconds: float = kwargs.get(
@@ -341,7 +491,7 @@ class GitHubCopilotProvider:
                 float(self._provider_config.defaults["timeout"]),
             )
 
-            retry_config = load_retry_config()
+            retry_config = self._retry_config
 
             # Emit llm:request event (contract: observability:Events:MUST:2)
             use_streaming = self.config.get("use_streaming", True)
@@ -581,16 +731,32 @@ class GitHubCopilotProvider:
         """Calculate retry delay in milliseconds.
 
         Honors retry_after header if present, otherwise uses exponential backoff.
+        Applies overloaded_delay_multiplier for errors that carry delay_multiplier > 1.0
+        (set by error translation for overloaded/rate-limited error types per errors.yaml).
+        The multiplied delay is capped at max_delay_ms * overloaded_delay_multiplier.
+
+        Contract: behaviors:Retry:MUST:8
         """
         retry_after = get_retry_after(error)
         if retry_after is not None:
+            # Server-provided Retry-After takes precedence over all computed delays.
             return retry_after * 1000
-        return calculate_backoff_delay(
+        delay_ms = calculate_backoff_delay(
             attempt=attempt,
             base_delay_ms=config.base_delay_ms,
             max_delay_ms=config.max_delay_ms,
             jitter_factor=config.jitter_factor,
         )
+        # Apply policy multiplier when error is marked overloaded (delay_multiplier > 1.0).
+        # Sentinel set post-construction by translate_sdk_error for mappings with overloaded=True.
+        # Cap at max_delay_ms * multiplier: base is already capped by calculate_backoff_delay,
+        # so this is equivalent to delay_ms * multiplier with an explicit upper bound.
+        if getattr(error, "delay_multiplier", 1.0) > 1.0:
+            delay_ms = min(
+                delay_ms * config.overloaded_delay_multiplier,
+                config.max_delay_ms * config.overloaded_delay_multiplier,
+            )
+        return delay_ms
 
     async def _execute_sdk_completion(
         self,

@@ -129,8 +129,55 @@ from amplifier_module_provider_github_copilot import (
 
 ## Configuration Changes
 
-No YAML configuration key changes. Existing `amplifier_settings.yaml` and
-provider config files are compatible with v2.0.0 without modification.
+### Breaking: `ObservabilityConfig.raw_payloads` renamed to `.raw`
+
+The verbosity flag on `ObservabilityConfig` has been renamed from `raw_payloads` to `raw`.
+Any code that read `config.raw_payloads` directly will get an `AttributeError`. There is
+no user-facing YAML file for this setting — `load_observability_config()` returns the
+dataclass with defaults; the `raw` flag is set via the provider `config:` block (see
+additive keys table below).
+
+```python
+# Before
+if config.raw_payloads:  # AttributeError from this release onward
+    ...
+
+# After
+if config.raw:
+    ...
+```
+
+The default remains `False`. Most users are unaffected (raw payloads are off by default
+and the flag is an internal implementation detail, not part of the stable public API).
+
+### New (additive): Runtime overrides in provider config
+
+The following keys can now be set in the provider `config` block of your bundle YAML.
+All keys are optional; absent keys fall back to policy defaults.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `raw` | `bool` | `false` | Include raw request/response payloads in `llm:request`/`llm:response` events. Accepts `true`/`false` or `"true"`/`"false"` strings. |
+| `max_retries` | `int` | `2` | Number of retries (0 = no retry). Total attempts = max_retries + 1. |
+| `min_retry_delay` | `float` | `1.0` | Minimum retry back-off in **seconds**. |
+| `max_retry_delay` | `float` | `30.0` | Maximum retry back-off cap in **seconds**. |
+| `retry_jitter` | `float` | `0.1` | Jitter factor `[0.0, 1.0]` applied to computed delay. |
+| `overloaded_delay_multiplier` | `float` | `10.0` | Multiplier applied to back-off for errors marked `overloaded: true` (e.g., rate-limit). Must be ≥ 1.0. |
+
+Example bundle YAML:
+
+```yaml
+providers:
+  - module: provider-github-copilot
+    name: github-copilot
+    config:
+      raw: false
+      max_retries: 3
+      min_retry_delay: 2.0
+      max_retry_delay: 60.0
+      retry_jitter: 0.2
+      overloaded_delay_multiplier: 5.0
+```
 
 ---
 

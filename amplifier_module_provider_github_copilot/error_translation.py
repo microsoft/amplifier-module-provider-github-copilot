@@ -67,6 +67,12 @@ __all__ = [
     "KERNEL_ERROR_MAP",
 ]
 
+# Sentinel value placed on overloaded errors by translate_sdk_error.
+# Only its being > 1.0 matters — the actual backoff multiplier comes from
+# RetryPolicy.overloaded_delay_multiplier. Value chosen to be unambiguously
+# above 1.0 while remaining human-readable in debug output.
+_OVERLOADED_SENTINEL: float = 2.0
+
 
 # Mapping from config names to kernel error classes
 KERNEL_ERROR_MAP: dict[str, type[LLMError]] = {
@@ -134,6 +140,7 @@ class ErrorMapping:
     retryable: bool = True
     extract_retry_after: bool = False
     context_extraction: list[ContextExtraction] = field(default_factory=_context_list)
+    overloaded: bool = False
 
 
 def _mapping_list() -> list[ErrorMapping]:
@@ -210,6 +217,7 @@ def _load_error_config_cached(config_path_str: str | None) -> ErrorConfig:
                 retryable=mapping_data.get("retryable", True),
                 extract_retry_after=mapping_data.get("extract_retry_after", False),
                 context_extraction=context_extraction,
+                overloaded=mapping_data.get("overloaded", False),
             )
         )
 
@@ -492,6 +500,12 @@ def translate_sdk_error(
                 retry_after=retry_after,
             )
             kernel_error.__cause__ = exc
+
+            # Mark overloaded errors so _calculate_retry_delay can apply the
+            # overloaded_delay_multiplier. Sentinel value > 1.0; actual multiplier
+            # is config.overloaded_delay_multiplier in RetryPolicy.
+            if mapping.overloaded:
+                kernel_error.delay_multiplier = _OVERLOADED_SENTINEL
 
             # Log translation with sanitized type name (security)
             sanitized_type = type(exc).__name__
