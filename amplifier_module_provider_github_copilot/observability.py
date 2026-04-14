@@ -298,6 +298,7 @@ class LlmLifecycleContext:
         attempt: int,
         max_retries: int,
         delay: float,
+        retry_after: float | None,
         error_type: str,
         error_message: str,
     ) -> None:
@@ -321,6 +322,7 @@ class LlmLifecycleContext:
                 "attempt": attempt,
                 "max_retries": max_retries,
                 "delay": delay,
+                "retry_after": retry_after,
                 "error_type": error_type,
                 "error_message": sanitized_message,
             },

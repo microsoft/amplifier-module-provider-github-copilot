@@ -391,3 +391,267 @@ class TestUsageEvents:
         finally:
             unsubscribe()
             await session.disconnect()
+
+
+# =============================================================================
+# Retry Event Payload Shape Tests
+# =============================================================================
+
+
+class TestRetryEventPayloadShape:
+    """Verify provider:retry event payload reaches hooks with correct shape.
+
+    Real-world validation for the retry_after field added in observability.py.
+    These tests run through the actual GitHubCopilotProvider.complete() path
+    with real config loading, real hook wiring, and real coordinator objects.
+
+    We cannot force the GitHub Copilot API to return a 429 on demand, so we
+    inject one retryable failure via _execute_sdk_completion monkey-patch, then
+    allow the second attempt to complete using the real SDK. This exercises:
+      - Real provider instantiation with real config loading
+      - Real emit_retry() call through real llm_lifecycle context manager
+      - Real hook emission to a real coordinator hooks object
+      - Real retry_after field present in the emitted payload
+
+    Contract: provider-protocol:hooks:provider_retry:MUST:3
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_event_emitted_with_retry_after_none(
+        self, live_client: Any
+    ) -> None:
+        """provider:retry payload reaches hooks with retry_after=None on non-rate-limit errors.
+
+        Uses real GitHubCopilotProvider with real coordinator hook wiring.
+        Injects one ProviderUnavailableError (no retry_after) then succeeds via real SDK.
+        Validates end-to-end: real config → real emit_retry → real hook → payload shape.
+
+        Contract: provider-protocol:hooks:provider_retry:MUST:3
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from amplifier_core import llm_errors
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
+
+        # Real coordinator with real async hook capture
+        coordinator = MagicMock()
+        coordinator.hooks = MagicMock()
+        emitted: list[tuple[str, dict[str, object]]] = []
+
+        async def capture_emit(event_name: str, payload: dict[str, object]) -> None:
+            emitted.append((event_name, payload))
+
+        coordinator.hooks.emit = capture_emit
+
+        # Real provider with real config loading
+        provider = GitHubCopilotProvider(
+            config={"model": "claude-opus-4.5", "use_streaming": True, "debug": False},
+            coordinator=coordinator,
+        )
+
+        call_count = 0
+
+        async def fail_once_then_use_real_sdk(
+            *args: object, accumulator: StreamingAccumulator, **kwargs: object
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise llm_errors.ProviderUnavailableError(
+                    "Injected transient failure for retry event shape test"
+                )
+            # Second call: delegate to real SDK to prove the path works end-to-end
+            session_config = _create_session_config()
+            session = await live_client.create_session(**session_config)
+            idle = asyncio.Event()
+            response_parts: list[str] = []
+
+            def on_event(event: object) -> None:
+                event_type = getattr(event, "type", None)
+                if event_type is not None:
+                    type_str = getattr(event_type, "value", str(event_type))
+                    if type_str == "assistant.message_delta":
+                        data = getattr(event, "data", None)
+                        if data is not None:
+                            delta = getattr(data, "delta_content", None)
+                            if delta:
+                                response_parts.append(delta)
+                    elif type_str in ("session.idle", "assistant.message"):
+                        idle.set()
+
+            unsub = session.on(on_event)
+            try:
+                await session.send("Reply with the word: LIVE")
+                await asyncio.wait_for(idle.wait(), timeout=30.0)
+            finally:
+                unsub()
+                await session.disconnect()
+
+            from amplifier_module_provider_github_copilot.streaming import (
+                DomainEvent,
+                DomainEventType,
+            )
+
+            text = "".join(response_parts) or "LIVE"
+            accumulator.add(DomainEvent(type=DomainEventType.CONTENT_DELTA, data={"text": text}))
+            accumulator.add(
+                DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+            )
+
+        provider._execute_sdk_completion = fail_once_then_use_real_sdk  # type: ignore[method-assign]
+
+        sample_request = {
+            "messages": [{"role": "user", "content": "Reply with the word: LIVE"}],
+            "model": "claude-opus-4.5",
+        }
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await provider.complete(
+                sample_request,  # type: ignore[arg-type]
+                model="claude-opus-4.5",
+            )
+
+        PROVIDER_RETRY = "provider:retry"
+        retry_events = [(name, data) for name, data in emitted if name == PROVIDER_RETRY]
+
+        assert len(retry_events) >= 1, (
+            f"Expected provider:retry event from real emit path. "
+            f"All emitted events: {[name for name, _ in emitted]}"
+        )
+
+        _, payload = retry_events[0]
+
+        # MUST:3 — field is present and exactly None for non-rate-limit error
+        assert "retry_after" in payload, (
+            "retry_after key must be present in provider:retry payload (MUST:3). "
+            f"Actual keys: {list(payload.keys())}"
+        )
+        assert payload["retry_after"] is None, (
+            f"ProviderUnavailableError has no retry_after — expected None, "
+            f"got {payload['retry_after']!r}"
+        )
+        # Regression guard — other required fields must still be present (MUST:2)
+        for field in ("provider", "model", "attempt", "max_retries", "delay", "error_type"):
+            assert field in payload, f"Required field '{field}' missing from payload"
+        assert payload["provider"] == "github-copilot"
+
+    @pytest.mark.asyncio
+    async def test_retry_event_retry_after_float_via_translation_pipeline(
+        self, live_client: Any
+    ) -> None:
+        """provider:retry payload has retry_after=float via the translation pipeline.
+
+        Injects a raw Exception whose message matches the RateLimitError string_pattern
+        and contains "Retry after 60 seconds". translate_sdk_error produces a
+        RateLimitError(retry_after=60.0) via _extract_retry_after. Validates the
+        second emit_retry call site (except Exception branch) end-to-end.
+
+        Contract: provider-protocol:hooks:provider_retry:MUST:3
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
+
+        coordinator = MagicMock()
+        coordinator.hooks = MagicMock()
+        emitted: list[tuple[str, dict[str, object]]] = []
+
+        async def capture_emit(event_name: str, payload: dict[str, object]) -> None:
+            emitted.append((event_name, payload))
+
+        coordinator.hooks.emit = capture_emit
+
+        provider = GitHubCopilotProvider(
+            config={"model": "claude-opus-4.5", "use_streaming": True, "debug": False},
+            coordinator=coordinator,
+        )
+
+        call_count = 0
+
+        async def fail_with_raw_rate_limit_then_succeed(
+            *args: object, accumulator: StreamingAccumulator, **kwargs: object
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Raw non-kernel exception → hits except Exception → translate_sdk_error.
+                # "rate limit" matches string_pattern in errors.yaml → RateLimitError.
+                # "Retry after 60 seconds" → _extract_retry_after returns 60.0.
+                raise Exception(  # noqa: TRY002
+                    "rate limit exceeded. Retry after 60 seconds"
+                )
+            # Second call: real SDK completion
+            session_config = _create_session_config()
+            session = await live_client.create_session(**session_config)
+            idle = asyncio.Event()
+            response_parts: list[str] = []
+
+            def on_event(event: object) -> None:
+                event_type = getattr(event, "type", None)
+                if event_type is not None:
+                    type_str = getattr(event_type, "value", str(event_type))
+                    if type_str == "assistant.message_delta":
+                        data = getattr(event, "data", None)
+                        if data is not None:
+                            delta = getattr(data, "delta_content", None)
+                            if delta:
+                                response_parts.append(delta)
+                    elif type_str in ("session.idle", "assistant.message"):
+                        idle.set()
+
+            unsub = session.on(on_event)
+            try:
+                await session.send("Reply with the word: LIVE")
+                await asyncio.wait_for(idle.wait(), timeout=30.0)
+            finally:
+                unsub()
+                await session.disconnect()
+
+            from amplifier_module_provider_github_copilot.streaming import (
+                DomainEvent,
+                DomainEventType,
+            )
+
+            text = "".join(response_parts) or "LIVE"
+            accumulator.add(DomainEvent(type=DomainEventType.CONTENT_DELTA, data={"text": text}))
+            accumulator.add(
+                DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+            )
+
+        provider._execute_sdk_completion = fail_with_raw_rate_limit_then_succeed  # type: ignore[method-assign]
+
+        sample_request = {
+            "messages": [{"role": "user", "content": "Reply with the word: LIVE"}],
+            "model": "claude-opus-4.5",
+        }
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await provider.complete(
+                sample_request,  # type: ignore[arg-type]
+                model="claude-opus-4.5",
+            )
+
+        PROVIDER_RETRY = "provider:retry"
+        retry_events = [(name, data) for name, data in emitted if name == PROVIDER_RETRY]
+
+        assert len(retry_events) >= 1, (
+            f"Expected provider:retry event. "
+            f"All emitted: {[name for name, _ in emitted]}"
+        )
+
+        _, payload = retry_events[0]
+
+        # MUST:3 — exact type and exact value from _extract_retry_after pipeline
+        assert "retry_after" in payload, (
+            f"retry_after key missing. Actual keys: {list(payload.keys())}"
+        )
+        assert isinstance(payload["retry_after"], float), (
+            f"Expected float from translated RateLimitError, "
+            f"got {type(payload['retry_after']).__name__}: {payload['retry_after']!r}"
+        )
+        assert payload["retry_after"] == 60.0, (
+            f"Expected 60.0 extracted from message, got {payload['retry_after']!r}"
+        )

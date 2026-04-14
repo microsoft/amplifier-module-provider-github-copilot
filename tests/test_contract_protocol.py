@@ -94,7 +94,7 @@ class TestProtocolListModels:
         models = await provider.list_models()
 
         assert isinstance(models, list)
-        assert len(models) >= 2  # gpt-4 and gpt-4o
+        assert len(models) >= 1  # at least one model must be returned
 
     @pytest.mark.asyncio
     async def test_includes_context_window(self, provider: GitHubCopilotProvider) -> None:

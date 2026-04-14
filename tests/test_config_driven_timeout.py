@@ -57,7 +57,6 @@ class TestModuleLevelCompleteTimeout:
             credential_env_vars=original_config.credential_env_vars,
             capabilities=original_config.capabilities,
             defaults=copy.deepcopy(original_config.defaults),
-            models=original_config.models,
         )
         test_config.defaults["timeout"] = 999
         provider._provider_config = test_config
@@ -66,7 +65,7 @@ class TestModuleLevelCompleteTimeout:
         from amplifier_core import ChatRequest
 
         request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
+        request.model = "claude-opus-4.5"
         request.messages = [MagicMock(role="user", content="test")]
         request.tools = None
         request.max_tokens = None
@@ -149,13 +148,12 @@ class TestTimeoutEnforcement:
             credential_env_vars=original_config.credential_env_vars,
             capabilities=original_config.capabilities,
             defaults=copy.deepcopy(original_config.defaults),
-            models=original_config.models,
         )
         test_config.defaults["timeout"] = 0.1  # 100ms
         provider._provider_config = test_config
 
         request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
+        request.model = "claude-opus-4.5"
         request.messages = [MagicMock(role="user", content="test")]
         request.tools = None
         request.max_tokens = None

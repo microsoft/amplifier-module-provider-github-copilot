@@ -313,16 +313,30 @@ await self._emit_event(PROVIDER_RETRY, {
     "attempt": attempt,
     "max_retries": max_retries,
     "delay": delay_seconds,
+    "retry_after": retry_after,   # float seconds from Retry-After header, or None
     "error_type": type(error).__name__,
-    "error_message": str(error),
+    "error_message": str(error),  # sanitized via redact_sensitive_text()
 })
 ```
+
+**Payload field types:**
+| Field | Type | Notes |
+|-------|------|-------|
+| `provider` | `str` | Always `"github-copilot"` |
+| `model` | `str` | Model ID passed to complete() |
+| `attempt` | `int` | 1-based retry count |
+| `max_retries` | `int` | From RetryPolicy.max_attempts |
+| `delay` | `float` | Seconds sleep will block |
+| `retry_after` | `float \| None` | Server Retry-After value; `None` if not present |
+| `error_type` | `str` | Kernel error class name |
+| `error_message` | `str` | Sanitized via `redact_sensitive_text()` |
 
 **Test Anchors:**
 | Anchor | Clause |
 |--------|--------|
 | `provider-protocol:hooks:provider_retry:MUST:1` | Emits before retry sleep |
-| `provider-protocol:hooks:provider_retry:MUST:2` | Includes attempt, max_retries, delay |
+| `provider-protocol:hooks:provider_retry:MUST:2` | Includes attempt, max_retries, delay, error_type |
+| `provider-protocol:hooks:provider_retry:MUST:3` | Includes retry_after (float or None) — never absent |
 
 ### Event Ordering Contract
 

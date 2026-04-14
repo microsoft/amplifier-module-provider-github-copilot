@@ -24,7 +24,7 @@ class MockData:
 
     content: str
     role: str = "assistant"
-    model: str = "gpt-4o"
+    model: str = "claude-opus-4.5"
 
 
 @dataclass

@@ -35,37 +35,6 @@ PROVIDER: dict = {
     },
 }
 
-# Full model catalog
-# claude-opus-4.5 is the default model with SDK-verified limits
-# SDK: max_context_window=200000, max_prompt_tokens=168000 → max_output=32000
-MODELS: list[dict] = [
-    {
-        "id": "claude-opus-4.5",
-        "display_name": "Claude Opus 4.5",
-        "context_window": 200000,
-        "max_output_tokens": 32000,
-        # Per kernel capabilities.py: TOOLS="tools", STREAMING="streaming", VISION="vision"
-        "capabilities": ["streaming", "tools", "vision"],
-        "defaults": {},
-    },
-    {
-        "id": "gpt-4",
-        "display_name": "GPT-4",
-        "context_window": 128000,
-        "max_output_tokens": 4096,
-        "capabilities": ["streaming", "tools"],
-        "defaults": {},
-    },
-    {
-        "id": "gpt-4o",
-        "display_name": "GPT-4o",
-        "context_window": 128000,
-        "max_output_tokens": 4096,
-        "capabilities": ["streaming", "tools"],
-        "defaults": {},
-    },
-]
-
 # Three-Medium Architecture: Fallback values for when SDK returns None
 # These are policy values, NOT hardcoded in Python
 FALLBACKS: dict[str, int] = {

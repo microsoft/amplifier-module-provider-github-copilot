@@ -56,22 +56,26 @@ class TestKernelTypeCompliance:
         from amplifier_core import ModelInfo as KernelModelInfo
 
         from amplifier_module_provider_github_copilot import GitHubCopilotProvider
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_models_config,
-        )
 
-        # Create mock models from YAML config
-        cfg = load_models_config()
+        # Create mock models — uses a fixed list since model catalog comes from SDK,
+        # not config. This tests that list_models() returns correct kernel types.
         mock_models = [
             KernelModelInfo(
-                id=m["id"],
-                display_name=m["display_name"],
-                context_window=m["context_window"],
-                max_output_tokens=m["max_output_tokens"],
-                capabilities=m.get("capabilities", []),
-                defaults=m.get("defaults", {}),
-            )
-            for m in cfg.models
+                id="claude-opus-4.5",
+                display_name="Claude Opus 4.5",
+                context_window=200000,
+                max_output_tokens=32000,
+                capabilities=["streaming", "tools", "vision"],
+                defaults={},
+            ),
+            KernelModelInfo(
+                id="claude-sonnet-4",
+                display_name="Claude Sonnet 4",
+                context_window=216000,
+                max_output_tokens=88000,
+                capabilities=["streaming", "tools", "vision"],
+                defaults={},
+            ),
         ]
 
         provider = GitHubCopilotProvider()

@@ -647,3 +647,187 @@ class TestProviderRetryEvent:
         assert "max_retries" in data
         assert "delay" in data
         assert "error_type" in data
+
+    @pytest.mark.asyncio
+    async def test_retry_after_is_none_when_not_present(
+        self,
+        mock_coordinator: MagicMock,
+        sample_request: dict[str, Any],
+    ) -> None:
+        """retry_after field is None when error carries no Retry-After value.
+
+        Contract: provider-protocol:hooks:provider_retry:MUST:3
+        """
+        from unittest.mock import patch
+
+        from amplifier_core import llm_errors
+
+        PROVIDER_RETRY = "provider:retry"
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
+
+        provider = GitHubCopilotProvider(
+            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            coordinator=mock_coordinator,
+        )
+
+        call_count = 0
+
+        async def mock_execute(
+            *args: Any, accumulator: StreamingAccumulator, **kwargs: Any
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # ProviderUnavailableError has no retry_after attribute
+                raise llm_errors.ProviderUnavailableError("Service temporarily unavailable")
+
+        provider._execute_sdk_completion = mock_execute  # type: ignore[method-assign]
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await provider.complete(
+                sample_request,  # type: ignore[arg-type]
+                model="gpt-4",
+            )
+
+        retry_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == PROVIDER_RETRY
+        ]
+        assert len(retry_calls) >= 1
+        data = retry_calls[0][0][1]
+
+        # MUST:3 — field is present and its exact value is None (not missing, not 0)
+        assert "retry_after" in data, "retry_after must always be present in payload"
+        assert data["retry_after"] is None, (
+            f"Expected None for non-RateLimitError, got {data['retry_after']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_after_is_float_when_rate_limit_carries_header(
+        self,
+        mock_coordinator: MagicMock,
+        sample_request: dict[str, Any],
+    ) -> None:
+        """retry_after field is a float when RateLimitError carries a Retry-After value.
+
+        Contract: provider-protocol:hooks:provider_retry:MUST:3
+        """
+        from unittest.mock import patch
+
+        from amplifier_core import llm_errors
+
+        PROVIDER_RETRY = "provider:retry"
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
+
+        provider = GitHubCopilotProvider(
+            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            coordinator=mock_coordinator,
+        )
+
+        call_count = 0
+
+        async def mock_execute(
+            *args: Any, accumulator: StreamingAccumulator, **kwargs: Any
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # RateLimitError with retry_after=30.0 — simulates Retry-After: 30 header
+                raise llm_errors.RateLimitError("rate limited", retry_after=30.0)
+
+        provider._execute_sdk_completion = mock_execute  # type: ignore[method-assign]
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await provider.complete(
+                sample_request,  # type: ignore[arg-type]
+                model="gpt-4",
+            )
+
+        retry_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == PROVIDER_RETRY
+        ]
+        assert len(retry_calls) >= 1
+        data = retry_calls[0][0][1]
+
+        # MUST:3 — exact type (float) and exact value (30.0) from the error attribute
+        assert "retry_after" in data, "retry_after must always be present in payload"
+        assert isinstance(data["retry_after"], float), (
+            f"Expected float, got {type(data['retry_after']).__name__}"
+        )
+        assert data["retry_after"] == 30.0, (
+            f"Expected 30.0 from RateLimitError.retry_after, got {data['retry_after']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_after_propagated_from_translated_exception(
+        self,
+        mock_coordinator: MagicMock,
+        sample_request: dict[str, Any],
+    ) -> None:
+        """retry_after is extracted and propagated when a raw exception is translated.
+
+        Covers the second emit_retry call site (except Exception → translate_sdk_error).
+        A plain Exception whose message matches the RateLimitError mapping and contains
+        a Retry-After value must surface that value in the provider:retry payload.
+
+        Contract: provider-protocol:hooks:provider_retry:MUST:3
+        """
+        from unittest.mock import patch
+
+        PROVIDER_RETRY = "provider:retry"
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
+
+        provider = GitHubCopilotProvider(
+            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            coordinator=mock_coordinator,
+        )
+
+        call_count = 0
+
+        async def mock_execute(
+            *args: Any, accumulator: StreamingAccumulator, **kwargs: Any
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Raw (non-kernel) exception — goes through translate_sdk_error.
+                # Message matches RateLimitError string_pattern "rate limit" and
+                # contains a Retry-After value parseable by _extract_retry_after.
+                raise Exception(  # noqa: TRY002
+                    "rate limit exceeded. Retry after 45 seconds"
+                )
+
+        provider._execute_sdk_completion = mock_execute  # type: ignore[method-assign]
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await provider.complete(
+                sample_request,  # type: ignore[arg-type]
+                model="gpt-4",
+            )
+
+        retry_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == PROVIDER_RETRY
+        ]
+        assert len(retry_calls) >= 1
+        data = retry_calls[0][0][1]
+
+        # MUST:3 — retry_after extracted from translated RateLimitError (second call site)
+        assert "retry_after" in data, "retry_after must always be present in payload"
+        assert isinstance(data["retry_after"], float), (
+            f"Expected float from translated RateLimitError, "
+            f"got {type(data['retry_after']).__name__}"
+        )
+        assert data["retry_after"] == 45.0, (
+            f"Expected 45.0 extracted from message, got {data['retry_after']!r}"
+        )

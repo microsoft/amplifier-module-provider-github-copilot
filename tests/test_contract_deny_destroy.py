@@ -78,7 +78,6 @@ class TestDenyHookNotConfigurable:
         # Collect all top-level config data dicts to inspect
         config_sources = [
             ("models.py/PROVIDER", _models.PROVIDER),
-            ("models.py/MODELS", {"models": _models.MODELS}),
             ("errors.yaml/error_mappings", {"error_mappings": error_mappings}),
             ("sdk_protection.py", {}),  # dataclass-based, no dict keys to scan
         ]

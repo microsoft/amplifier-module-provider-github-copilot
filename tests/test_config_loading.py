@@ -75,21 +75,19 @@ class TestLoadModelsConfig:
         assert config.defaults["model"] == "claude-opus-4.5"
         assert config.defaults["max_tokens"] == 4096
 
-    def test_load_models_config_returns_models_list(self) -> None:
-        """Models config loader returns non-empty models list.
+    def test_load_models_config_returns_provider_config(self) -> None:
+        """Models config loader returns valid ProviderConfig.
 
         Contract: provider-protocol:list_models:MUST:1
-        Updated to expect claude-opus-4.5 as primary model.
         """
         from amplifier_module_provider_github_copilot.provider import (
             _load_models_config,  # type: ignore[reportPrivateUsage]  # Testing internal function
         )
 
         config = _load_models_config()
-        assert len(config.models) >= 2
-        model_ids = [m["id"] for m in config.models]
-        assert "claude-opus-4.5" in model_ids
-        assert "gpt-4" in model_ids
+        assert config.provider_id == "github-copilot"
+        assert config.defaults["model"] == "claude-opus-4.5"
+        assert config.defaults["timeout"] == 3600
 
     # NOTE: Fallback tests removed - config validation now uses fail-fast pattern.
     # Missing/empty config raises ConfigurationError instead of silent fallback.
@@ -112,18 +110,17 @@ class TestProviderUsesYamlConfig:
         assert info.defaults.get("model") == "claude-opus-4.5"
 
     @pytest.mark.asyncio
-    async def test_list_models_sourced_from_yaml(self) -> None:
-        """Provider.list_models() comes from YAML, not hardcoded list.
+    async def test_list_models_sourced_from_sdk(self) -> None:
+        """Provider.list_models() returns SDK models, not hardcoded list.
 
-        Updated to expect claude-opus-4.5 as primary model.
+        Contract: behaviors:ModelDiscoveryError:MUST_NOT:1 — no hardcoded fallback.
         """
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
         models = await provider.list_models()
         model_ids = [m.id for m in models]
-        assert "claude-opus-4.5" in model_ids
-        assert "gpt-4" in model_ids
+        assert "claude-opus-4.5" in model_ids  # present in test mock list
 
     # NOTE: Graceful fallback test removed - config validation now uses fail-fast pattern.
     # Missing config raises ConfigurationError at provider init.
@@ -148,21 +145,23 @@ class TestModelsYamlSchemaCompliance:
 
         assert _models.PROVIDER["id"] == "github-copilot"
 
-    def test_models_yaml_models_list_nonempty(self) -> None:
-        """Models config has non-empty models list."""
+    def test_models_constant_removed_from_config(self) -> None:
+        """config/_models.py has no MODELS constant — model catalog is SDK's responsibility."""
         from amplifier_module_provider_github_copilot.config import _models as _models
 
-        assert isinstance(_models.MODELS, list)
-        assert len(_models.MODELS) > 0
+        assert not hasattr(_models, "MODELS"), (
+            "MODELS was removed — model catalog must come from the SDK, not config."
+        )
 
-    def test_models_yaml_each_model_has_required_fields(self) -> None:
-        """Each model in config has required fields."""
+    def test_models_yaml_provider_defaults_have_required_fields(self) -> None:
+        """PROVIDER defaults block has required fields for SDK fallback."""
         from amplifier_module_provider_github_copilot.config import _models as _models
 
-        required_fields = ["id", "display_name", "context_window", "max_output_tokens"]
-        for model in _models.MODELS:
-            for field in required_fields:
-                assert field in model, f"Model {model.get('id', 'unknown')} missing field: {field}"
+        required_fields = ["model", "timeout", "context_window", "max_output_tokens"]
+        for field in required_fields:
+            assert field in _models.PROVIDER["defaults"], (
+                f"PROVIDER defaults missing required field: {field}"
+            )
 
 
 # ============================================================================
@@ -294,15 +293,14 @@ class TestModelsYamlDefaultValues:
 
         assert _models.PROVIDER["defaults"]["max_output_tokens"] == 32000
 
-    def test_models_yaml_contains_claude_opus_45_model_entry(self) -> None:
-        """config/_models.py MODELS list contains claude-opus-4.5.
+    def test_models_yaml_contains_claude_opus_45_as_default(self) -> None:
+        """config/_models.py PROVIDER defaults model is claude-opus-4.5.
 
         Contract: provider-protocol:list_models:MUST:1
         """
         from amplifier_module_provider_github_copilot.config import _models
 
-        model_ids = [m["id"] for m in _models.MODELS]
-        assert "claude-opus-4.5" in model_ids
+        assert _models.PROVIDER["defaults"]["model"] == "claude-opus-4.5"
 
     def test_provider_get_info_defaults_model_claude_opus_45(self) -> None:
         """Provider.get_info().defaults['model'] is claude-opus-4.5.

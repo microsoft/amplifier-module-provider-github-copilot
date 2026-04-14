@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-    # GitHub Copilot CLI SDK
+    # GitHub Copilot SDK
     # - v0.2.0: Breaking changes - SubprocessConfig, send(prompt, attachments=...)
     "github-copilot-sdk>=0.2.0,<0.3.0",
     # PyYAML for config loading

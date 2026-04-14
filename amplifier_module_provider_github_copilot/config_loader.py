@@ -85,7 +85,6 @@ class ProviderConfig:
     credential_env_vars: list[str]
     capabilities: list[str]
     defaults: dict[str, Any]
-    models: list[dict[str, Any]]
 
 
 @functools.lru_cache(maxsize=1)
@@ -105,15 +104,6 @@ def load_models_config() -> ProviderConfig:
             "Package is missing required configuration module: config/_models.py",
             provider="github-copilot",
         ) from e
-
-    # Fail-fast: no models defined = incomplete config
-    models = _models_data.MODELS
-    if not models:
-        raise ConfigurationError(
-            "Config validation failed: config/models.py contains no models. "
-            "At least one model must be defined.",
-            provider="github-copilot",
-        )
 
     # Three-Medium: Validate required keys exist (fail-fast)
     p = _models_data.PROVIDER
@@ -143,7 +133,6 @@ def load_models_config() -> ProviderConfig:
         credential_env_vars=p.get("credential_env_vars", []),
         capabilities=p.get("capabilities", []),
         defaults=defaults,
-        models=models,
     )
 
 

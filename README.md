@@ -1,20 +1,40 @@
 # Amplifier GitHub Copilot Provider Module
 
-Enables GitHub Enterprise Subscription users to leverage the Copilot SDK as a provider and access available LLM models through Amplifier
+GitHub Copilot SDK integration for Amplifier — provides access to Anthropic and OpenAI models via your GitHub Copilot plan.
 
 ## Prerequisites
 
 - **Python 3.11+**
-- **GitHub Copilot subscription** — Individual, Business, or Enterprise
+- **[GitHub Copilot plan](https://github.com/features/copilot/plans)** — Free, Pro, Pro+, Business, or Enterprise
 - **[UV](https://github.com/astral-sh/uv)** (optional) — Fast Python package manager (pip works too)
+
+### Installing UV
+
+```bash
+# macOS/Linux/WSL
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 
 > **No Node.js required.** The Copilot SDK binary is bundled with the Python package
 > and discovered automatically.
 
+## Purpose
+
+Provides access to Anthropic Claude and OpenAI GPT models as an LLM provider for Amplifier, using the GitHub Copilot SDK. Model availability reflects your GitHub Copilot plan — models are discovered dynamically at runtime.
+
 ## Authentication
 
-Set a GitHub token as an environment variable. The provider checks these in order:
-`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`.
+Set a GitHub token as an environment variable. The provider checks these in order (first non-empty wins):
+
+| Priority | Variable | Use case |
+| --- | --- | --- |
+| 1 | `COPILOT_AGENT_TOKEN` | Copilot agent mode |
+| 2 | `COPILOT_GITHUB_TOKEN` | Recommended for direct use |
+| 3 | `GH_TOKEN` | GitHub CLI compatible |
+| 4 | `GITHUB_TOKEN` | GitHub Actions compatible |
 
 ### Option 1: `gh` CLI bridge (recommended)
 
@@ -89,7 +109,7 @@ amplifier init --yes
 
 ### Bundle reference
 
-Reference the provider directly in a bundle:
+Reference the provider directly from a bundle YAML using a branch or commit SHA:
 
 ```yaml
 providers:
@@ -112,36 +132,179 @@ amplifier run -p github-copilot -m claude-sonnet-4 "Explain this codebase"
 amplifier provider models github-copilot
 ```
 
-## Supported Models (18)
+## Supported Models
 
-All 18 models available through your Copilot subscription are exposed at runtime:
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current set as of SDK 0.2.2; run `amplifier provider models github-copilot` for the live list.
 
-**Anthropic:** `claude-haiku-4.5`, `claude-opus-4.5`, `claude-opus-4.6`, `claude-opus-4.6-1m`, `claude-sonnet-4`, `claude-sonnet-4.5`, `claude-sonnet-4.6`
+**Anthropic:**
 
-**OpenAI:** `gpt-4.1`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.4`
+| Model ID | Context | Max Output | Capabilities |
+| --- | --- | --- | --- |
+| `claude-sonnet-4.6` | 200k | 32k | streaming, tools, vision, thinking |
+| `claude-sonnet-4.5` | 200k | 32k | streaming, tools, vision |
+| `claude-haiku-4.5` | 200k | 64k | streaming, tools, vision |
+| `claude-opus-4.6` | 200k | 32k | streaming, tools, vision, thinking |
+| `claude-opus-4.6-1m` | 1M | 64k | streaming, tools, vision, thinking |
+| `claude-opus-4.5` | 200k | 32k | streaming, tools, vision |
+| `claude-sonnet-4` | 216k | 88k | streaming, tools, vision |
 
-**Google:** `gemini-3-pro-preview`
+**OpenAI:**
 
-> **Tip:** Want intelligent routing across models? Use the [Routing Matrix bundle](https://github.com/microsoft/amplifier-bundle-routing-matrix) to route prompts based on task type, cost, or latency.
+| Model ID | Context | Max Output | Capabilities |
+| --- | --- | --- | --- |
+| `gpt-5.4` | 400k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.3-codex` | 400k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.2-codex` | 400k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.2` | 400k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.1` | 264k | 136k | streaming, tools, vision, thinking |
+| `gpt-5.4-mini` | 400k | 128k | streaming, tools, vision, thinking |
+| `gpt-5-mini` | 264k | 136k | streaming, tools, vision, thinking |
+| `gpt-4.1` | 128k | 64k | streaming, tools, vision |
+
+> **Tip:** Want intelligent model selection? Use the [Routing Matrix bundle](https://github.com/microsoft/amplifier-bundle-routing-matrix) to select models by semantic role (`coding`, `reasoning`, `fast`) rather than hardcoding a model ID.
 
 ## Configuration
 
-Works with sensible defaults out of the box. Default model is `claude-opus-4.5` with streaming enabled and a 1-hour request timeout.
+The provider runs with sensible defaults. Set values in the `config` block of your bundle YAML:
 
-All options can be set via provider config in your bundle or amplifier configuration. See the source code for the full list of configurable parameters.
+```yaml
+providers:
+  - module: provider-github-copilot
+    name: github-copilot
+    config:
+      default_model: claude-opus-4.5
+```
 
-Set `raw: true` to include raw API request/response payloads in `llm:request` and `llm:response` events.
+| Key | Default | Description |
+| --- | --- | --- |
+| `default_model` | `"claude-opus-4.5"` | Model used when the caller does not specify one. Any ID from `list_models()` is valid. |
 
-> **Security Warning:** The `raw: true` setting exposes full API payloads including potentially sensitive data. Never enable in production environments. Use only for local debugging with non-sensitive test data.
+> **Note:** Retry parameters, session timeouts, and event queue sizes use fixed defaults
+> and cannot be overridden via bundle config. The request timeout defaults to 3600 s.
+
+### Retry and Error Handling
+
+The provider manages its own retry loop, giving full control over backoff timing, per-error-class behaviour, and `Retry-After` header honoring.
+
+#### Error Translation
+
+All errors are translated to typed kernel error types before the retry loop evaluates them. Every translated error preserves the original as `__cause__`.
+
+| Trigger | Kernel Error | Retryable |
+| --- | --- | --- |
+| Circuit breaker open | `ProviderUnavailableError` | No |
+| Authentication or permission failure | `AuthenticationError` | No |
+| Rate limit (429) | `RateLimitError` | Yes |
+| Quota or billing limit exceeded | `QuotaExceededError` | No |
+| Request timed out | `LLMTimeoutError` | Yes |
+| Content policy violation | `ContentFilterError` | No |
+| Connection refused or unreachable | `ProviderUnavailableError` | Yes |
+| SDK process exited unexpectedly | `NetworkError` | Yes |
+| Model not found | `NotFoundError` | No |
+| Context window exceeded | `ContextLengthError` | No |
+| Stream interrupted | `StreamError` | Yes |
+| Malformed or conflicting tool call | `InvalidToolCallError` | No |
+| Provider configuration error | `ConfigurationError` | No |
+| Request aborted or cancelled | `AbortError` | No |
+| Session lifecycle failure | `ProviderUnavailableError` | Yes |
+| Invalid request body (e.g. unsupported image format) | `InvalidRequestError` | No |
+| Any other error | `ProviderUnavailableError` | No |
+
+`RateLimitError` responses carry a `Retry-After` value; if present, it is used directly as the next retry delay (overriding the backoff formula).
+
+#### Backoff Formula
+
+Each retry delay is computed as follows. `attempt` is **0-indexed** — `0` is the first retry:
+
+```
+delay  = min(base_delay × 2^attempt, max_delay)   # attempt = 0, 1, 2, …
+jitter = delay × jitter_factor × random(−1, 1)
+sleep  = max(0, delay + jitter)
+```
+
+| Attempt (0-indexed) | Base | Capped | With jitter (±10%) |
+| --- | --- | --- | --- |
+| 0 (first retry) | 1 s | 1 s | 0.9 – 1.1 s |
+| 1 | 2 s | 2 s | 1.8 – 2.2 s |
+| 2 | 4 s | 4 s | 3.6 – 4.4 s |
+
+#### Retry Defaults
+
+Retry parameters are fixed and cannot be changed via bundle config.
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `max_attempts` | `3` | Maximum retry attempts before surfacing the error to the caller |
+| `base_delay_ms` | `1000` | Base delay in milliseconds (doubles each attempt) |
+| `max_delay_ms` | `30000` | Delay cap in milliseconds before jitter is applied |
+| `jitter_factor` | `0.1` | Jitter fraction applied as ± of the capped delay (0.0 – 1.0) |
+
+#### Retry Events
+
+A `provider:retry` event is emitted before each retry sleep:
+
+| Field | Description |
+| --- | --- |
+| `provider` | Provider name (`"github-copilot"`) |
+| `model` | Model being called |
+| `attempt` | Current attempt number (1-based in event payload) |
+| `max_retries` | Configured maximum attempts |
+| `delay` | Computed sleep duration in seconds |
+| `retry_after` | Server `Retry-After` value in seconds, or `null` |
+| `error_type` | Kernel error class name (e.g. `RateLimitError`) |
+| `error_message` | Sanitized error description |
+
+> `error_message` is passed through `redact_sensitive_text()` before emission — tokens and credentials are never leaked into events.
+
+## Observability
+
+The provider emits three event types via the Amplifier hook system:
+
+### `llm:request`
+
+Emitted immediately before the SDK call.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `provider` | string | `"github-copilot"` |
+| `model` | string | Model ID used for this request |
+| `message_count` | int | Number of messages in the conversation |
+| `tool_count` | int | Number of tools available |
+| `streaming` | bool | Whether streaming is enabled (default: `true`) |
+| `timeout` | float | Request timeout in seconds |
+
+### `llm:response`
+
+Emitted after the SDK call completes (success or error).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `provider` | string | `"github-copilot"` |
+| `model` | string | Model ID |
+| `status` | string | `"ok"` or `"error"` |
+| `duration_ms` | int | Wall-clock time in milliseconds |
+| `usage` | object | `{"input": int, "output": int}` token counts |
+| `finish_reason` | string | `"stop"`, `"tool_calls"`, `"length"`, `"content_filter"`, `"end_turn"` |
+| `content_blocks` | int | Number of content blocks in the response |
+| `tool_calls` | int | Number of structured tool calls returned |
+| `sdk_session_id` | string (optional) | Copilot SDK session ID for log correlation |
+| `sdk_pid` | string (optional) | SDK process identifier for log correlation |
+
+On error: `status`, `error_type`, `error_message` (redacted), `duration_ms`.
+
+### `provider:retry`
+
+See [Retry Events](#retry-events) above.
 
 ## Features
 
-- Streaming support
+- Streaming support (always on; `llm:request` event reflects this)
 - Tool use (function calling)
 - Extended thinking (on supported models)
 - Vision capabilities (on supported models)
 - Token counting and management
-- Message validation before API calls (defense in depth)
+- Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content are escaped before the request reaches the SDK
+- All log output and observability events pass through secret redaction (tokens, Bearer headers, GitHub token formats, API keys, JWTs, PEM blocks)
 
 ## Contract
 
@@ -150,14 +313,47 @@ Set `raw: true` to include raw API request/response payloads in `llm:request` an
 | **Module Type** | Provider |
 | **Module ID** | `provider-github-copilot` |
 | **Provider Name** | `github-copilot` |
+| **Mount Point** | `providers` |
 | **Entry Point** | `amplifier_module_provider_github_copilot:mount` |
 | **Source URI** | `git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main` |
 
+## Architecture
+
+### SDK Client Singleton
+
+All provider instances share a single SDK client. The singleton is created on first `mount()` and released when the last mounted instance is cleaned up, ensuring efficient shared resource management across concurrent sub-agents.
+
+### Session Lifecycle
+
+A fresh SDK session is created for each `complete()` call and torn down when the call returns. This provides clean, independent context for each request. The shared client and disk model cache persist across requests intentionally — these are not session state.
+
+### Tool Isolation
+
+Only tools explicitly passed by Amplifier's orchestrator in the `ChatRequest` are available within each session. Tool execution is the orchestrator's responsibility — the provider does not execute tools directly.
+
 ## Graceful Error Recovery
 
-The provider automatically detects and repairs incomplete tool call sequences in conversation history. If tool results are missing (due to context compaction, parsing errors, or state corruption), synthetic results are injected so the API accepts the request and the session continues.
+The provider translates all SDK errors to typed kernel errors before they reach the caller. Each `complete()` call uses an independent session — no state accumulates between requests. The shared client and disk model cache persist across requests by design.
 
-Repairs are logged as warnings and emit `provider:tool_sequence_repaired` events for monitoring.
+On `list_models()` failure, the provider falls back to a disk cache (24-hour TTL) before raising `ProviderUnavailableError`.
+
+## Fake Tool Call Detection
+
+LLMs occasionally emit tool calls as plain text instead of using the structured calling mechanism. The provider detects and automatically corrects this before returning a response.
+
+Detection only fires when the request included tools and the response contains no structured tool calls. Up to 2 correction attempts are made; if the model still does not use structured tool calls, the last response is returned as-is.
+
+## Environment Variables
+
+| Variable | Description |
+| --- | --- |
+| `COPILOT_AGENT_TOKEN` | GitHub token — Copilot agent mode (highest priority) |
+| `COPILOT_GITHUB_TOKEN` | GitHub token — recommended for direct use |
+| `GH_TOKEN` | GitHub token — GitHub CLI compatible |
+| `GITHUB_TOKEN` | GitHub token — GitHub Actions compatible |
+| `COPILOT_SDK_LOG_LEVEL` | SDK log verbosity: `none`, `error`, `warning`, `info` (default), `debug`, `all` |
+
+> **Warning:** `debug` and `all` produce high-volume output including sensitive conversation data. Use only for targeted SDK debugging.
 
 ## Development
 
@@ -179,7 +375,8 @@ pip install -e ".[dev]"
 make test          # Run unit tests (excludes live API calls)
 make live          # Run live integration tests (requires GITHUB_TOKEN)
 make coverage      # Run with branch coverage report
-make check         # Full check (lint + type-check + test)
+make check         # Full check (lint + test)
+make smoke         # Quick E2E smoke test (seconds)
 ```
 
 ### Live Integration Tests
@@ -206,15 +403,7 @@ python -m pytest tests/ -m live -v --tb=short
 
 ## Project Status
 
-This is an **experimental project** exploring integration between the Amplifier framework and the GitHub Copilot CLI SDK. We are sharing it openly to enable community learning and experimentation.
-
-As an experimental project:
-
-- Response times may vary
-- Breaking changes may occur without deprecation periods
-- Features may be added, changed, or removed based on learnings
-
-For questions, feel free to open a [GitHub Discussion](../../discussions). For bug reports, open a [GitHub Issue](../../issues) with reproduction steps.
+**Experimental.** Breaking changes may occur without deprecation notice. For questions open a [Discussion](https://github.com/microsoft/amplifier-module-provider-github-copilot/discussions); for bugs open an [Issue](https://github.com/microsoft/amplifier-module-provider-github-copilot/issues).
 
 ## Troubleshooting
 
@@ -223,6 +412,8 @@ For questions, feel free to open a [GitHub Discussion](../../discussions). For b
 | `Copilot SDK not installed` | Provider module not installed | Run `amplifier provider install github-copilot` |
 | `Not authenticated to GitHub Copilot` | Token not set | **Linux/macOS:** `export GITHUB_TOKEN=$(gh auth token)` **Windows:** `$env:GITHUB_TOKEN = (gh auth token)` |
 | `gh: command not found` | GitHub CLI missing | [Install gh CLI](https://cli.github.com/) |
+| Stale or wrong model list | Cached models | Delete `%LOCALAPPDATA%\amplifier\provider-github-copilot\models_cache.json` (Windows), `~/Library/Caches/amplifier/provider-github-copilot/models_cache.json` (macOS), or `~/.cache/amplifier/provider-github-copilot/models_cache.json` (Linux) |
+| `Permission denied` on SDK binary | `uv` stripped execute bits | Provider auto-repairs on startup; if it fails, run `chmod +x <path-to-copilot-binary>` (Linux/macOS only) |
 
 ### Common Mistake
 
@@ -248,10 +439,11 @@ Running `amplifier init` before authentication:
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
 - `github-copilot-sdk>=0.2.0,<0.3.0`
+- `pyyaml>=6.0`
 
-> **Note:** The `github-copilot-sdk` is installed automatically when you run 
-> `amplifier provider install github-copilot`. It is NOT bundled with the main 
-> `amplifier` package.
+> **Note:** `github-copilot-sdk` is installed automatically when you install or initialize
+> the provider via Amplifier (`amplifier provider install github-copilot` or `amplifier init`).
+> It is not bundled with the main `amplifier` package.
 
 ## Contributing
 

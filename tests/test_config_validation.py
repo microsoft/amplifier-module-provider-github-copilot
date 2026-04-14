@@ -29,36 +29,38 @@ class TestConfigValidationFailFast:
     This replaces silent fallback behavior with explicit failure.
     """
 
-    def test_empty_models_list_raises_configuration_error(self) -> None:
-        """Empty models list raises ConfigurationError, not silent fallback.
+    def test_empty_models_list_is_allowed(self) -> None:
+        """config loader does not validate a MODELS constant — MODELS was removed.
 
-        Contract: observability.md (logging standards)
-        Feature: Config validation fail-fast
+        The loader now validates PROVIDER (id, defaults.model, defaults.timeout),
+        not the MODELS list — model discovery is the SDK's job, not config's.
+        Contract: behaviors:ModelDiscoveryError:MUST_NOT:1
         """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_models_config,
         )
 
         load_models_config.cache_clear()
-        with patch(f"{_MODELS_MODULE}.MODELS", []):
-            with pytest.raises(ConfigurationError) as exc_info:
-                load_models_config()
-
-        assert "no models" in str(exc_info.value).lower()
+        # Patch in a temporary MODELS=[] (create=True since the attribute no longer exists)
+        # to prove load_models_config() does NOT gate on it
+        with patch(f"{_MODELS_MODULE}.MODELS", [], create=True):
+            cfg = load_models_config()
+        assert cfg.provider_id == "github-copilot"
+        assert cfg.defaults["model"] == "claude-opus-4.5"
         load_models_config.cache_clear()
 
     def test_configuration_error_includes_provider_id(self) -> None:
-        """ConfigurationError includes provider='github-copilot'.
+        """ConfigurationError includes provider='github-copilot' when PROVIDER missing.
 
         Contract: error-hierarchy.md (MUST set provider on errors)
-        Feature: Config validation fail-fast
+        Feature: Config validation fail-fast on PROVIDER block, not MODELS list.
         """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_models_config,
         )
 
         load_models_config.cache_clear()
-        with patch(f"{_MODELS_MODULE}.MODELS", []):
+        with patch(f"{_MODELS_MODULE}.PROVIDER", {}):
             with pytest.raises(ConfigurationError) as exc_info:
                 load_models_config()
 
@@ -125,7 +127,7 @@ class TestConfigLoaderMissingKeys:
         provider_no_timeout: dict[str, Any] = {
             "id": "github-copilot",
             "display_name": "Test",
-            "defaults": {"model": "gpt-4"},  # Missing 'timeout' key
+            "defaults": {"model": "claude-opus-4.5"},  # Missing 'timeout' key
         }
         with patch(f"{_MODELS_MODULE}.PROVIDER", provider_no_timeout):
             with pytest.raises(ConfigurationError) as exc_info:
@@ -142,40 +144,28 @@ class TestPythonConfigStructure:
     in the config/models.py data module.
     """
 
-    def test_models_list_is_populated(self) -> None:
-        """config/_models.py MODELS list is not empty.
+    def test_models_constant_does_not_exist(self) -> None:
+        """config/_models.py MODELS constant has been removed.
 
-        # Contract: behaviors:ConfigLoading:MUST:3
+        MODELS was removed because the SDK is the authoritative model catalog.
+        Contract: behaviors:ModelDiscoveryError:MUST_NOT:1
         """
         from amplifier_module_provider_github_copilot.config import _models as models
 
-        assert len(models.MODELS) > 0, "MODELS list must have at least one model"
+        assert not hasattr(models, "MODELS"), (
+            "MODELS was removed — model catalog must come from the SDK, not config. "
+            "Contract: behaviors:ModelDiscoveryError:MUST_NOT:1"
+        )
 
-    def test_each_model_has_required_fields(self) -> None:
-        """Each model in MODELS has required fields.
+    def test_default_model_limits_match_sdk_verified_values(self) -> None:
+        """PROVIDER defaults have SDK-verified context and output limits.
 
         # Contract: provider-protocol:list_models:MUST:2
         """
         from amplifier_module_provider_github_copilot.config import _models as models
 
-        # Assert exact values for known models
-        opus = next(m for m in models.MODELS if m["id"] == "claude-opus-4.5")
-        assert opus["id"] == "claude-opus-4.5"
-        assert opus["display_name"] == "Claude Opus 4.5"
-        assert opus["context_window"] == 200000
-        assert opus["max_output_tokens"] == 32000
-
-        gpt4 = next(m for m in models.MODELS if m["id"] == "gpt-4")
-        assert gpt4["id"] == "gpt-4"
-        assert gpt4["display_name"] == "GPT-4"
-        assert gpt4["context_window"] == 128000
-        assert gpt4["max_output_tokens"] == 4096
-
-        gpt4o = next(m for m in models.MODELS if m["id"] == "gpt-4o")
-        assert gpt4o["id"] == "gpt-4o"
-        assert gpt4o["display_name"] == "GPT-4o"
-        assert gpt4o["context_window"] == 128000
-        assert gpt4o["max_output_tokens"] == 4096
+        assert models.PROVIDER["defaults"]["context_window"] == 200000
+        assert models.PROVIDER["defaults"]["max_output_tokens"] == 32000
 
     def test_provider_has_required_fields(self) -> None:
         """config/_models.py PROVIDER has required top-level and nested fields.
@@ -211,5 +201,4 @@ class TestPythonConfigStructure:
         load_models_config.cache_clear()
         config = load_models_config()
         assert config.provider_id == "github-copilot"
-        assert len(config.models) > 0
         load_models_config.cache_clear()

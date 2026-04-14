@@ -1143,7 +1143,7 @@ class TestRuntimeConfigOverride:
         cached_config = load_models_config()
         # Cached config should still have original YAML default
         # (not mutated by either provider)
-        assert cached_config.defaults["model"] in ["claude-opus-4.5", "gpt-4", "gpt-4o"]
+        assert cached_config.defaults["model"] == "claude-opus-4.5"
 
 
 # =============================================================================

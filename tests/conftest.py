@@ -91,6 +91,29 @@ def clear_config_caches() -> None:
 
 # -- Model Discovery Mock (for tests that don't test SDK integration) --
 
+# Standalone test model list — reflects realistic SDK 0.2.0 models.
+# Deliberately NOT sourced from config/_models.py: production list_models()
+# uses the SDK, not config. Tests that assert specific model IDs must use this.
+# tuple prevents accidental mutation by test code; inner dicts are read-only by convention.
+_MOCK_SDK_MODELS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "claude-opus-4.5",
+        "display_name": "Claude Opus 4.5",
+        "context_window": 200000,
+        "max_output_tokens": 32000,
+        "capabilities": ["streaming", "tools", "vision"],
+        "defaults": {},
+    },
+    {
+        "id": "claude-sonnet-4",
+        "display_name": "Claude Sonnet 4",
+        "context_window": 216000,
+        "max_output_tokens": 88000,
+        "capabilities": ["streaming", "tools", "vision"],
+        "defaults": {},
+    },
+)
+
 
 @pytest.fixture
 def real_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,17 +130,16 @@ def real_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def mock_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Auto-mock model discovery to use YAML config instead of SDK.
+    """Auto-mock model discovery to return a standalone test model list.
+
+    Production list_models() calls the SDK; this mock replaces that call
+    with _MOCK_SDK_MODELS so unit tests run without a live SDK connection.
 
     Tests that specifically test SDK model discovery should use the
     `real_model_discovery` fixture to disable this mock.
-
-    This preserves backward compatibility for tests that expect YAML-based
-    models while production code uses dynamic SDK fetch.
     """
     from amplifier_core import ModelInfo
 
-    from amplifier_module_provider_github_copilot.config_loader import load_models_config
     from amplifier_module_provider_github_copilot.sdk_adapter.model_translation import (
         CopilotModelInfo,
     )
@@ -125,8 +147,7 @@ def mock_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     async def mock_fetch_and_map_models(
         _client: object,
     ) -> tuple[list[ModelInfo], list[CopilotModelInfo]]:
-        """Return models from YAML config with raw CopilotModelInfo for caching."""
-        cfg = load_models_config()
+        """Return standalone test models — not derived from config/_models.py."""
         amplifier_models = [
             ModelInfo(
                 id=m["id"],
@@ -136,9 +157,8 @@ def mock_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
                 capabilities=m.get("capabilities", []),
                 defaults=m.get("defaults", {}),
             )
-            for m in cfg.models
+            for m in _MOCK_SDK_MODELS
         ]
-        # Create matching CopilotModelInfo for cache consistency
         copilot_models = [
             CopilotModelInfo(
                 id=m["id"],
@@ -146,7 +166,7 @@ def mock_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
                 context_window=m["context_window"],
                 max_output_tokens=m["max_output_tokens"],
             )
-            for m in cfg.models
+            for m in _MOCK_SDK_MODELS
         ]
         return amplifier_models, copilot_models
 

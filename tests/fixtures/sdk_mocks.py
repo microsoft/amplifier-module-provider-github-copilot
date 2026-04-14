@@ -545,17 +545,17 @@ class MockCopilotClientWrapper:
         """
         if self._model_list is not None:
             return self._model_list
-        # Default: return a minimal model list for testing
+        # Default: return a minimal model list matching current SDK 0.2.2 models
         return [
             {
-                "id": "gpt-4",
-                "name": "GPT-4",
-                "version": "gpt-4",
+                "id": "claude-opus-4.5",
+                "name": "Claude Opus 4.5",
+                "version": "claude-opus-4.5",
             },
             {
-                "id": "gpt-4o",
-                "name": "GPT-4o",
-                "version": "gpt-4o",
+                "id": "claude-sonnet-4",
+                "name": "Claude Sonnet 4",
+                "version": "claude-sonnet-4",
             },
         ]
 

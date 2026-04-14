@@ -400,6 +400,7 @@ class GitHubCopilotProvider:
                             attempt=attempt + 1,
                             max_retries=retry_config.max_attempts,
                             delay=delay_ms / 1000,
+                            retry_after=get_retry_after(e),
                             error_type=type(e).__name__,
                             error_message=str(e),
                         )
@@ -449,6 +450,7 @@ class GitHubCopilotProvider:
                             attempt=attempt + 1,
                             max_retries=retry_config.max_attempts,
                             delay=delay_ms / 1000,
+                            retry_after=get_retry_after(translated),
                             error_type=type(translated).__name__,
                             error_message=str(translated),
                         )

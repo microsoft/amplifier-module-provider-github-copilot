@@ -755,7 +755,7 @@ class TestNoHardcodedModelLists:
         """Contract: ARCHITECTURE.md line 71
 
         models.yaml contains default model POLICY, not a model catalog.
-        It should have 'default_model' but NOT a list of all models with limits.
+        It should have defaults.model but NOT expose a models list field.
         """
         from amplifier_module_provider_github_copilot.config_loader import load_models_config
 
@@ -764,12 +764,10 @@ class TestNoHardcodedModelLists:
         # Should have defaults (policy) with correct default model
         assert models_config.defaults["model"] == "claude-opus-4.5"
 
-        # Should NOT have a full model catalog
-        # If models section exists, it should be for fallback defaults ONLY
-        # when SDK returns None limits, not a full catalog
-        assert len(models_config.models) <= 3, (
-            f"models.yaml has {len(models_config.models)} models — this looks like a catalog, "
-            "not a policy file. Models should come from SDK, not YAML."
+        # ProviderConfig no longer exposes a .models field — catalog comes from SDK
+        assert not hasattr(models_config, "models"), (
+            "ProviderConfig.models was removed — model catalog must come from SDK, "
+            "not config. Contract: behaviors:ModelDiscoveryError:MUST_NOT:1"
         )
 
 
