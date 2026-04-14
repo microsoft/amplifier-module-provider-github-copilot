@@ -2,76 +2,178 @@
 
 Contract: contracts/behaviors.md (Three-Medium Architecture)
 
-Tests verify that module-level complete() function loads timeout from
-config/_models.py instead of using hardcoded 120.0 value.
+Tests verify that provider.complete() loads timeout from config and passes
+it correctly to SDK completion calls.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 
 class TestModuleLevelCompleteTimeout:
     """Tests for module-level complete() timeout configuration."""
 
-    def test_no_hardcoded_120_in_provider(self) -> None:
-        """provider.py should not contain hardcoded 120.0 timeout.
+    @pytest.mark.asyncio
+    async def test_complete_uses_config_timeout_not_hardcoded(self) -> None:
+        """provider.complete() MUST use timeout from loaded config, not a hardcoded value.
 
-        Contract anchor: behaviors.md:Config:MUST:1
+        Contract: behaviors:ConfigLoading:MUST_NOT:5
+
+        Verifies that:
+        1. Provider loads timeout from ProviderConfig.defaults["timeout"]
+        2. The loaded timeout is passed to _execute_sdk_completion
+        3. No hardcoded default like 120.0 is used
         """
-        provider_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "provider.py"
+        import copy
+
+        from amplifier_module_provider_github_copilot.config_loader import (
+            ProviderConfig,
+            load_models_config,
         )
-        content = provider_path.read_text(encoding="utf-8")
-
-        # Check for hardcoded 120.0 timeout patterns
-        assert "timeout=120.0" not in content, (
-            "Found hardcoded timeout=120.0 in provider.py. "
-            "Per Three-Medium Architecture, policy must live in YAML."
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+        from tests.fixtures.sdk_mocks import (
+            MockCopilotClientWrapper,
+            text_delta_event,
         )
 
-    def test_module_complete_uses_load_models_config(self) -> None:
-        """Module-level complete() should call load_models_config() for timeout.
+        # Create mock client with events
+        events = [text_delta_event("Hello, world!")]
+        mock_client = MockCopilotClientWrapper(events=events)
 
-        Contract anchor: behaviors.md:Config:MUST:1
+        # Inject mock client into provider
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        # Create instance-local copy of config with modified timeout
+        # Do NOT mutate the cached config from load_models_config()
+        original_config = load_models_config()
+        test_config = ProviderConfig(
+            provider_id=original_config.provider_id,
+            display_name=original_config.display_name,
+            credential_env_vars=original_config.credential_env_vars,
+            capabilities=original_config.capabilities,
+            defaults=copy.deepcopy(original_config.defaults),
+            models=original_config.models,
+        )
+        test_config.defaults["timeout"] = 999
+        provider._provider_config = test_config
+
+        # Create request using proper kernel type
+        from amplifier_core import ChatRequest
+
+        request = MagicMock(spec=ChatRequest)
+        request.model = "gpt-4"
+        request.messages = [MagicMock(role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        # Patch _execute_sdk_completion to capture the timeout argument
+        captured_timeout: list[float] = []
+        original_execute = provider._execute_sdk_completion
+
+        async def capture_execute(*args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            captured_timeout.append(kwargs.get("timeout", 0.0))
+            return await original_execute(*args, **kwargs)
+
+        provider._execute_sdk_completion = capture_execute  # type: ignore[method-assign]
+
+        # Call the production complete() method
+        await provider.complete(request)
+
+        # Assert timeout from config (999) was passed, not a hardcoded value
+        assert len(captured_timeout) == 1, "Expected _execute_sdk_completion to be called once"
+        assert captured_timeout[0] == 999.0, (
+            f"Expected timeout=999.0 from config, got {captured_timeout[0]}. "
+            "Provider may be using hardcoded timeout instead of config."
+        )
+
+
+class TestTimeoutEnforcement:
+    """Tests that config timeout is actually enforced at the asyncio boundary."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_fires_as_llm_timeout_error(self) -> None:
+        """Config timeout must propagate through asyncio.timeout() to LLMTimeoutError.
+
+        Contract: behaviors:Config:MUST:2
+
+        Verifies the FULL chain: config value → _execute_sdk_completion timeout arg →
+        asyncio.timeout() → LLMTimeoutError translation. Unlike the wiring test above,
+        this test verifies that _execute_sdk_completion actually USES the timeout.
         """
-        # Check the source code references load_models_config
-        provider_path = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "provider.py"
-        )
-        content = provider_path.read_text(encoding="utf-8")
+        import asyncio
+        import copy
 
-        # Find that load_models_config is used (either directly or via _load_models_config alias)
-        # The provider uses load_models_config() in __init__ and exposes _load_models_config alias
-        assert "load_models_config" in content, (
-            "complete() should use load_models_config() to load timeout"
-        )
+        from amplifier_core import ChatRequest
 
-    # test_module_complete_timeout_from_config removed - tested completion.py which is now deleted
-    # The production path (provider._execute_sdk_completion) still uses config-driven timeout,
-    # verified by TestProductionPathWithMockClient tests in test_behaviors.py
+        from amplifier_module_provider_github_copilot.config_loader import (
+            ProviderConfig,
+            load_models_config,
+        )
+        from amplifier_module_provider_github_copilot.error_translation import (
+            LLMTimeoutError,
+        )
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, MockSDKSession
+
+        class _HangingSession(MockSDKSession):
+            """Session that never delivers events — hangs until cancelled."""
+
+            async def send(
+                self,
+                prompt: str,
+                *,
+                attachments: list[dict] | None = None,
+            ) -> str:
+                self.last_prompt = prompt
+                await asyncio.sleep(60)  # cancelled by asyncio.timeout()
+                return "message-id"  # unreachable
+
+        mock_client = MockCopilotClientWrapper(session_class=_HangingSession)
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        # Set very short timeout — 100ms is enough to confirm enforcement without test slowness
+        original_config = load_models_config()
+        test_config = ProviderConfig(
+            provider_id=original_config.provider_id,
+            display_name=original_config.display_name,
+            credential_env_vars=original_config.credential_env_vars,
+            capabilities=original_config.capabilities,
+            defaults=copy.deepcopy(original_config.defaults),
+            models=original_config.models,
+        )
+        test_config.defaults["timeout"] = 0.1  # 100ms
+        provider._provider_config = test_config
+
+        request = MagicMock(spec=ChatRequest)
+        request.model = "gpt-4"
+        request.messages = [MagicMock(role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        with pytest.raises(LLMTimeoutError):
+            await provider.complete(request)
 
 
 class TestTimeoutConfigValue:
     """Tests for timeout configuration values."""
 
-    def test_models_yaml_has_timeout_3600(self) -> None:
-        """config/models.py PROVIDER.defaults.timeout should be 3600.
-
-        Contract anchor: behaviors.md:Config:SHOULD:1
-        """
-        from amplifier_module_provider_github_copilot.config import _models as _models
-
-        assert _models.PROVIDER["defaults"]["timeout"] == 3600
-
     def test_yaml_timeout_is_3600(self) -> None:
         """YAML timeout value is 3600 (1 hour for reasoning models).
 
-        Contract anchor: behaviors.md:Config:MUST:2
+        Contract: behaviors:Config:MUST:2
         Three-Medium: YAML is authoritative source.
         """
         from amplifier_module_provider_github_copilot.config_loader import (

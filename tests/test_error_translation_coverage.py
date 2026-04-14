@@ -5,7 +5,7 @@ Covers:
 - Lines ~266-267: _matches_mapping return True via string_patterns / return False
 - Lines 400-421: _create_kernel_error_safely fallback constructor paths
 
-Contract: error-hierarchy:Construction:MUST:1 — caller always gets an LLMError back
+Contract: error-hierarchy:Translation:MUST:1 — caller always gets an LLMError back
 Contract: behaviors:Logging:SHOULD:1 — fallback paths log debug messages
 """
 
@@ -44,7 +44,6 @@ class TestImportlibResourcesFallback:
             config = load_error_config(config_path=None)
 
         # Config should load successfully via the file-path fallback
-        assert config is not None
         # Should have loaded real mappings from file
         assert len(config.mappings) > 0
 
@@ -54,10 +53,9 @@ class TestImportlibResourcesFallback:
     def test_importlib_failure_with_yaml_error_falls_back_gracefully(self) -> None:
         """importlib failure with broken file path returns empty ErrorConfig.
 
+        Contract: error-hierarchy:config:SHOULD:1 — Missing config falls back gracefully
         Lines 177-183 in error_translation.py — fallback path, path doesn't exist
         """
-        from pathlib import Path
-
         from amplifier_module_provider_github_copilot.error_translation import (
             ErrorConfig,
             _load_error_config_cached,  # pyright: ignore[reportPrivateUsage]
@@ -66,15 +64,9 @@ class TestImportlibResourcesFallback:
 
         _load_error_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
 
-        # Force both importlib AND file path to fail
-        with (
-            patch(
-                "importlib.resources.files",
-                side_effect=ImportError("no importlib"),
-            ),
-            patch.object(Path, "exists", return_value=False),
-        ):
-            config = load_error_config(config_path=None)
+        # Pass a nonexistent path directly — no class-wide patch needed
+        nonexistent_path = "/nonexistent_12345_config/errors.yaml"
+        config = load_error_config(config_path=nonexistent_path)
 
         # Should return default empty config gracefully
         assert isinstance(config, ErrorConfig)
@@ -92,7 +84,7 @@ class TestMatchesMappingPaths:
     def test_matches_via_sdk_type_name(self) -> None:
         """Returns True when exception type name matches sdk_patterns exactly.
 
-        Contract: error-hierarchy:Matching:MUST:1 — exact type name match
+        Contract: error-hierarchy:Translation:MUST:2 — exact type name match
         """
         from amplifier_module_provider_github_copilot.error_translation import (
             ErrorMapping,
@@ -111,7 +103,7 @@ class TestMatchesMappingPaths:
     def test_matches_via_string_pattern_in_message(self) -> None:
         """Returns True when exception message contains string_pattern substring.
 
-        Contract: error-hierarchy:Matching:MUST:2 — substring match in message
+        Contract: error-hierarchy:Translation:MUST:2 — substring match in message
         Lines ~266 in error_translation.py
         """
         from amplifier_module_provider_github_copilot.error_translation import (
@@ -134,6 +126,7 @@ class TestMatchesMappingPaths:
     def test_no_match_returns_false(self) -> None:
         """Returns False when neither type nor message matches.
 
+        Contract: error-hierarchy:Translation:MUST:2 — Uses config patterns
         Lines ~267 in error_translation.py — the return False branch
         """
         from amplifier_module_provider_github_copilot.error_translation import (
@@ -154,7 +147,10 @@ class TestMatchesMappingPaths:
         assert result is False
 
     def test_empty_patterns_never_matches(self) -> None:
-        """Mapping with no patterns never matches any exception."""
+        """Mapping with no patterns never matches any exception.
+
+        Contract: error-hierarchy:Translation:MUST:2 — Uses config patterns
+        """
         from amplifier_module_provider_github_copilot.error_translation import (
             ErrorMapping,
             _matches_mapping,  # pyright: ignore[reportPrivateUsage]
@@ -177,7 +173,7 @@ class TestCreateKernelErrorSafelyFallbacks:
     def test_first_path_full_constructor_used(self) -> None:
         """Happy path: error class accepts all args including retry_after.
 
-        Contract: error-hierarchy:Construction:MUST:1
+        Contract: error-hierarchy:Translation:MUST:1
         """
         from amplifier_module_provider_github_copilot.error_translation import (
             LLMError,
@@ -199,7 +195,7 @@ class TestCreateKernelErrorSafelyFallbacks:
     def test_second_fallback_when_constructor_rejects_retry_after(self) -> None:
         """Falls back to (message, provider, model, retryable) when retry_after rejected.
 
-        Contract: error-hierarchy:Construction:MUST:1 — always returns LLMError
+        Contract: error-hierarchy:Translation:MUST:1 — always returns LLMError
         Lines ~400-410 in error_translation.py
         """
         from amplifier_module_provider_github_copilot.error_translation import (
@@ -234,7 +230,7 @@ class TestCreateKernelErrorSafelyFallbacks:
     def test_third_fallback_when_constructor_rejects_model_and_retryable(self) -> None:
         """Falls back to (message, provider) when model/retryable also rejected.
 
-        Contract: error-hierarchy:Construction:MUST:1 — always returns LLMError
+        Contract: error-hierarchy:Translation:MUST:1 — always returns LLMError
         Lines ~410-421 in error_translation.py
         """
         from amplifier_module_provider_github_copilot.error_translation import (
@@ -263,7 +259,7 @@ class TestCreateKernelErrorSafelyFallbacks:
     def test_last_resort_returns_provider_unavailable_when_all_fail(self) -> None:
         """Last resort: returns ProviderUnavailableError when all constructors fail.
 
-        Contract: error-hierarchy:Construction:MUST:1 — never raises, always returns
+        Contract: error-hierarchy:Translation:MUST:1 — never raises, always returns
         Lines ~415-421 in error_translation.py
         """
         from amplifier_module_provider_github_copilot.error_translation import (

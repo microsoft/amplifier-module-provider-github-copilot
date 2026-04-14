@@ -12,6 +12,7 @@ Run: pytest -m sdk_assumption -v
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -24,79 +25,74 @@ class TestSDKImportAssumptions:
     AC-1: SDK Import Assumptions
     """
 
-    def test_copilot_module_importable(self, sdk_module: Any) -> None:
-        """We assume the copilot module is importable."""
-        assert sdk_module is not None
-
     def test_copilot_client_class_exists(self, sdk_module: Any) -> None:
         """We assume copilot.CopilotClient exists and is importable.
 
-        sdk-boundary:Translation:MUST:1
+        # Contract: sdk-boundary:Lifecycle:MUST:1
         """
-        assert hasattr(sdk_module, "CopilotClient")
-        assert sdk_module.CopilotClient is not None
+        assert isinstance(sdk_module.CopilotClient, type)
 
     def test_client_has_create_session(self, sdk_module: Any) -> None:
         """We assume CopilotClient has create_session method.
 
-        sdk-boundary:Session:MUST:1
+        # Contract: sdk-boundary:Session:MUST:1
         """
-        assert hasattr(sdk_module.CopilotClient, "create_session")
+        assert inspect.iscoroutinefunction(sdk_module.CopilotClient.create_session)
 
     def test_client_has_start_stop(self, sdk_module: Any) -> None:
         """We assume CopilotClient has start() and stop() lifecycle methods.
 
-        sdk-boundary:Lifecycle:MUST:1
+        # Contract: sdk-boundary:Lifecycle:MUST:1
         """
-        assert hasattr(sdk_module.CopilotClient, "start")
-        assert hasattr(sdk_module.CopilotClient, "stop")
+        assert inspect.iscoroutinefunction(sdk_module.CopilotClient.start)
+        assert inspect.iscoroutinefunction(sdk_module.CopilotClient.stop)
 
+    def test_subprocess_config_importable(self, sdk_module: Any) -> None:
+        """SubprocessConfig must be importable (multi-version fallback chain).
 
-@pytest.mark.sdk_assumption
-class TestSessionInterfaceAssumptions:
-    """Verify session-related assumptions without API calls.
+        # Contract: sdk-boundary:Auth:MUST:1
 
-    AC-2: Session Lifecycle Assumptions (Tier 6 portion)
-
-    Note: Session OBJECT interface (disconnect, send_message, register_pre_tool_use_hook)
-    cannot be verified without creating a real session, which requires credentials.
-    Those checks are in test_live_sdk.py (Tier 7).
-
-    Here we verify what CAN be checked without credentials:
-    - Client has create_session method
-    - Our wrapper has the expected interface
-    """
-
-    def test_client_has_create_session_method(self, sdk_module: Any) -> None:
-        """CopilotClient must have create_session method.
-
-        sdk-boundary:Session:MUST:1
+        The _imports.py module tries multiple import paths for SubprocessConfig.
+        If ALL fallback paths fail, authentication silently breaks at runtime.
         """
-        assert hasattr(sdk_module.CopilotClient, "create_session")
-        # Note: Session object interface (disconnect, send_message) verified in Tier 7
+        # Try the same import paths as _imports.py to verify SDK exposes SubprocessConfig
+        subprocess_config_cls = None
+        try:
+            from copilot.types import SubprocessConfig as SC  # type: ignore[import-untyped]
+
+            subprocess_config_cls = SC
+        except ImportError:
+            try:
+                from copilot import SubprocessConfig as SC  # type: ignore[import-untyped]
+
+                subprocess_config_cls = SC
+            except ImportError:
+                pass
+
+        assert isinstance(subprocess_config_cls, type), (
+            "SubprocessConfig must be importable from copilot.types or copilot root"
+        )
+        # Instantiate and verify a known field
+        instance = subprocess_config_cls(github_token="test-token")
+        assert instance.github_token == "test-token"
 
 
-@pytest.mark.sdk_assumption
 class TestOurWrapperImports:
     """Verify our wrapper code imports work correctly."""
 
-    def test_copilot_client_wrapper_importable(self) -> None:
-        """Our CopilotClientWrapper should be importable."""
+    def test_copilot_client_wrapper_session_is_context_manager(self) -> None:
+        """CopilotClientWrapper.session() must be an async context manager.
+
+        # Contract: sdk-boundary:TypeTranslation:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
 
-        assert CopilotClientWrapper is not None
-
-    def test_copilot_client_wrapper_has_session_method(self) -> None:
-        """CopilotClientWrapper should have session() context manager."""
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            CopilotClientWrapper,
+        # Verify session is implemented as asynccontextmanager
+        assert hasattr(CopilotClientWrapper.session, "__wrapped__"), (
+            "session() must be decorated with @asynccontextmanager"
         )
-
-        wrapper = CopilotClientWrapper()
-        assert hasattr(wrapper, "session")
-        assert hasattr(wrapper, "close")
 
 
 @pytest.mark.sdk_assumption

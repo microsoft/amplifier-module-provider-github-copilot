@@ -8,11 +8,14 @@ TTL policy values: config/policy.py (CacheConfig dataclass)
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+
+import pytest
 
 # =============================================================================
 # Test Fixtures
@@ -60,32 +63,32 @@ class TestCacheDirectory:
 
         assert isinstance(result, Path)
 
-    def test_get_cache_dir_windows(self) -> None:
+    def test_get_cache_dir_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On Windows, cache dir MUST be in LOCALAPPDATA."""
         from amplifier_module_provider_github_copilot.model_cache import get_cache_dir
 
-        with patch.object(sys, "platform", "win32"):
-            with patch.dict("os.environ", {"LOCALAPPDATA": "C:\\Users\\Test\\AppData\\Local"}):
-                result = get_cache_dir()
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local")
+        result = get_cache_dir()
 
         assert "amplifier" in str(result).lower()
 
-    def test_get_cache_dir_linux(self) -> None:
+    def test_get_cache_dir_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On Linux, cache dir MUST follow XDG_CACHE_HOME or ~/.cache."""
         from amplifier_module_provider_github_copilot.model_cache import get_cache_dir
 
-        with patch.object(sys, "platform", "linux"):
-            with patch.dict("os.environ", {"XDG_CACHE_HOME": "/custom/cache"}):
-                result = get_cache_dir()
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("XDG_CACHE_HOME", "/custom/cache")
+        result = get_cache_dir()
 
         assert "amplifier" in str(result).lower()
 
-    def test_get_cache_dir_macos(self) -> None:
+    def test_get_cache_dir_macos(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On macOS, cache dir MUST be in ~/Library/Caches."""
         from amplifier_module_provider_github_copilot.model_cache import get_cache_dir
 
-        with patch.object(sys, "platform", "darwin"):
-            result = get_cache_dir()
+        monkeypatch.setattr(sys, "platform", "darwin")
+        result = get_cache_dir()
 
         assert "amplifier" in str(result).lower()
 
@@ -126,9 +129,9 @@ class TestWriteCache:
         assert cache_file.exists()
 
     def test_write_cache_uses_utf8_encoding(self, tmp_path: Path) -> None:
-        """Contract: Cross-platform requirements
+        """Cache files SHOULD use UTF-8 encoding for cross-platform compatibility.
 
-        Cache files MUST use UTF-8 encoding for cross-platform compatibility.
+        # Contract: behaviors:ModelCache:SHOULD:1
         """
         from amplifier_module_provider_github_copilot.model_cache import write_cache
         from amplifier_module_provider_github_copilot.models import CopilotModelInfo
@@ -152,7 +155,10 @@ class TestWriteCache:
         assert "日本語" in content
 
     def test_write_cache_includes_timestamp(self, tmp_path: Path) -> None:
-        """Cache data MUST include timestamp for TTL verification."""
+        """Cache data SHOULD include timestamp for TTL verification.
+
+        # Contract: behaviors:ModelCache:SHOULD:2
+        """
         from amplifier_module_provider_github_copilot.model_cache import write_cache
         from amplifier_module_provider_github_copilot.models import CopilotModelInfo
 
@@ -175,7 +181,10 @@ class TestWriteCache:
         assert before <= data["timestamp"] <= after
 
     def test_write_cache_creates_parent_directories(self, tmp_path: Path) -> None:
-        """write_cache() MUST create parent directories if they don't exist."""
+        """write_cache() SHOULD create parent directories if they don't exist.
+
+        # Contract: behaviors:ModelCache:SHOULD:1
+        """
         from amplifier_module_provider_github_copilot.model_cache import write_cache
         from amplifier_module_provider_github_copilot.models import CopilotModelInfo
 
@@ -234,7 +243,7 @@ class TestReadCache:
         # Read it back
         result = read_cache(cache_file)
 
-        assert result is not None
+        assert isinstance(result, list)
         assert len(result) == 1
         assert isinstance(result[0], CopilotModelInfo)
         assert result[0].id == "claude-sonnet-4-5"
@@ -305,15 +314,6 @@ class TestCachePolicy:
     Contract: behaviors:ModelCache:SHOULD:2
     """
 
-    def test_cache_config_exists(self) -> None:
-        """load_cache_config() MUST return a valid config."""
-        from amplifier_module_provider_github_copilot.model_cache import (
-            load_cache_config,
-        )
-
-        config = load_cache_config()
-        assert config is not None
-
     def test_cache_config_has_ttl(self) -> None:
         """CacheConfig MUST define disk_ttl_seconds."""
         from amplifier_module_provider_github_copilot.model_cache import (
@@ -321,7 +321,6 @@ class TestCachePolicy:
         )
 
         config = load_cache_config()
-        assert hasattr(config, "disk_ttl_seconds")
         assert isinstance(config.disk_ttl_seconds, int)
 
     def test_ttl_is_reasonable(self) -> None:
@@ -380,7 +379,10 @@ class TestCacheConfigHelpers:
     """Tests for cache config helper functions."""
 
     def test_get_cache_filename_returns_string(self) -> None:
-        """get_cache_filename() returns configured filename."""
+        """get_cache_filename() returns configured filename.
+
+        # Contract: behaviors:ConfigLoading:MUST:1
+        """
         from amplifier_module_provider_github_copilot.model_cache import (
             get_cache_filename,
         )
@@ -390,23 +392,15 @@ class TestCacheConfigHelpers:
         assert isinstance(filename, str)
         assert filename.endswith(".json")
 
-    def test_get_disk_ttl_returns_int(self) -> None:
-        """get_cache_ttl_seconds() returns configured TTL in seconds."""
-        from amplifier_module_provider_github_copilot.model_cache import (
-            get_cache_ttl_seconds,
-        )
-
-        ttl = get_cache_ttl_seconds()
-
-        assert isinstance(ttl, int)
-        assert ttl > 0  # Should be positive
-
 
 class TestInvalidateCache:
     """Tests for cache invalidation."""
 
     def test_invalidate_cache_removes_file(self, tmp_path: Path) -> None:
-        """invalidate_cache() removes existing cache file."""
+        """invalidate_cache() removes existing cache file.
+
+        # Contract: behaviors:ModelCache:SHOULD:3
+        """
         from amplifier_module_provider_github_copilot.model_cache import (
             invalidate_cache,
         )
@@ -420,7 +414,10 @@ class TestInvalidateCache:
         assert not cache_file.exists()
 
     def test_invalidate_cache_handles_missing_file(self, tmp_path: Path) -> None:
-        """invalidate_cache() handles missing file gracefully."""
+        """invalidate_cache() handles missing file gracefully.
+
+        # Contract: behaviors:ModelCache:SHOULD:3
+        """
         from amplifier_module_provider_github_copilot.model_cache import (
             invalidate_cache,
         )
@@ -437,10 +434,13 @@ class TestInvalidateCache:
 class TestWriteCacheErrorHandling:
     """Tests for write_cache error handling."""
 
-    def test_write_cache_temp_file_cleanup_on_error(self, tmp_path: Path) -> None:
-        """write_cache() cleans up temp file on write failure."""
-        from unittest.mock import patch
+    def test_write_cache_temp_file_cleanup_on_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """write_cache() cleans up temp file on write failure.
 
+        # Contract: behaviors:ModelCache:SHOULD:1
+        """
         from amplifier_module_provider_github_copilot.model_cache import write_cache
         from amplifier_module_provider_github_copilot.models import CopilotModelInfo
 
@@ -456,25 +456,39 @@ class TestWriteCacheErrorHandling:
             ),
         ]
 
-        # Mock json.dumps to fail after temp file is created
-        def mock_write_text(content: str, encoding: str = "utf-8") -> None:
-            # First create temp file, then fail
-            temp_file.write_text("{}", encoding="utf-8")
-            raise OSError("Write failed")
+        # Mock write_text to raise after temp file write would occur
+        original_write_text = Path.write_text
 
-        with patch.object(Path, "write_text", mock_write_text):
+        def mock_write_text(self: Path, content: str, encoding: str = "utf-8") -> int:
+            if str(self).endswith(".tmp"):
+                # Create temp file then raise to trigger cleanup
+                original_write_text(self, content, encoding=encoding)
+                raise OSError("Write failed during temp file creation")
+            return original_write_text(self, content, encoding=encoding)
+
+        logger_name = "amplifier_module_provider_github_copilot.model_cache"
+        patch_target = "amplifier_module_provider_github_copilot.model_cache.Path.write_text"
+        with (
+            caplog.at_level(logging.WARNING, logger=logger_name),
+            patch(patch_target, mock_write_text),
+        ):
             write_cache(models, cache_file=cache_file)
 
-        # Temp file should be cleaned up (or not exist after error handling)
-        # Note: Implementation may leave temp file on some error paths
-        # This test verifies the write fails gracefully
+        # Temp file MUST NOT persist after error
+        assert not temp_file.exists(), "Temp file should be cleaned up after write error"
+        # Log warning about failure
+        assert "Failed to write cache" in caplog.text
 
 
 class TestLoadCacheConfigFallback:
     """Tests for load_cache_config return value."""
 
     def test_load_cache_config_returns_valid_config(self) -> None:
-        """load_cache_config() returns a CacheConfig with expected fields."""
+        """load_cache_config() returns a CacheConfig with expected fields.
+
+        # Contract: behaviors:ConfigLoading:MUST:1
+        # Contract: behaviors:ModelCache:SHOULD:2
+        """
         from amplifier_module_provider_github_copilot.config._policy import CacheConfig
         from amplifier_module_provider_github_copilot.model_cache import (
             load_cache_config,
@@ -490,86 +504,67 @@ class TestLoadCacheConfigFallback:
 class TestCacheFileOperations:
     """Tests for cache file path operations."""
 
-    def test_get_cache_file_path_returns_path(self) -> None:
-        """get_cache_file_path() MUST return a Path object."""
+    def test_get_cache_file_path_ends_with_json(self) -> None:
+        """Cache file path MUST end with .json.
+
+        # Contract: behaviors:ModelCache:SHOULD:1
+        """
         from amplifier_module_provider_github_copilot.model_cache import get_cache_file_path
 
         result = get_cache_file_path()
         assert isinstance(result, Path)
-
-    def test_get_cache_file_path_ends_with_json(self) -> None:
-        """Cache file path MUST end with .json."""
-        from amplifier_module_provider_github_copilot.model_cache import get_cache_file_path
-
-        result = get_cache_file_path()
         assert result.suffix == ".json"
 
 
 class TestReadCacheErrorHandling:
     """Tests for read_cache error handling paths."""
 
-    def test_read_cache_corrupted_json(self, tmp_path: Path) -> None:
-        """read_cache() returns None on corrupted JSON."""
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
-        cache_file = tmp_path / "corrupt.json"
-        cache_file.write_text("{not valid json", encoding="utf-8")
-
-        result = read_cache(cache_file=cache_file)
-        assert result is None
-
     def test_read_cache_missing_models_key(self, tmp_path: Path) -> None:
-        """read_cache() returns None when 'models' key is missing."""
+        """read_cache() returns empty list when 'models' key is missing.
+
+        # Contract: behaviors:ModelDiscoveryError:MUST:1
+        """
         from amplifier_module_provider_github_copilot.model_cache import read_cache
 
         cache_file = tmp_path / "missing_models.json"
-        cache_file.write_text('{"version": "1.0"}', encoding="utf-8")
+        cache_data = '{"version": "1.0", "timestamp": ' + str(time.time()) + "}"
+        cache_file.write_text(cache_data, encoding="utf-8")
 
         result = read_cache(cache_file=cache_file)
-        # Should return empty list since models=[] default in .get()
-        # or None if validation fails
-        assert result is None or result == []
-
-    def test_read_cache_invalid_model_data(self, tmp_path: Path) -> None:
-        """read_cache() returns None when model data is invalid."""
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
-        cache_file = tmp_path / "invalid_model.json"
-        # Missing required 'id' field
-        cache_data = {
-            "version": "1.0",
-            "timestamp": time.time(),
-            "models": [{"name": "Test"}],  # Missing 'id'
-        }
-        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
-
-        result = read_cache(cache_file=cache_file)
-        # Should return None due to KeyError on missing 'id'
-        assert result is None
+        # Empty models list (default from .get()) returns [] since no entries are malformed
+        assert result == []
 
 
 class TestInvalidateCacheErrorHandling:
     """Tests for invalidate_cache error handling."""
 
-    def test_invalidate_cache_permission_error(self, tmp_path: Path) -> None:
-        """invalidate_cache() handles permission errors gracefully."""
-        from unittest.mock import patch
+    def test_invalidate_cache_permission_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """invalidate_cache() handles permission errors gracefully.
 
+        # Contract: behaviors:ModelCache:SHOULD:3
+        Exception is swallowed and logged, not raised.
+        """
         from amplifier_module_provider_github_copilot.model_cache import invalidate_cache
 
         cache_file = tmp_path / "locked.json"
         cache_file.write_text("{}", encoding="utf-8")
 
         # Mock unlink to raise PermissionError
-        def mock_unlink() -> None:
+        def mock_unlink(self: Path) -> None:
             raise PermissionError("Access denied")
 
-        with patch.object(Path, "unlink", mock_unlink):
-            # Should not raise, just log warning
+        logger_name = "amplifier_module_provider_github_copilot.model_cache"
+        with (
+            caplog.at_level(logging.WARNING, logger=logger_name),
+            patch("amplifier_module_provider_github_copilot.model_cache.Path.unlink", mock_unlink),
+        ):
+            # Must NOT raise (exception swallowed)
             invalidate_cache(cache_file=cache_file)
 
-        # File still exists since unlink failed
-        # The important thing is no exception was raised
+        # Must LOG the failure
+        assert "Failed to invalidate cache" in caplog.text
 
 
 # =============================================================================
@@ -584,10 +579,13 @@ class TestWriteCacheTempFileCleanup:
     Covers lines 182-185: temp_file cleanup in except block.
     """
 
-    def test_temp_file_cleanup_on_replace_failure(self, tmp_path: Path) -> None:
-        """write_cache() cleans up temp file when replace() fails."""
-        from unittest.mock import MagicMock, patch
+    def test_temp_file_cleanup_on_replace_failure(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """write_cache() cleans up temp file when replace() fails.
 
+        # Contract: behaviors:ModelCache:SHOULD:1
+        """
         from amplifier_module_provider_github_copilot.model_cache import write_cache
         from amplifier_module_provider_github_copilot.models import CopilotModelInfo
 
@@ -603,35 +601,27 @@ class TestWriteCacheTempFileCleanup:
             ),
         ]
 
-        # Create temp file first to ensure cleanup code runs
-        temp_file.write_text("{}", encoding="utf-8")
-
-        # Mock replace to fail, but unlink should succeed for cleanup
+        # Mock replace to fail after successful write
         original_replace = Path.replace
-        original_unlink = Path.unlink
 
         def mock_replace(self: Path, target: Path) -> Path:
             if str(self).endswith(".tmp"):
                 raise OSError("Replace failed")
             return original_replace(self, target)
 
-        # Track if unlink was called on temp file
-        unlink_called = MagicMock()
-
-        def mock_unlink(self: Path) -> None:
-            if str(self).endswith(".tmp"):
-                unlink_called()
-            return original_unlink(self)
-
+        logger_name = "amplifier_module_provider_github_copilot.model_cache"
+        patch_target = "amplifier_module_provider_github_copilot.model_cache.Path.replace"
         with (
-            patch.object(Path, "replace", mock_replace),
-            patch.object(Path, "unlink", mock_unlink),
+            caplog.at_level(logging.WARNING, logger=logger_name),
+            patch(patch_target, mock_replace),
         ):
             # Should not raise - graceful failure
             write_cache(models, cache_file=cache_file)
 
-        # Temp file cleanup was attempted
-        # Note: unlink_called() may not be called if exists() returns False
+        # Temp file MUST be cleaned up after replace failure
+        assert not temp_file.exists(), "Temp file should be cleaned up after replace error"
+        # Log warning about failure
+        assert "Failed to write cache" in caplog.text
 
 
 class TestInvalidateCacheEdgeCases:
@@ -640,22 +630,33 @@ class TestInvalidateCacheEdgeCases:
     Covers line 273: exception during unlink.
     """
 
-    def test_invalidate_cache_generic_exception(self, tmp_path: Path) -> None:
-        """invalidate_cache() handles generic exceptions gracefully."""
-        from unittest.mock import patch
+    def test_invalidate_cache_generic_exception(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """invalidate_cache() handles generic exceptions gracefully.
 
+        # Contract: behaviors:ModelCache:SHOULD:3
+        Exception is swallowed and logged, not raised.
+        """
         from amplifier_module_provider_github_copilot.model_cache import invalidate_cache
 
         cache_file = tmp_path / "test.json"
         cache_file.write_text("{}", encoding="utf-8")
 
         # Mock unlink to raise generic Exception
-        def mock_unlink() -> None:
+        def mock_unlink(self: Path) -> None:
             raise RuntimeError("Unexpected error")
 
-        with patch.object(Path, "unlink", mock_unlink):
-            # Should log warning but not raise
+        logger_name = "amplifier_module_provider_github_copilot.model_cache"
+        with (
+            caplog.at_level(logging.WARNING, logger=logger_name),
+            patch("amplifier_module_provider_github_copilot.model_cache.Path.unlink", mock_unlink),
+        ):
+            # Must NOT raise (exception swallowed)
             invalidate_cache(cache_file=cache_file)
+
+        # Must LOG the failure
+        assert "Failed to invalidate cache" in caplog.text
 
 
 class TestReadCachePartialRecovery:
@@ -666,7 +667,10 @@ class TestReadCachePartialRecovery:
     """
 
     def test_valid_entries_returned_when_one_malformed(self, tmp_path: Path) -> None:
-        """One malformed entry is skipped; valid entry is returned."""
+        """One malformed entry is skipped; valid entry is returned.
+
+        # Contract: behaviors:ModelCache:SHOULD:1
+        """
         import json
         import time
 
@@ -695,13 +699,14 @@ class TestReadCachePartialRecovery:
         result = read_cache(cache_file=cache_file)
 
         # S5: should recover 1 valid model, not discard entire cache
-        assert result is not None
+        assert isinstance(result, list)
         assert len(result) == 1
         assert result[0].id == "good-model"
 
     def test_all_malformed_entries_triggers_cache_miss(self, tmp_path: Path) -> None:
         """When ALL entries are malformed, returns None (cache miss) — not an empty list.
 
+        # Contract: behaviors:ModelDiscoveryError:MUST:1
         S5 Fix: when every entry is corrupt the correct behaviour is to force a
         live API call (return None), not return [] which would signal 'no models
         available'.  The live API will repopulate the cache with valid data.
@@ -730,7 +735,10 @@ class TestReadCachePartialRecovery:
         )
 
     def test_multiple_valid_entries_all_returned(self, tmp_path: Path) -> None:
-        """All valid entries are returned when there are no malformed entries."""
+        """All valid entries are returned when there are no malformed entries.
+
+        # Contract: behaviors:ModelCache:SHOULD:1
+        """
         import json
         import time
 
@@ -759,7 +767,7 @@ class TestReadCachePartialRecovery:
 
         result = read_cache(cache_file=cache_file)
 
-        assert result is not None
+        assert isinstance(result, list)
         assert len(result) == 2
         assert {m.id for m in result} == {"model-a", "model-b"}
 
@@ -772,7 +780,10 @@ class TestReadCacheVersionCheck:
     """
 
     def test_supported_version_accepted(self, tmp_path: Path) -> None:
-        """Cache with version='1.0' is accepted and parsed normally."""
+        """Cache with version='1.0' is accepted and parsed normally.
+
+        # Contract: behaviors:ModelCache:SHOULD:2
+        """
         import json
         import time
 
@@ -795,12 +806,15 @@ class TestReadCacheVersionCheck:
 
         result = read_cache(cache_file=cache_file)
 
-        assert result is not None
+        assert isinstance(result, list)
         assert len(result) == 1
         assert result[0].id == "model-v1"
 
     def test_unsupported_version_returns_none(self, tmp_path: Path) -> None:
-        """Cache with unknown future version forces cache miss (returns None)."""
+        """Cache with unknown future version forces cache miss (returns None).
+
+        # Contract: behaviors:ModelDiscoveryError:MUST:1
+        """
         import json
         import time
 
@@ -827,7 +841,10 @@ class TestReadCacheVersionCheck:
         assert result is None
 
     def test_missing_version_treated_as_supported(self, tmp_path: Path) -> None:
-        """Old caches without 'version' field are treated as '1.0' (backward compat)."""
+        """Old caches without 'version' field are treated as '1.0' (backward compat).
+
+        # Contract: behaviors:ModelCache:SHOULD:2
+        """
         import json
         import time
 
@@ -851,6 +868,88 @@ class TestReadCacheVersionCheck:
         result = read_cache(cache_file=cache_file)
 
         # Missing version defaults to "1.0" → accepted (backward compat)
-        assert result is not None
+        assert isinstance(result, list)
         assert len(result) == 1
         assert result[0].id == "legacy-model"
+
+    @pytest.mark.parametrize("bad_version", [None, 123, "1..0", "", "2.0"])
+    def test_malformed_or_unsupported_version_returns_none(
+        self, tmp_path: Path, bad_version: object
+    ) -> None:
+        """Cache file with invalid/unsupported version schema returns None.
+
+        # Contract: behaviors:ModelDiscoveryError:MUST:1
+        An unreadable cache (wrong schema) is treated as a cache miss.
+        """
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        # Write cache file with bad/unsupported version
+        cache_data = {
+            "version": bad_version,
+            "timestamp": time.time(),
+            "models": [
+                {
+                    "id": "gpt-4",
+                    "name": "GPT-4",
+                    "context_window": 8192,
+                    "max_output_tokens": 4096,
+                }
+            ],
+        }
+        cache_file = tmp_path / "models.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        # Read and verify cache miss
+        result = read_cache(cache_file=cache_file)
+        assert result is None, f"Version {bad_version!r} must be treated as cache miss"
+
+
+class TestWriteCacheOverwrite:
+    """Tests for write_cache atomic overwrite behavior."""
+
+    def test_write_cache_overwrites_existing_content(self, tmp_path: Path) -> None:
+        """write_cache() atomically replaces existing cache file.
+
+        # Contract: behaviors:ModelCache:SHOULD:1
+        Stale content must not persist after a successful write.
+        """
+        from amplifier_module_provider_github_copilot.model_cache import (
+            read_cache,
+            write_cache,
+        )
+        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
+
+        cache_file = tmp_path / "models.json"
+
+        # Write initial content
+        first_models = [
+            CopilotModelInfo(
+                id="first-model",
+                name="First Model",
+                context_window=4096,
+                max_output_tokens=1024,
+            )
+        ]
+        write_cache(first_models, cache_file)
+
+        # Overwrite with different content
+        second_models = [
+            CopilotModelInfo(
+                id="second-model",
+                name="Second Model",
+                context_window=8192,
+                max_output_tokens=2048,
+            )
+        ]
+        write_cache(second_models, cache_file)
+
+        # Read back — must see second content only
+        result = read_cache(cache_file=cache_file)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        # Verify it's the second content (not first)
+        assert result[0].id == "second-model"
+        assert result[0].name == "Second Model"

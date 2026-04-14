@@ -152,9 +152,9 @@ class TestRetryWithEventualSuccess:
         response = await provider.complete(request)
 
         assert attempt_count == 2, f"Expected 2 attempts, got {attempt_count}"
-        assert response is not None
-        # Response should have content from successful retry
-        assert response.content is not None
+        assert len(response.content) == 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text == "Hello from retry!"
 
     @pytest.mark.asyncio
     async def test_non_llmerror_exception_translated_and_retried(self) -> None:
@@ -205,63 +205,9 @@ class TestRetryWithEventualSuccess:
 
         # ConnectionError should be translated to NetworkError (retryable)
         assert attempt_count == 2, f"Expected retry, got {attempt_count} attempts"
-        assert response is not None
-
-
-# =============================================================================
-# TTFT Warning Tests (Lines 648-656)
-# =============================================================================
-
-
-class TestTTFTWarning:
-    """Test time-to-first-token warning path."""
-
-    @pytest.mark.asyncio
-    async def test_ttft_warning_logged_when_slow(self, caplog: pytest.LogCaptureFixture) -> None:
-        """TTFT warning is logged when first content exceeds threshold.
-
-        Covers: provider.py lines 648-656 (TTFT check branch)
-        """
-        import logging
-
-        from amplifier_module_provider_github_copilot.provider import (
-            GitHubCopilotProvider,
-        )
-
-        class SlowFirstTokenSession(MockSDKSession):
-            """Session that delays before first content event."""
-
-            async def send(
-                self,
-                prompt: str,
-                *,
-                attachments: list[dict[str, Any]] | None = None,
-            ) -> str:
-                self.last_prompt = prompt
-
-                # Deliver event that triggers the TTFT check path
-                # The provider checks (time.time() - start_time) * 1000 > threshold
-                # Event delivery exercises the code path
-
-                for handler in self._handlers:
-                    handler(text_delta_event("Delayed response"))
-
-                for handler in self._handlers:
-                    handler(idle_event())
-                return "message-id"
-
-        mock_client = MockCopilotClientWrapper(
-            session_class=SlowFirstTokenSession,
-        )
-        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
-        request = _create_mock_request()
-
-        # Enable debug logging to capture TTFT
-        with caplog.at_level(logging.DEBUG):
-            await provider.complete(request)
-
-        # The TTFT check runs - verifying the code path is exercised
-        # In real slow conditions, warning would be logged
+        assert len(response.content) == 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text == "Success after network error"
 
 
 # =============================================================================
@@ -327,7 +273,10 @@ class TestProgressiveStreamingEmission:
 
         response = await provider.complete(request)
 
-        assert response is not None
+        assert len(response.content) == 2
+        assert response.content[0].type == "thinking"
+        assert response.content[1].type == "text"
+        assert response.content[1].text == "42"
 
 
 # =============================================================================
@@ -420,10 +369,9 @@ class TestToolCaptureAndAbort:
 
         response = await provider.complete(request)
 
-        assert response is not None
-        # Tool calls should be captured
-        if response.tool_calls:
-            assert len(response.tool_calls) >= 1
+        assert response.tool_calls is not None  # narrowed for pyright
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "read_file"
 
     @pytest.mark.asyncio
     async def test_abort_timeout_handled_gracefully(
@@ -458,7 +406,13 @@ class TestToolCaptureAndAbort:
             # Should not raise despite abort timeout
             response = await provider.complete(request)
 
-        assert response is not None
+        assert response.tool_calls is not None  # narrowed for pyright
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "test_tool"
+        assert any(
+            r.levelno == logging.WARNING and "abort timed out" in r.getMessage().lower()
+            for r in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_abort_exception_logged_but_continues(
@@ -492,9 +446,12 @@ class TestToolCaptureAndAbort:
         with caplog.at_level(logging.DEBUG):
             response = await provider.complete(request)
 
-        assert response is not None
-        # Abort failure logged but not raised
-        assert any("abort" in r.message.lower() for r in caplog.records if hasattr(r, "message"))
+        assert response.tool_calls is not None  # narrowed for pyright
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "test_tool"
+        assert any(
+            r.levelno == logging.DEBUG and "abort" in r.getMessage().lower() for r in caplog.records
+        )
 
 
 # =============================================================================
@@ -684,10 +641,8 @@ class TestDeltaTextExtraction:
             _extract_delta_text,  # pyright: ignore[reportPrivateUsage]
         )
 
-        # Create event with nested data.delta_content
-        event = MagicMock()
-        event.data = MagicMock()
-        event.data.delta_content = "Hello from nested"
+        # Create event with nested data.delta_content (SDK v0.1.33+ structure)
+        event = text_delta_event("Hello from nested")
 
         result = _extract_delta_text(event)  # pyright: ignore[reportPrivateUsage]
 
@@ -698,14 +653,14 @@ class TestDeltaTextExtraction:
 
         Covers: event_router.py _extract_delta_text (fallback path)
         """
+        import types
+
         from amplifier_module_provider_github_copilot.event_router import (
             _extract_delta_text,  # pyright: ignore[reportPrivateUsage]
         )
 
-        # Event with direct delta_content (no data wrapper)
-        event = MagicMock()
-        event.data = None
-        event.delta_content = "Direct content"
+        # Legacy SDK event with direct delta_content (no data wrapper)
+        event = types.SimpleNamespace(data=None, delta_content="Direct content")
 
         result = _extract_delta_text(event)  # pyright: ignore[reportPrivateUsage]
 
@@ -716,13 +671,13 @@ class TestDeltaTextExtraction:
 
         Covers: event_router.py _extract_delta_text all branches return None fallback
         """
+        import types
+
         from amplifier_module_provider_github_copilot.event_router import (
             _extract_delta_text,  # pyright: ignore[reportPrivateUsage]
         )
 
-        event = MagicMock()
-        event.data = None
-        event.delta_content = None
+        event = types.SimpleNamespace(data=None, delta_content=None)
 
         result = _extract_delta_text(event)  # pyright: ignore[reportPrivateUsage]
 
@@ -744,20 +699,23 @@ class TestQueueFullHandling:
     ) -> None:
         """QueueFull drops event with debug log, doesn't block.
 
-        Covers: provider.py lines 632-640 (QueueFull branch)
+        Covers: event_router.py lines 184-192 (QueueFull branch)
+        Contract: behaviors:Streaming:MUST:4 (bounded queue, drop on full)
         """
         import logging
+        from unittest.mock import patch
 
+        from amplifier_module_provider_github_copilot.config._policy import StreamingConfig
         from amplifier_module_provider_github_copilot.provider import (
             GitHubCopilotProvider,
         )
 
-        # Generate more events than queue size (1024)
-        # We'll create a session that floods events
-        flood_events = [text_delta_event(f"chunk_{i}") for i in range(1500)]
+        # Use a tiny queue (5) so 20 events overflow it deterministically
+        tiny_config = StreamingConfig(event_queue_size=5, ttft_warning_ms=15000)
+        flood_events = [text_delta_event(f"chunk_{i}") for i in range(20)]
 
         class FloodSession(MockSDKSession):
-            """Session that floods events faster than queue can handle."""
+            """Session that floods events to overflow the bounded queue."""
 
             async def send(
                 self,
@@ -766,11 +724,9 @@ class TestQueueFullHandling:
                 attachments: list[dict[str, Any]] | None = None,
             ) -> str:
                 self.last_prompt = prompt
-                # Deliver many events rapidly
                 for event in flood_events:
                     for handler in self._handlers:
                         handler(event)
-                # End with idle
                 for handler in self._handlers:
                     handler(idle_event())
                 return "message-id"
@@ -781,12 +737,21 @@ class TestQueueFullHandling:
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
         request = _create_mock_request()
 
-        with caplog.at_level(logging.DEBUG):
-            # Should complete despite queue overflow
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.provider.load_streaming_config",
+                return_value=tiny_config,
+            ),
+            caplog.at_level(logging.DEBUG),
+        ):
             response = await provider.complete(request)
 
-        assert response is not None
-        # Some events may have been dropped - that's OK
+        # Some events were dropped due to queue overflow
+        assert any("[STREAMING] Event queue full" in r.getMessage() for r in caplog.records), (
+            "Expected queue-full log when queue overflows"
+        )
+        # But response still has content from events that fit
+        assert len(response.content) > 0
 
 
 # =============================================================================
@@ -852,9 +817,9 @@ class TestFakeToolDetectionRetry:
 
         # Should have retried
         assert correction_attempt == 2, "Expected correction retry"
-        assert response is not None
-        # Final response should have corrected content
-        assert response.content is not None
+        assert len(response.content) == 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text == "Here is the answer without function calls."
 
     @pytest.mark.asyncio
     async def test_fake_tool_correction_exception_raises(
@@ -969,8 +934,11 @@ class TestTTFTWarningWithTimeMock:
         ):
             await provider.complete(request)
 
-        # TTFT warning should be logged
-        # (depends on provider internal event processing timing)
+        # TTFT warning should be logged when first token exceeds threshold
+        assert any(
+            r.levelno == logging.WARNING and "ttft" in r.getMessage().lower()
+            for r in caplog.records
+        ), "TTFT warning not logged"
 
 
 # =============================================================================
@@ -1094,8 +1062,7 @@ class TestE2EToolCaptureHappyPath:
         response = await provider.complete(request)
 
         # ChatResponse should contain the captured tool calls
-        assert response is not None
-        assert response.tool_calls is not None, "tool_calls should be populated"
+        assert response.tool_calls is not None  # narrowed for pyright
         assert len(response.tool_calls) == 2, "Should capture both tool requests"
 
         # Verify tool call structure
@@ -1145,8 +1112,7 @@ class TestE2EToolCaptureHappyPath:
         response = await provider.complete(request)
 
         # Tool calls ARE captured (ToolCaptureHandler is unconditional)
-        assert response is not None
-        assert response.tool_calls is not None
+        assert response.tool_calls is not None  # narrowed for pyright
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "read_file"
 
@@ -1185,7 +1151,6 @@ class TestE2EToolCaptureHappyPath:
             response = await provider.complete(request)
 
         # Tool calls should still be captured despite abort timeout
-        assert response is not None
-        assert response.tool_calls is not None
+        assert response.tool_calls is not None  # narrowed for pyright
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "write_file"

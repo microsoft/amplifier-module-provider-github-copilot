@@ -1,7 +1,7 @@
 """Tests for tool capture handler extraction.
 
 TDD: These tests were written BEFORE the implementation to drive the design.
-Contract: streaming-contract:abort-on-capture:MUST:1
+Contract: streaming-contract:ToolCapture:MUST:1
 Contract: sdk-protection:ToolCapture:MUST:1,2
 """
 
@@ -12,7 +12,10 @@ class TestToolCaptureHandler:
     """Test the extracted ToolCaptureHandler class."""
 
     def test_normalize_tool_request_from_dict(self) -> None:
-        """Extract tool data from dict format (test events)."""
+        """Extract tool data from dict format (test events).
+
+        Contract: streaming-contract:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             normalize_tool_request,
         )
@@ -29,7 +32,10 @@ class TestToolCaptureHandler:
         assert result["arguments"] == {"path": "/tmp/test.txt"}
 
     def test_normalize_tool_request_from_dict_camel_case(self) -> None:
-        """Extract tool data from dict with camelCase keys."""
+        """Extract tool data from dict with camelCase keys.
+
+        Contract: streaming-contract:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             normalize_tool_request,
         )
@@ -45,7 +51,10 @@ class TestToolCaptureHandler:
         assert result["name"] == "write_file"
 
     def test_normalize_tool_request_from_object(self) -> None:
-        """Extract tool data from SDK object format."""
+        """Extract tool data from SDK object format.
+
+        Contract: streaming-contract:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             normalize_tool_request,
         )
@@ -62,7 +71,10 @@ class TestToolCaptureHandler:
         assert result["arguments"] == {"command": "ls"}
 
     def test_handler_captures_tools_on_assistant_message(self) -> None:
-        """Handler extracts tools from ASSISTANT_MESSAGE event."""
+        """Handler extracts tools from ASSISTANT_MESSAGE event.
+
+        Contract: streaming-contract:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
         )
@@ -82,13 +94,16 @@ class TestToolCaptureHandler:
 
         handler.on_event(event)
 
-        assert handler.capture_complete
+        assert handler.capture_complete is True
         assert len(handler.captured_tools) == 2
         assert handler.captured_tools[0]["name"] == "read_file"
         assert handler.captured_tools[1]["name"] == "write_file"
 
     def test_handler_ignores_non_tool_events(self) -> None:
-        """Handler ignores events without tool_requests."""
+        """Handler ignores events without tool_requests.
+
+        Contract: streaming-contract:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
         )
@@ -99,11 +114,14 @@ class TestToolCaptureHandler:
         event = {"type": "content.delta", "data": {"text": "Hello"}}
         handler.on_event(event)
 
-        assert not handler.capture_complete
+        assert handler.capture_complete is False
         assert len(handler.captured_tools) == 0
 
     def test_handler_captures_only_first_turn(self) -> None:
-        """Handler ignores subsequent tool events after first capture."""
+        """Handler ignores subsequent tool events after first capture.
+
+        Contract: sdk-protection:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
         )
@@ -136,7 +154,10 @@ class TestToolCaptureHandler:
         assert handler.captured_tools[0]["name"] == "first_tool"
 
     def test_handler_sets_idle_callback(self) -> None:
-        """Handler invokes idle callback on capture."""
+        """Handler invokes idle callback on capture.
+
+        Contract: sdk-protection:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
         )
@@ -303,7 +324,10 @@ class TestToolCaptureDefaults:
     """Test default config behavior."""
 
     def test_handler_uses_defaults_when_no_config(self) -> None:
-        """Handler uses safe defaults when config is None."""
+        """Handler uses safe defaults when config is None.
+
+        Contract: sdk-protection:ToolCapture:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
         )

@@ -21,6 +21,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
+class _StubSDKSession:
+    """Minimal stub for SDK session in tool suppression tests."""
+
+    def on(self, handler: Any) -> Any: ...
+
+    async def disconnect(self) -> None: ...
+
+
+class _StubSDKClient:
+    """Minimal stub for SDK client in tool suppression tests."""
+
+    async def create_session(self, **kwargs: Any) -> _StubSDKSession: ...
+
+
 class TestDenyHookNotConfigurable:
     """deny-destroy:DenyHook:MUST:3 — ARCHITECTURE FITNESS"""
 
@@ -44,7 +58,7 @@ class TestDenyHookNotConfigurable:
     ]
 
     def test_no_yaml_key_can_disable_deny_hook(self) -> None:
-        """deny-destroy:DenyHook:MUST:3 - No config key can disable the deny hook.
+        """Contract: deny-destroy:DenyHook:MUST:3 - No config key can disable the deny hook.
 
         Expanded to check for broader patterns that could compromise sovereignty.
         Reads Python config modules and errors.yaml (authoritative per council verdict).
@@ -99,7 +113,10 @@ class TestDenyHookNotConfigurable:
 
 
 class TestArchitectureFitness:
-    """deny-destroy:NoExecution:MUST:3 — SDK imports outside sdk_adapter/ are prohibited"""
+    """Contract: deny-destroy:NoExecution:MUST:3
+
+    SDK imports outside sdk_adapter/ are prohibited.
+    """
 
     def test_no_sdk_imports_outside_adapter(self) -> None:
         """deny-destroy:NoExecution:MUST:3 - SDK imports only in sdk_adapter/.
@@ -140,7 +157,6 @@ class TestArchitectureFitness:
 
         Uses __file__-relative paths for robust resolution.
         """
-        # Use __file__-relative path for robust resolution
         adapter_dir = (
             Path(__file__).parent.parent
             / "amplifier_module_provider_github_copilot"
@@ -149,9 +165,31 @@ class TestArchitectureFitness:
 
         assert adapter_dir.exists(), "sdk_adapter/ directory must exist"
 
-        # At least one file should exist
         py_files = list(adapter_dir.glob("*.py"))
-        assert len(py_files) > 0, "sdk_adapter/ must contain Python files"
+        assert py_files, "sdk_adapter/ must contain Python files"
+
+        # Verify at least one file directly imports from the SDK
+        sdk_imports_found = []
+        for py_file in py_files:
+            if py_file.name == "__init__.py":
+                continue
+            try:
+                tree = ast.parse(py_file.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    sdk_imports_found.extend(
+                        f"{py_file.name}: import {alias.name}"
+                        for alias in node.names
+                        if _is_sdk_import(alias.name)
+                    )
+                elif (
+                    isinstance(node, ast.ImportFrom) and node.module and _is_sdk_import(node.module)
+                ):
+                    sdk_imports_found.append(f"{py_file.name}: from {node.module}")
+
+        assert sdk_imports_found, "sdk_adapter/ contains no SDK imports — membrane boundary broken"
 
 
 class TestSessionEphemerality:
@@ -214,7 +252,7 @@ def _is_sdk_import(module_name: str) -> bool:
 
 
 class TestToolSuppression:
-    """Tests for deny-destroy:ToolSuppression:MUST:1,2.
+    """Tests for deny-destroy:ToolSuppression:MUST:2,3.
 
     Contract: deny-destroy.md ToolSuppression section
 
@@ -229,12 +267,12 @@ class TestToolSuppression:
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
 
-        mock_sdk_client = MagicMock()
+        mock_sdk_client = MagicMock(spec=_StubSDKClient)
         create_session_kwargs: list[dict[str, Any]] = []
 
         async def capture_create(**kwargs: object) -> MagicMock:
             create_session_kwargs.append(kwargs)
-            mock_session = MagicMock()
+            mock_session = MagicMock(spec=_StubSDKSession)
             mock_session.on = MagicMock(return_value=lambda: None)
             mock_session.disconnect = AsyncMock()
             return mock_session
@@ -251,25 +289,32 @@ class TestToolSuppression:
 
         assert len(create_session_kwargs) == 1
         session_tools = create_session_kwargs[0].get("tools", [])
+        assert session_tools, (
+            "No tools forwarded to SDK session — deny-destroy:ToolSuppression:MUST:2 violated"
+        )
         for tool in session_tools:
-            if hasattr(tool, "overrides_built_in_tool"):
-                assert tool.overrides_built_in_tool is True
+            assert hasattr(tool, "overrides_built_in_tool"), (
+                f"Tool {tool!r} missing overrides_built_in_tool attribute"
+            )
+            assert tool.overrides_built_in_tool is True, (
+                f"Tool {tool!r} has overrides_built_in_tool=False — MUST:2 violated"
+            )
 
     @pytest.mark.asyncio
     async def test_available_tools_set_on_session(self) -> None:
         """SDK session MUST receive available_tools attribute.
 
-        Contract: deny-destroy:ToolSuppression:MUST:1 — available_tools MUST NOT be omitted
+        Contract: deny-destroy:ToolSuppression:MUST:3 — available_tools=[] when no tools provided.
         When no tools provided, available_tools=[] blocks SDK built-ins.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
 
-        mock_sdk_client = MagicMock()
+        mock_sdk_client = MagicMock(spec=_StubSDKClient)
         create_session_kwargs: list[dict[str, Any]] = []
 
         async def capture_create(**kwargs: object) -> MagicMock:
             create_session_kwargs.append(kwargs)
-            mock_session = MagicMock()
+            mock_session = MagicMock(spec=_StubSDKSession)
             mock_session.on = MagicMock(return_value=lambda: None)
             mock_session.disconnect = AsyncMock()
             return mock_session

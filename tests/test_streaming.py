@@ -103,13 +103,50 @@ class TestEventClassification:
         assert result == EventClassification.DROP
         assert "Unknown SDK event type" in caplog.text
 
+    def test_system_notification_classified_as_consume(self) -> None:
+        """system_notification must be classified as CONSUME (not unknown).
+
+        # Contract: event-vocabulary:classification:system_notification:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        result = classify_event("system_notification", config)
+        assert result == EventClassification.CONSUME, (
+            "system_notification should be CONSUME, not unknown"
+        )
+
+    def test_system_notification_no_warning_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """system_notification should not produce 'Unknown SDK event type' warning.
+
+        # Contract: event-vocabulary:classification:system_notification:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            classify_event,
+            load_event_config,
+        )
+
+        config = load_event_config()
+        with caplog.at_level(logging.WARNING):
+            classify_event("system_notification", config)
+
+        assert "Unknown SDK event type: system_notification" not in caplog.text
+
 
 class TestTranslateEvent:
     """Tests for translate_event function."""
 
     def test_text_delta_bridges_to_content_delta(self):
-        """text_delta SDK event → CONTENT_DELTA domain event."""
+        """text_delta SDK event → CONTENT_DELTA domain event.
+
+        Contract: event-vocabulary:Bridge:MUST:1
+        """
         from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
             DomainEventType,
             load_event_config,
             translate_event,
@@ -118,13 +155,17 @@ class TestTranslateEvent:
         config = load_event_config()
         sdk_event = {"type": "assistant.message_delta", "text": "Hello"}
         result = translate_event(sdk_event, config)
-        assert result is not None
+        assert isinstance(result, DomainEvent)
         assert result.type == DomainEventType.CONTENT_DELTA
         assert result.block_type == "TEXT"
 
     def test_thinking_delta_has_thinking_block_type(self):
-        """assistant.reasoning_delta → CONTENT_DELTA with block_type=THINKING."""
+        """assistant.reasoning_delta → CONTENT_DELTA with block_type=THINKING.
+
+        # Contract: streaming-contract:ThinkingBlock:MUST:1
+        """
         from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
             DomainEventType,
             load_event_config,
             translate_event,
@@ -133,13 +174,17 @@ class TestTranslateEvent:
         config = load_event_config()
         sdk_event = {"type": "assistant.reasoning_delta", "text": "Let me think..."}
         result = translate_event(sdk_event, config)
-        assert result is not None
+        assert isinstance(result, DomainEvent)
         assert result.type == DomainEventType.CONTENT_DELTA
         assert result.block_type == "THINKING"
 
     def test_tool_use_complete_bridges_to_tool_call(self):
-        """tool_use_complete → TOOL_CALL domain event."""
+        """tool_use_complete → TOOL_CALL domain event.
+
+        # Contract: streaming-contract:ToolCallBlock:MUST:1
+        """
         from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
             DomainEventType,
             load_event_config,
             translate_event,
@@ -148,11 +193,11 @@ class TestTranslateEvent:
         config = load_event_config()
         sdk_event = {"type": "tool_use_complete", "id": "tc1", "name": "read_file"}
         result = translate_event(sdk_event, config)
-        assert result is not None
+        assert isinstance(result, DomainEvent)
         assert result.type == DomainEventType.TOOL_CALL
 
     def test_consume_event_returns_none(self):
-        """CONSUME events return None."""
+        """Contract: event-vocabulary:Consume:MUST:1 — CONSUME events return None."""
         from amplifier_module_provider_github_copilot.streaming import (
             load_event_config,
             translate_event,
@@ -178,6 +223,7 @@ class TestTranslateEvent:
     def test_event_data_preserved(self):
         """Event data is preserved in domain event."""
         from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
             load_event_config,
             translate_event,
         )
@@ -185,19 +231,56 @@ class TestTranslateEvent:
         config = load_event_config()
         sdk_event = {"type": "assistant.message_delta", "text": "Hello world", "index": 0}
         result = translate_event(sdk_event, config)
-        assert result is not None
+        assert isinstance(result, DomainEvent)
         assert result.data["text"] == "Hello world"
+
+    def test_translate_event_flattens_nested_data(self) -> None:
+        """translate_event flattens the SDK event's nested data dict into DomainEvent.data.
+
+        The SDK wraps event payload in a ``data`` sub-key. ``_extract_event_data``
+        must flatten those fields one level up so consumers can access them as
+        ``domain_event.data["delta_content"]`` rather than
+        ``domain_event.data["data"]["delta_content"]``.
+
+        This is a regression guard: if the flatten logic is removed or broken,
+        downstream streaming consumers silently receive empty data dicts and
+        produce no visible exception — only silent content loss.
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            load_event_config,
+            translate_event,
+        )
+
+        config = load_event_config()
+        # SDK shape: nested data dict (SessionEventData-style)
+        sdk_event = {
+            "type": "assistant.message_delta",
+            "data": {"delta_content": "Hello from SDK", "index": 1},
+        }
+        result = translate_event(sdk_event, config)
+
+        assert isinstance(result, DomainEvent)
+        # Flattened: fields from data.* must be top-level in result.data
+        assert result.data["delta_content"] == "Hello from SDK"
+        assert result.data["index"] == 1
+        # The nested "data" key itself must NOT appear as a value in result.data
+        assert "data" not in result.data
 
 
 class TestEventConfig:
     """Tests for event config loading."""
 
     def test_config_loads_successfully(self):
-        """Config file loads without errors."""
+        """Config file loads without errors.
+
+        Contract: event-vocabulary:Bridge:MUST:2
+        """
         from amplifier_module_provider_github_copilot.streaming import load_event_config
 
         config = load_event_config()
-        assert config is not None
+        # Contract: event-vocabulary:Bridge:MUST:2
+        assert "assistant.message_delta" in config.bridge_mappings
 
     def test_config_has_bridge_mappings(self):
         """Config contains bridge mappings."""
@@ -226,26 +309,33 @@ class TestDomainEventType:
     """Tests for DomainEventType enum."""
 
     def test_all_domain_types_exist(self):
-        """All 6 domain event types exist."""
+        """All 6 domain event types exist.
+
+        Contract: event-vocabulary:Events:MUST:1
+        """
         from amplifier_module_provider_github_copilot.streaming import DomainEventType
 
-        expected_types = [
+        expected_types = {
             "CONTENT_DELTA",
             "TOOL_CALL",
             "USAGE_UPDATE",
             "TURN_COMPLETE",
             "SESSION_IDLE",
             "ERROR",
-        ]
-        for type_name in expected_types:
-            assert hasattr(DomainEventType, type_name)
+        }
+        # Contract: event-vocabulary:Events:MUST:1
+        actual_names = {m.name for m in DomainEventType}
+        assert actual_names == expected_types
 
 
 class TestStreamingAccumulator:
     """Tests for StreamingAccumulator class."""
 
     def test_accumulator_starts_empty(self):
-        """New accumulator has empty state."""
+        """New accumulator has empty state.
+
+        Contract: streaming-contract:Accumulation:MUST:1
+        """
         from amplifier_module_provider_github_copilot.streaming import (
             StreamingAccumulator,
         )
@@ -323,7 +413,10 @@ class TestStreamingAccumulator:
         assert result.tool_calls[0]["name"] == "read_file"
 
     def test_usage_update_stored(self):
-        """USAGE_UPDATE event stored."""
+        """USAGE_UPDATE event stored.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.streaming import (
             DomainEvent,
             DomainEventType,
@@ -338,7 +431,7 @@ class TestStreamingAccumulator:
             )
         )
         result = accumulator.get_result()
-        assert result.usage is not None
+        assert isinstance(result.usage, dict)
         assert result.usage["input_tokens"] == 100
 
     def test_turn_complete_marks_done(self):
@@ -361,7 +454,10 @@ class TestStreamingAccumulator:
         assert result.finish_reason == "stop"
 
     def test_error_marks_complete_with_error(self):
-        """ERROR event marks complete with error data."""
+        """ERROR event marks complete with error data.
+
+        # Contract: streaming-contract:completion:MUST:2
+        """
         from amplifier_module_provider_github_copilot.streaming import (
             DomainEvent,
             DomainEventType,
@@ -377,7 +473,7 @@ class TestStreamingAccumulator:
         )
         result = accumulator.get_result()
         assert result.is_complete
-        assert result.error is not None
+        assert isinstance(result.error, dict)
         assert "Rate limit" in result.error["message"]
 
     def test_interleaved_content_handled(self):
@@ -525,11 +621,11 @@ class TestStreamingAccumulator:
 
         response = acc.to_chat_response()
 
-        content_types = [type(b).__name__ for b in response.content]
-        assert content_types == ["TextBlock", "ThinkingBlock", "TextBlock"], (
-            f"Content order must match arrival order TEXT→THINKING→TEXT. "
-            f"Got: {content_types}. response.content: {response.content}"
-        )
+        # Verify content block order matches arrival order: TEXT→THINKING→TEXT
+        assert len(response.content) == 3
+        assert isinstance(response.content[0], TextBlock)
+        assert isinstance(response.content[1], ThinkingBlock)
+        assert isinstance(response.content[2], TextBlock)
         text_blocks = [b for b in response.content if isinstance(b, TextBlock)]
         thinking_blocks = [b for b in response.content if isinstance(b, ThinkingBlock)]
         assert text_blocks[0].text == "A"
@@ -558,10 +654,8 @@ class TestStreamingAccumulator:
 
         response = acc.to_chat_response()
 
-        content_types = [type(b).__name__ for b in response.content]
-        assert content_types == ["ThinkingBlock", "TextBlock"], (
-            f"Thinking-first order not preserved. Got: {content_types}"
-        )
+        # Verify thinking-first order preserved
+        assert len(response.content) == 2
         assert isinstance(response.content[0], ThinkingBlock)
         assert isinstance(response.content[1], TextBlock)
 
@@ -760,11 +854,9 @@ class TestStreamingChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.content_blocks is not None, "content_blocks should not be None"
+        assert isinstance(response.content_blocks, list)
         assert len(response.content_blocks) == 1, "Should have one content block"
-        assert isinstance(response.content_blocks[0], TextContent), (
-            f"Expected TextContent, got {type(response.content_blocks[0]).__name__}"
-        )
+        assert isinstance(response.content_blocks[0], TextContent)
         assert response.content_blocks[0].text == "Hello world"
 
     def test_content_blocks_populated_with_thinking(self) -> None:
@@ -794,11 +886,9 @@ class TestStreamingChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.content_blocks is not None, "content_blocks should not be None"
+        assert isinstance(response.content_blocks, list)
         assert len(response.content_blocks) == 1, "Should have one content block"
-        assert isinstance(response.content_blocks[0], ThinkingContent), (
-            f"Expected ThinkingContent, got {type(response.content_blocks[0]).__name__}"
-        )
+        assert isinstance(response.content_blocks[0], ThinkingContent)
         assert response.content_blocks[0].text == "Let me think..."
 
     def test_content_blocks_populated_with_tool_calls(self) -> None:
@@ -827,11 +917,9 @@ class TestStreamingChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.content_blocks is not None, "content_blocks should not be None"
+        assert isinstance(response.content_blocks, list)
         assert len(response.content_blocks) == 1, "Should have one content block"
-        assert isinstance(response.content_blocks[0], ToolCallContent), (
-            f"Expected ToolCallContent, got {type(response.content_blocks[0]).__name__}"
-        )
+        assert isinstance(response.content_blocks[0], ToolCallContent)
         assert response.content_blocks[0].name == "read_file"
 
     def test_text_field_convenience(self) -> None:
@@ -895,6 +983,7 @@ class TestStreamingChatResponse:
 
         Contract: streaming-contract:StreamingResponse:MUST:2
         """
+        from amplifier_core import TextContent, ThinkingContent, ToolCallContent
 
         from amplifier_module_provider_github_copilot.streaming import (
             DomainEvent,
@@ -929,14 +1018,13 @@ class TestStreamingChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.content_blocks is not None
+        assert isinstance(response.content_blocks, list)
         assert len(response.content_blocks) == 3
 
-        # Check types
-        types = [type(b).__name__ for b in response.content_blocks]
-        assert "TextContent" in types
-        assert "ThinkingContent" in types
-        assert "ToolCallContent" in types
+        # Check types using isinstance
+        assert any(isinstance(b, TextContent) for b in response.content_blocks)
+        assert any(isinstance(b, ThinkingContent) for b in response.content_blocks)
+        assert any(isinstance(b, ToolCallContent) for b in response.content_blocks)
 
     def test_content_list_contains_tool_call_block_for_kernel_context(self) -> None:
         """Contract: streaming-contract:StreamingResponse:MUST:2 — ChatResponse.content
@@ -978,18 +1066,12 @@ class TestStreamingChatResponse:
 
         # content MUST contain a ToolCallBlock instance (ContentBlockUnion member)
         tool_call_blocks = [b for b in response.content if isinstance(b, ToolCallBlock)]
-        assert len(tool_call_blocks) == 1, (
-            f"Expected 1 ToolCallBlock in response.content, got {len(tool_call_blocks)}. "
-            f"Content types: {[type(b).__name__ for b in response.content]}"
-        )
+        assert len(tool_call_blocks) == 1
         tcb = tool_call_blocks[0]
-        assert tcb.type == "tool_call", f"ToolCallBlock.type must be 'tool_call', got '{tcb.type}'"
-        assert tcb.id == "tc1", f"ToolCallBlock.id mismatch: {tcb.id}"
-        assert tcb.name == "read_file", f"ToolCallBlock.name mismatch: {tcb.name}"
-        assert tcb.input == {"path": "test.py"}, (
-            f"ToolCallBlock.input mismatch: {tcb.input}. "
-            "Note: ToolCallBlock uses 'input', NOT 'arguments' (that's ToolCall)."
-        )
+        assert tcb.type == "tool_call"
+        assert tcb.id == "tc1"
+        assert tcb.name == "read_file"
+        assert tcb.input == {"path": "test.py"}
 
     def test_tool_calls_field_uses_tool_call_type_not_tool_call_block(self) -> None:
         """Contract: streaming-contract:StreamingResponse:MUST:2 — tool_calls field
@@ -1019,13 +1101,11 @@ class TestStreamingChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.tool_calls is not None, "tool_calls must not be None when tools present"
+        assert isinstance(response.tool_calls, list)
         assert len(response.tool_calls) == 1
         tc = response.tool_calls[0]
-        assert isinstance(tc, ToolCall), (
-            f"tool_calls entries must be ToolCall, got {type(tc).__name__}"
-        )
-        assert tc.arguments == {"path": "test.py"}, f"ToolCall.arguments mismatch: {tc.arguments}"
+        assert isinstance(tc, ToolCall)
+        assert tc.arguments == {"path": "test.py"}
 
 
 # ============================================================================
@@ -1050,12 +1130,12 @@ class TestProgressiveStreamingEmission:
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
-        from amplifier_core import TextContent
+        from amplifier_core import ModuleCoordinator, TextContent
 
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         # Create provider with mock coordinator
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.hooks = MagicMock()
         coordinator.hooks.emit = AsyncMock()
 
@@ -1103,6 +1183,7 @@ class TestProgressiveStreamingEmission:
 
         # Should not raise
         provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
+        assert provider._pending_emit_tasks == set()  # pyright: ignore[reportPrivateUsage]
 
     def test_emit_streaming_content_skips_without_hooks(self) -> None:
         """streaming-contract:ProgressiveStreaming:SHOULD:4.
@@ -1127,6 +1208,7 @@ class TestProgressiveStreamingEmission:
 
         # Should not raise
         provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
+        assert provider._pending_emit_tasks == set()  # pyright: ignore[reportPrivateUsage]
 
     def test_emit_streaming_content_handles_emit_error(self) -> None:
         """streaming-contract:ProgressiveStreaming:SHOULD:2.
@@ -1136,12 +1218,12 @@ class TestProgressiveStreamingEmission:
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
-        from amplifier_core import TextContent
+        from amplifier_core import ModuleCoordinator, TextContent
 
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         # Create provider with mock coordinator that raises
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.hooks = MagicMock()
         coordinator.hooks.emit = AsyncMock(side_effect=Exception("Hook broke"))
 
@@ -1159,6 +1241,8 @@ class TestProgressiveStreamingEmission:
 
         # Should not raise
         asyncio.run(run_test())
+        assert coordinator.hooks.emit.await_count == 1
+        assert provider._pending_emit_tasks == set()  # pyright: ignore[reportPrivateUsage]
 
     def test_pending_emit_tasks_tracked(self) -> None:
         """streaming-contract:ProgressiveStreaming:SHOULD:3.
@@ -1168,11 +1252,11 @@ class TestProgressiveStreamingEmission:
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
-        from amplifier_core import TextContent
+        from amplifier_core import ModuleCoordinator, TextContent
 
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.hooks = MagicMock()
 
         # Make emit wait so task stays pending
@@ -1252,7 +1336,7 @@ class TestConfigurationFailFast:
 
         # Config should have required fields populated
         assert config.idle_event_types, "idle_events should be populated"
-        assert config.bridge_mappings is not None, "bridge_mappings should exist"
+        assert "session.idle" in config.bridge_mappings
 
 
 class TestParseToolArguments:
@@ -1262,7 +1346,10 @@ class TestParseToolArguments:
     """
 
     def test_dict_args_returned_as_is(self) -> None:
-        """dict arguments are returned unchanged (no-op, regression-safe)."""
+        """dict arguments are returned unchanged (no-op, regression-safe).
+
+        Contract: streaming-contract:ToolCallBlock:MUST:1
+        """
         from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
 
         args = {"key": "value", "count": 42}
@@ -1361,25 +1448,17 @@ class TestParseToolArguments:
         expected_args = {"path": "src/main.py", "encoding": "utf-8"}
 
         # Assert tool_calls list — ToolCall.arguments must be the parsed dict.
-        assert response.tool_calls is not None, "tool_calls must not be None"
+        assert isinstance(response.tool_calls, list)
         assert len(response.tool_calls) == 1, "Expected exactly 1 tool call"
         tc = response.tool_calls[0]
-        assert isinstance(tc, ToolCall), f"Expected ToolCall, got {type(tc)}"
-        assert tc.arguments == expected_args, (
-            f"ToolCall.arguments not parsed from JSON string. "
-            f"Expected {expected_args!r}, got {tc.arguments!r}. "
-            "This means the call site still uses the old isinstance guard — "
-            "replace it with _parse_tool_arguments(tc.get('arguments'))."
-        )
+        assert isinstance(tc, ToolCall)
+        assert tc.arguments == expected_args
 
         # Assert content list — ToolCallBlock.input must also be the parsed dict.
         assert response.content, "content must not be empty"
         tcb = response.content[0]
-        assert isinstance(tcb, ToolCallBlock), f"Expected ToolCallBlock, got {type(tcb)}"
-        assert tcb.input == expected_args, (
-            f"ToolCallBlock.input not parsed from JSON string. "
-            f"Expected {expected_args!r}, got {tcb.input!r}."
-        )
+        assert isinstance(tcb, ToolCallBlock)
+        assert tcb.input == expected_args
 
     def test_json_string_args_malformed_end_to_end(self) -> None:
         """Malformed JSON-string arguments produce {} through the full pipeline.
@@ -1416,9 +1495,8 @@ class TestParseToolArguments:
         # Must not raise, even with malformed JSON
         response = accumulator.to_chat_response()
 
-        assert response.tool_calls is not None, "tool_calls must not be None"
+        assert isinstance(response.tool_calls, list)
+        assert len(response.tool_calls) == 1
         tc = response.tool_calls[0]
         assert isinstance(tc, ToolCall)
-        assert tc.arguments == {}, (
-            f"Malformed JSON string must fall back to {{}}. Got: {tc.arguments!r}"
-        )
+        assert tc.arguments == {}

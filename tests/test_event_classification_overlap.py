@@ -27,6 +27,7 @@ class TestEventClassificationOverlapValidation:
     def test_production_config_loads_without_error(self) -> None:
         """Production config has no overlaps.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Regression test for actual production config.
         """
         # Should NOT raise -- production config should be valid
@@ -49,7 +50,10 @@ class TestEventPredicateExactMatching:
     """
 
     def test_is_idle_event_matches_session_idle(self) -> None:
-        """is_idle_event MUST match session.idle."""
+        """is_idle_event MUST match session.idle.
+
+        # Contract: event-vocabulary:Classification:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             is_idle_event,
         )
@@ -62,6 +66,7 @@ class TestEventPredicateExactMatching:
     def test_is_idle_event_does_not_match_substring_containing(self) -> None:
         """is_idle_event MUST NOT match events just because they contain 'idle'.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Future SDK events like 'session.idle_timeout' should NOT trigger turn completion.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
@@ -74,7 +79,10 @@ class TestEventPredicateExactMatching:
         assert is_idle_event("idle_check") is False
 
     def test_is_error_event_matches_session_error(self) -> None:
-        """is_error_event MUST match session.error."""
+        """is_error_event MUST match session.error.
+
+        # Contract: event-vocabulary:Classification:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             is_error_event,
         )
@@ -87,6 +95,7 @@ class TestEventPredicateExactMatching:
     def test_is_error_event_does_not_match_substring_containing(self) -> None:
         """is_error_event MUST NOT match events just because they contain 'error'.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Recovery events like 'tool_error_recovered' should NOT terminate the stream.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
@@ -124,6 +133,7 @@ class TestEmptySetFallback:
     def test_is_idle_event_empty_set_uses_fallback(self) -> None:
         """is_idle_event MUST use fallback when empty set is passed.
 
+        # Contract: streaming-contract:SessionLifecycle:MUST:1
         Critical regression test: If EventConfig has empty idle_event_types,
         the helper must fall back to hardcoded defaults, not hang forever.
         """
@@ -137,7 +147,10 @@ class TestEmptySetFallback:
         assert is_idle_event("session_idle", idle_events=set()) is True
 
     def test_is_error_event_empty_set_uses_fallback(self) -> None:
-        """is_error_event MUST use fallback when empty set is passed."""
+        """is_error_event MUST use fallback when empty set is passed.
+
+        # Contract: streaming-contract:SessionLifecycle:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             is_error_event,
         )
@@ -147,7 +160,10 @@ class TestEmptySetFallback:
         assert is_error_event("error", error_events=set()) is True
 
     def test_is_usage_event_empty_set_uses_fallback(self) -> None:
-        """is_usage_event MUST use fallback when empty set is passed."""
+        """is_usage_event MUST use fallback when empty set is passed.
+
+        # Contract: streaming-contract:SessionLifecycle:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             is_usage_event,
         )
@@ -160,7 +176,7 @@ class TestEmptySetFallback:
 class TestEventHelpersEdgeCases:
     """Tests for edge cases and None handling in event helpers.
 
-    Contract: event-vocabulary:EdgeCases:MUST:1 — all helpers handle None safely.
+    Contract: event-vocabulary:Classification:MUST:1 — all helpers handle None safely.
     """
 
     def test_is_idle_event_returns_false_for_none(self) -> None:
@@ -316,7 +332,10 @@ class TestUsageEventHelpers:
     """
 
     def test_is_usage_event_matches_assistant_usage(self) -> None:
-        """is_usage_event MUST match assistant.usage."""
+        """is_usage_event MUST match assistant.usage.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             is_usage_event,
         )
@@ -327,7 +346,10 @@ class TestUsageEventHelpers:
         assert is_usage_event("ASSISTANT.USAGE") is True  # Case insensitive
 
     def test_is_usage_event_returns_false_for_none(self) -> None:
-        """is_usage_event MUST return False for None input."""
+        """is_usage_event MUST return False for None input.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             is_usage_event,
         )
@@ -335,7 +357,10 @@ class TestUsageEventHelpers:
         assert is_usage_event(None) is False
 
     def test_is_usage_event_does_not_match_unrelated(self) -> None:
-        """is_usage_event MUST NOT match unrelated events."""
+        """is_usage_event MUST NOT match unrelated events.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             is_usage_event,
         )
@@ -345,19 +370,25 @@ class TestUsageEventHelpers:
         assert is_usage_event("usage_report") is False  # Different event
 
     def test_extract_usage_data_from_dict_event(self) -> None:
-        """extract_usage_data extracts usage from dict events."""
+        """extract_usage_data extracts usage from dict events.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             extract_usage_data,
         )
 
         event = {"data": {"input_tokens": 100, "output_tokens": 50}}
         result = extract_usage_data(event)
-        assert result is not None
+        assert result is not None  # narrowed for pyright
         assert result["input_tokens"] == 100
         assert result["output_tokens"] == 50
 
     def test_extract_usage_data_from_object_event(self) -> None:
-        """extract_usage_data extracts usage from object events."""
+        """extract_usage_data extracts usage from object events.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             extract_usage_data,
         )
@@ -370,12 +401,15 @@ class TestUsageEventHelpers:
             data = MockData()
 
         result = extract_usage_data(MockEvent())
-        assert result is not None
+        assert result is not None  # narrowed for pyright
         assert result["input_tokens"] == 200
         assert result["output_tokens"] == 100
 
     def test_extract_usage_data_returns_none_for_missing_data(self) -> None:
-        """extract_usage_data returns None when no usage data present."""
+        """extract_usage_data returns None when no usage data present.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             extract_usage_data,
         )
@@ -391,7 +425,10 @@ class TestUsageEventHelpers:
         assert extract_usage_data(MockEvent()) is None
 
     def test_extract_usage_data_handles_partial_usage(self) -> None:
-        """extract_usage_data handles events with only one token field."""
+        """extract_usage_data handles events with only one token field.
+
+        # Contract: streaming-contract:usage:MUST:1
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             extract_usage_data,
         )
@@ -399,14 +436,14 @@ class TestUsageEventHelpers:
         # Only input_tokens
         event = {"data": {"input_tokens": 100}}
         result = extract_usage_data(event)
-        assert result is not None
+        assert result is not None  # narrowed for pyright
         assert result["input_tokens"] == 100
         assert result["output_tokens"] == 0  # Defaults to 0
 
         # Only output_tokens
         event2 = {"data": {"output_tokens": 50}}
         result2 = extract_usage_data(event2)
-        assert result2 is not None
+        assert result2 is not None  # narrowed for pyright
         assert result2["input_tokens"] == 0  # Defaults to 0
         assert result2["output_tokens"] == 50
 
@@ -414,6 +451,7 @@ class TestUsageEventHelpers:
         """Contract: streaming-contract:Usage:MUST — extract_usage_data MUST include
         total_tokens computed as input_tokens + output_tokens.
 
+        # Contract: streaming-contract:usage:MUST:1
         The SDK assistant.usage event (session_events.py:874-877) sends only
         inputTokens and outputTokens — no totalTokens field. However, the kernel
         Usage model requires total_tokens: int (message_models.py:241, not Optional).
@@ -425,8 +463,7 @@ class TestUsageEventHelpers:
 
         event = {"data": {"input_tokens": 100, "output_tokens": 50}}
         result = extract_usage_data(event)
-        assert result is not None
-        assert "total_tokens" in result, "total_tokens must be present in result"
+        assert result is not None  # narrowed for pyright
         assert result["total_tokens"] == 150, (
             f"total_tokens should be input+output=150, got {result.get('total_tokens')}"
         )
@@ -434,6 +471,7 @@ class TestUsageEventHelpers:
     def test_extract_usage_data_computes_total_tokens_from_object_event(self) -> None:
         """Contract: streaming-contract:Usage:MUST — object-path also computes total_tokens.
 
+        # Contract: streaming-contract:usage:MUST:1
         Real SDK sends Usage object without total_tokens attribute; provider
         must compute it to satisfy kernel Usage.total_tokens: int requirement.
         """
@@ -450,8 +488,7 @@ class TestUsageEventHelpers:
             data = MockData()
 
         result = extract_usage_data(MockEvent())
-        assert result is not None
-        assert "total_tokens" in result, "total_tokens must be present in result"
+        assert result is not None  # narrowed for pyright
         assert result["total_tokens"] == 275, (
             f"total_tokens should be input+output=275, got {result.get('total_tokens')}"
         )
@@ -470,6 +507,7 @@ class TestValidateNoClassificationOverlapValidator:
     def test_bridge_and_consume_exact_overlap_raises(self) -> None:
         """Bridge key that also appears in consume_patterns must raise.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Line 404 in streaming.py: bridge vs consume exact match branch.
         """
         bridge: dict[str, tuple[DomainEventType, str | None]] = {
@@ -483,6 +521,7 @@ class TestValidateNoClassificationOverlapValidator:
     def test_bridge_and_drop_exact_overlap_raises(self) -> None:
         """Bridge key that also appears in drop_patterns must raise.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Line 413 in streaming.py: bridge vs drop exact match branch.
         """
         bridge: dict[str, tuple[DomainEventType, str | None]] = {
@@ -496,6 +535,7 @@ class TestValidateNoClassificationOverlapValidator:
     def test_consume_and_drop_exact_overlap_raises(self) -> None:
         """Pattern in both consume_patterns and drop_patterns must raise.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Line 423 in streaming.py: consume vs drop exact match branch.
         """
         consume = ["tool.call"]
@@ -507,6 +547,7 @@ class TestValidateNoClassificationOverlapValidator:
     def test_bridge_type_matches_drop_wildcard_raises(self) -> None:
         """Bridge event type matched by a drop wildcard pattern must raise.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Line 434 in streaming.py: bridge type vs drop wildcard branch.
         """
         bridge: dict[str, tuple[DomainEventType, str | None]] = {
@@ -520,6 +561,7 @@ class TestValidateNoClassificationOverlapValidator:
     def test_bridge_type_matches_consume_wildcard_raises(self) -> None:
         """Bridge event type matched by a consume wildcard pattern must raise.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Line 442 in streaming.py: bridge type vs consume wildcard branch.
         """
         bridge: dict[str, tuple[DomainEventType, str | None]] = {
@@ -533,6 +575,7 @@ class TestValidateNoClassificationOverlapValidator:
     def test_consume_entry_matches_drop_wildcard_raises(self) -> None:
         """Explicit consume entry matched by a drop wildcard must raise.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Line 454 in streaming.py: consume entry vs drop wildcard branch.
         """
         consume = ["tool.call"]  # Explicit (no wildcard)
@@ -544,6 +587,7 @@ class TestValidateNoClassificationOverlapValidator:
     def test_drop_entry_matches_consume_wildcard_raises(self) -> None:
         """Explicit drop entry matched by a consume wildcard must raise.
 
+        # Contract: event-vocabulary:Classification:MUST:1
         Line 466 in streaming.py: drop entry vs consume wildcard branch.
         """
         consume = ["assistant.*"]  # Wildcard consume pattern
@@ -553,7 +597,10 @@ class TestValidateNoClassificationOverlapValidator:
             _validate_no_classification_overlap({}, consume, drop)
 
     def test_valid_disjoint_config_does_not_raise(self) -> None:
-        """Fully disjoint bridge/consume/drop must not raise (false-positive guard)."""
+        """Fully disjoint bridge/consume/drop must not raise (false-positive guard).
+
+        # Contract: event-vocabulary:Classification:MUST:1
+        """
         bridge: dict[str, tuple[DomainEventType, str | None]] = {
             "session.idle": (DomainEventType.TURN_COMPLETE, None)
         }
@@ -576,6 +623,7 @@ class TestEmptyIdleEventsRaises:
     def test_empty_idle_events_raises_configuration_error(self, tmp_path: Path) -> None:
         """events.yaml with empty idle_events must raise ConfigurationError.
 
+        # Contract: streaming-contract:SessionLifecycle:MUST:1
         This is the session-hang prevention guard. An empty idle_events set means
         the provider can never detect session.idle, causing infinite wait.
         """

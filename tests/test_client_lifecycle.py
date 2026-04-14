@@ -26,10 +26,32 @@ if TYPE_CHECKING:
     pass
 
 
+class _MockSDKSession:
+    """Minimal stub for the raw SDK session object used in lifecycle tests."""
+
+    session_id: str = "test-session"
+
+    async def disconnect(self) -> None: ...
+
+
+class _MockSDKClient:
+    """Minimal stub for copilot.CopilotClient used in lifecycle tests."""
+
+    async def create_session(self, **kwargs: Any) -> _MockSDKSession: ...
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+
+
+class _MockModuleCoordinator:
+    """Minimal stub for amplifier_core.ModuleCoordinator used in prewarm tests."""
+
+    async def mount(self, *args: Any, **kwargs: Any) -> None: ...
+
+
 class TestLazyClientInit:
     """AC-1: Client not created until session() called.
 
-    Contract: sdk-boundary:Config:MUST:1
+    # Contract: provider-protocol:mount:MUST:5
     """
 
     def test_lazy_init_no_client_at_construction(self) -> None:
@@ -74,7 +96,7 @@ class TestLazyClientInit:
 class TestConcurrentSessionInit:
     """AC-2: Concurrent session() calls result in single client init.
 
-    Contract: deny-destroy:Ephemeral:MUST:1
+    # Contract: provider-protocol:mount:MUST:5
     """
 
     @pytest.mark.asyncio
@@ -89,7 +111,7 @@ class TestConcurrentSessionInit:
 
         # Track how many times CopilotClient() is called
         init_count = 0
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "concurrent-test"
         mock_session.disconnect = AsyncMock()
 
@@ -355,11 +377,11 @@ class TestDisconnectBehavior:
             CopilotClientWrapper,
         )
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "normal-exit"
         mock_session.disconnect = AsyncMock()
 
-        mock_client = AsyncMock()
+        mock_client = AsyncMock(spec=_MockSDKClient)
         mock_client.create_session = AsyncMock(return_value=mock_session)
 
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
@@ -379,11 +401,11 @@ class TestDisconnectBehavior:
             CopilotClientWrapper,
         )
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "exception-exit"
         mock_session.disconnect = AsyncMock()
 
-        mock_client = AsyncMock()
+        mock_client = AsyncMock(spec=_MockSDKClient)
         mock_client.create_session = AsyncMock(return_value=mock_session)
 
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
@@ -407,11 +429,11 @@ class TestDisconnectBehavior:
             CopilotClientWrapper,
         )
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "disconnect-fail"
         mock_session.disconnect = AsyncMock(side_effect=RuntimeError("disconnect failed"))
 
-        mock_client = AsyncMock()
+        mock_client = AsyncMock(spec=_MockSDKClient)
         mock_client.create_session = AsyncMock(return_value=mock_session)
 
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
@@ -438,11 +460,11 @@ class TestDisconnectBehavior:
             CopilotClientWrapper,
         )
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "disconnect-escalate"
         mock_session.disconnect = AsyncMock(side_effect=RuntimeError("disconnect failed"))
 
-        mock_client = AsyncMock()
+        mock_client = AsyncMock(spec=_MockSDKClient)
         mock_client.create_session = AsyncMock(return_value=mock_session)
 
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
@@ -455,13 +477,13 @@ class TestDisconnectBehavior:
 
         # After 4 failures (>3), should see ERROR level log
         log_text = caplog.text.lower()
-        assert "resource leak" in log_text or "multiple disconnect" in log_text
+        assert "multiple disconnect failures" in log_text
 
 
 class TestFailedStartCleanup:
     """AC-7: Failed start() clears _owned_client.
 
-    Contract: sdk-boundary:Config:MUST:1
+    # Lifecycle invariant — no formal contract anchor; see client.py:358-360
     """
 
     @pytest.mark.asyncio
@@ -502,7 +524,7 @@ class TestFailedStartCleanup:
 class TestCloseOwnershipSemantics:
     """AC-8, AC-9: Close ownership semantics and idempotency.
 
-    Contract: provider-protocol:complete:MUST:3
+    # Contract: provider-protocol:mount:MUST:5
     """
 
     @pytest.mark.asyncio
@@ -516,7 +538,7 @@ class TestCloseOwnershipSemantics:
         )
 
         wrapper = CopilotClientWrapper()
-        mock_owned = AsyncMock()
+        mock_owned = AsyncMock(spec=_MockSDKClient)
         mock_owned.stop = AsyncMock()
         wrapper._owned_client = mock_owned  # pyright: ignore[reportPrivateUsage]
 
@@ -534,7 +556,7 @@ class TestCloseOwnershipSemantics:
             CopilotClientWrapper,
         )
 
-        mock_injected = AsyncMock()
+        mock_injected = AsyncMock(spec=_MockSDKClient)
         mock_injected.stop = AsyncMock()
 
         wrapper = CopilotClientWrapper(sdk_client=mock_injected)
@@ -553,7 +575,7 @@ class TestCloseOwnershipSemantics:
         )
 
         wrapper = CopilotClientWrapper()
-        mock_owned = AsyncMock()
+        mock_owned = AsyncMock(spec=_MockSDKClient)
         mock_owned.stop = AsyncMock()
         wrapper._owned_client = mock_owned  # pyright: ignore[reportPrivateUsage]
 
@@ -611,16 +633,13 @@ class TestSDKNotInstalled:
                 async with wrapper.session(model="gpt-4"):
                     pass  # Should not reach here
 
-            assert (
-                "SDK not installed" in str(exc_info.value)
-                or "copilot" in str(exc_info.value).lower()
-            )
+            assert "Copilot SDK not installed" in str(exc_info.value)
 
 
 class TestHealthCheck:
     """is_healthy() method for singleton pattern.
 
-    Contract: sdk-boundary:Config:MUST:1
+    # Contract: sdk-protection:Subprocess:MUST:6
     """
 
     def test_is_healthy_true_initially(self) -> None:
@@ -659,7 +678,7 @@ class TestHealthCheck:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=_MockSDKClient)
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
         assert wrapper.is_healthy() is True
 
@@ -708,7 +727,9 @@ class TestTokenFallbackSecurity:
 
     P1-6 Security Fix: An explicit token MUST NEVER be silently ignored.
 
-    Contract (OWASP A07): When explicit token is provided but SDK can't apply it:
+    Contract: sdk-boundary:Auth:MUST:3
+
+    When explicit token is provided but SDK can't apply it:
     - ALWAYS fail closed with ConfigurationError
     - No escape hatches - security behavior is unconditional
     - If tests need to avoid this: clear token env vars, don't mock SubprocessConfig=None
@@ -723,7 +744,7 @@ class TestTokenFallbackSecurity:
     ) -> None:
         """Raises ConfigurationError when SubprocessConfig unavailable with token.
 
-        Contract: sdk-boundary:Config:MUST:1
+        Contract: sdk-boundary:Auth:MUST:3
         Security: Fail closed to prevent unintended default authentication.
         """
         import pytest
@@ -738,7 +759,7 @@ class TestTokenFallbackSecurity:
         # Set a token
         monkeypatch.setenv("GITHUB_TOKEN", "test-token-value")
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "fail-closed-test"
         mock_session.disconnect = AsyncMock()
 
@@ -772,11 +793,9 @@ class TestTokenFallbackSecurity:
                     pass
 
             # Should be a ConfigurationError about failing closed
-            assert "SubprocessConfig" in str(exc_info.value)
-            assert (
-                "failing closed" in str(exc_info.value).lower()
-                or "cannot apply" in str(exc_info.value).lower()
-            )
+            err = str(exc_info.value)
+            assert "SubprocessConfig" in err
+            assert "failing closed to prevent unintended default authentication" in err
 
 
 class TestPrewarmSubprocess:
@@ -787,7 +806,7 @@ class TestPrewarmSubprocess:
     first complete() call. This moves ~2s latency from user-visible
     first-request time to invisible mount time.
 
-    Contract: sdk-boundary:Config:MUST:1
+    # Contract: sdk-protection:Subprocess:MUST:5
     """
 
     @pytest.mark.asyncio
@@ -821,7 +840,7 @@ class TestPrewarmSubprocess:
         init_timestamps: list[float] = []
         import time
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "prewarm-test"
         mock_session.disconnect = AsyncMock()
 
@@ -844,7 +863,7 @@ class TestPrewarmSubprocess:
         provider_module._shared_client_refcount = 0  # pyright: ignore[reportPrivateUsage]
 
         # Mock coordinator
-        mock_coordinator = MagicMock()
+        mock_coordinator = MagicMock(spec=_MockModuleCoordinator)
         mock_coordinator.mount = AsyncMock()
 
         # Patch config to enable pre-warming via monkeypatch.
@@ -852,14 +871,21 @@ class TestPrewarmSubprocess:
         import amplifier_module_provider_github_copilot as provider_module
 
         try:
+            from amplifier_module_provider_github_copilot.config._sdk_protection import (
+                SdkConfig,
+                SdkProtectionConfig,
+                SingletonConfig,
+            )
 
-            def mock_load_config() -> Any:
-                mock_config = MagicMock()
-                mock_config.sdk.prewarm_subprocess = True
-                mock_config.sdk.log_level = "none"
-                mock_config.sdk.log_level_env_var = "COPILOT_SDK_LOG"
-                mock_config.singleton.lock_timeout_seconds = 30.0
-                return mock_config
+            def mock_load_config() -> SdkProtectionConfig:
+                return SdkProtectionConfig(
+                    sdk=SdkConfig(
+                        prewarm_subprocess=True,
+                        log_level="none",
+                        log_level_env_var="COPILOT_SDK_LOG",
+                    ),
+                    singleton=SingletonConfig(lock_timeout_seconds=30.0),
+                )
 
             monkeypatch.setattr(provider_module, "load_sdk_protection_config", mock_load_config)
 
@@ -911,7 +937,7 @@ class TestPrewarmSubprocess:
 
         init_count = 0
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "race-test"
         mock_session.disconnect = AsyncMock()
 
@@ -966,7 +992,9 @@ class TestTokenFallbackSecurityExtended:
 
     P1-6 Security Fix: An explicit token MUST NEVER be silently ignored.
 
-    Contract (OWASP A07): When explicit token is provided but SDK can't apply it:
+    Contract: sdk-boundary:Auth:MUST:3
+
+    When explicit token is provided but SDK can't apply it:
     - ALWAYS fail closed with ConfigurationError
     - No escape hatches - security behavior is unconditional
     - If tests need to avoid this: clear token env vars, don't mock SubprocessConfig=None
@@ -985,7 +1013,7 @@ class TestTokenFallbackSecurityExtended:
         An explicit token MUST NEVER be silently ignored - this prevents
         unintended privilege escalation from ambient auth fallback.
 
-        Contract: OWASP A07 Identification and Authentication Failures
+        Contract: sdk-boundary:Auth:MUST:3
         """
         import pytest
 
@@ -997,7 +1025,7 @@ class TestTokenFallbackSecurityExtended:
         monkeypatch.setenv("SKIP_SDK_CHECK", "1")
         monkeypatch.setenv("GITHUB_TOKEN", "test-token-value")
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "security-test"
         mock_session.disconnect = AsyncMock()
 
@@ -1030,10 +1058,9 @@ class TestTokenFallbackSecurityExtended:
                 async with wrapper.session(model="gpt-4"):
                     pass
 
-            assert (
-                "SubprocessConfig" in str(exc_info.value)
-                or "failing closed" in str(exc_info.value).lower()
-            )
+            err = str(exc_info.value)
+            assert "SubprocessConfig" in err
+            assert "failing closed to prevent unintended default authentication" in err
 
     @pytest.mark.asyncio
     async def test_no_error_when_no_token(
@@ -1055,7 +1082,7 @@ class TestTokenFallbackSecurityExtended:
         for var in ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
             monkeypatch.delenv(var, raising=False)
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "no-token-test"
         mock_session.disconnect = AsyncMock()
 
@@ -1094,7 +1121,7 @@ class TestCopilotPidTracking:
     The copilot_pid property enables correlation between provider events.jsonl
     and SDK logs at ~/.copilot/logs/process-{timestamp}-{pid}.log.
 
-    Contract: observability.md — SHOULD include correlation IDs for tracing
+    # Contract: behaviors:Logging:MUST:5
     """
 
     def test_copilot_pid_none_before_init(self) -> None:
@@ -1112,7 +1139,7 @@ class TestCopilotPidTracking:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=_MockSDKClient)
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
         # Injected client = no subprocess, no PID
         assert wrapper.copilot_pid is None
@@ -1127,7 +1154,7 @@ class TestCopilotPidTracking:
             CopilotClientWrapper,
         )
 
-        mock_session = AsyncMock()
+        mock_session = AsyncMock(spec=_MockSDKSession)
         mock_session.session_id = "test-pid"
         mock_session.disconnect = AsyncMock()
 
@@ -1392,6 +1419,8 @@ class TestSDKLogLevelEnvOverride:
     def test_resolve_log_level_config_specifies_env_var_name(self) -> None:
         """Config YAML specifies which env var to check.
 
+        # Contract: sdk-protection:Subprocess:MUST:7
+
         Three-Medium Architecture: policy (env var name) comes from YAML.
         """
         from amplifier_module_provider_github_copilot.config_loader import (
@@ -1401,9 +1430,10 @@ class TestSDKLogLevelEnvOverride:
         load_sdk_protection_config.cache_clear()
         config = load_sdk_protection_config()
 
-        # env_var name defined in YAML
-        assert hasattr(config.sdk, "log_level_env_var")
-        assert config.sdk.log_level_env_var  # Non-empty string
+        # env_var name defined in Python config module
+        # Contract: sdk-protection:Subprocess:MUST:7
+        assert isinstance(config.sdk.log_level_env_var, str)
+        assert config.sdk.log_level_env_var == "COPILOT_SDK_LOG_LEVEL"
 
     def test_invalid_env_log_level_falls_back_to_yaml(
         self,
@@ -1446,10 +1476,6 @@ class TestEnsureExecutableWiring:
     the SDK subprocess silently fails on fresh installs.
     """
 
-    @pytest.mark.skipif(
-        __import__("sys").platform == "win32",
-        reason="ensure_executable is no-op on Windows; wiring tested on Unix",
-    )
     @pytest.mark.asyncio
     async def test_ensure_executable_called_before_start_on_unix(
         self,
@@ -1457,7 +1483,7 @@ class TestEnsureExecutableWiring:
     ) -> None:
         """ensure_executable called with binary path before CopilotClient.start().
 
-        Contract: sdk-boundary:BinaryResolution:MUST:6
+        # Contract: sdk-boundary:BinaryResolution:MUST:6
         """
         from pathlib import Path
         from unittest.mock import patch
@@ -1484,7 +1510,7 @@ class TestEnsureExecutableWiring:
                 call_order.append("start")
 
             async def create_session(self, **kwargs: Any) -> Any:
-                mock_sess = AsyncMock()
+                mock_sess = AsyncMock(spec=_MockSDKSession)
                 mock_sess.session_id = "exe-test"
                 mock_sess.disconnect = AsyncMock()
                 return mock_sess
@@ -1527,7 +1553,7 @@ class TestEnsureExecutableWiring:
 class TestSingletonLock:
     """The module-level singleton lock must be threading.Lock, not asyncio.Lock.
 
-    Contract: provider-protocol:mount:MUST:5 — process-level singleton.
+    # Contract: provider-protocol:mount:MUST:5 (prose bullet — table fix pending)
     An asyncio.Lock is event-loop scoped; using one across multiple event loops
     (e.g., in multi-turn test suites or multi-threaded Amplifier environments)
     raises RuntimeError. threading.Lock works reliably across all loops/threads.

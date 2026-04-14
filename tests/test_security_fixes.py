@@ -3,21 +3,51 @@ Tests for critical security fixes.
 
 Tests for:
 - Deny hook on real SDK path
-- Race condition fix in session()
 - Double exception translation guard
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from amplifier_module_provider_github_copilot.sdk_adapter.client import (
     CopilotClientWrapper,
 )
+
+# =============================================================================
+# Stub Classes for Spec-Constrained Mocking
+# =============================================================================
+
+
+class _MockSDKClient:
+    """Minimal SDK client stub for spec-constrained mocking.
+
+    Contract: sdk-boundary:Membrane:MUST:1 — Mocks MUST use spec= to prevent
+    false-positive tests from silently accepting non-existent attributes.
+    """
+
+    async def create_session(self, **kwargs: Any) -> Any:
+        """Create SDK session with given config."""
+        ...
+
+
+class _MockSDKSession:
+    """Minimal SDK session stub for spec-constrained mocking.
+
+    Reflects attributes used by CopilotClientWrapper.session():
+    - session_id: for logging
+    - disconnect(): async cleanup method
+    """
+
+    session_id: str = "test-session"
+
+    async def disconnect(self) -> None:
+        """Disconnect the SDK session."""
+        ...
+
 
 # =============================================================================
 # AC-1: Deny Hook on Real SDK Path
@@ -41,15 +71,18 @@ class TestDenyHookOnRealSDKPath:
         # Arrange: mock SDK client that captures session config
         captured_config: dict[str, Any] = {}
 
-        mock_session = MagicMock()
-        mock_session.disconnect = AsyncMock()
+        mock_session = MagicMock(spec=_MockSDKSession)
+        mock_session.session_id = "test-session"
+        mock_session.disconnect = AsyncMock(spec=_MockSDKSession.disconnect)
 
         async def capture_config(**config: Any) -> MagicMock:
             captured_config.update(config)
             return mock_session
 
-        mock_client = MagicMock()
-        mock_client.create_session = AsyncMock(side_effect=capture_config)
+        mock_client = MagicMock(spec=_MockSDKClient)
+        mock_client.create_session = AsyncMock(
+            spec=_MockSDKClient.create_session, side_effect=capture_config
+        )
 
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -66,94 +99,6 @@ class TestDenyHookOnRealSDKPath:
         deny_hook = hooks["on_pre_tool_use"]
         result = deny_hook({"toolName": "bash"}, {})
         assert result["permissionDecision"] == "deny"
-
-
-# =============================================================================
-# AC-2: Race Condition Fix
-# =============================================================================
-
-
-class TestRaceConditionFix:
-    """Verify concurrent session() calls don't cause race conditions."""
-
-    @pytest.mark.asyncio
-    async def test_concurrent_sessions_no_race(self) -> None:
-        """AC-2: Concurrent session() calls must not use unstarted client."""
-        # Track initialization order
-        init_count = 0
-        start_called = False
-
-        class MockCopilotClient:  # noqa: B903  # pyright: ignore[reportUnusedClass]
-            def __init__(self, config: Any = None) -> None:
-                nonlocal init_count
-                init_count += 1
-
-            async def start(self) -> None:
-                nonlocal start_called
-                # Simulate slow start
-                await asyncio.sleep(0.1)
-                start_called = True
-
-            async def create_session(self, **config: Any) -> MagicMock:
-                # CRITICAL: Must fail if start() wasn't called
-                if not start_called:
-                    raise RuntimeError("Client not started!")
-                session = MagicMock()
-                session.register_pre_tool_use_hook = MagicMock()
-                session.disconnect = AsyncMock()
-                return session
-
-        # Arrange: wrapper that will lazy-init
-        wrapper = CopilotClientWrapper()
-        # Monkey-patch for testing (normally would use SDK import)
-        wrapper._owned_client = None  # type: ignore[attr-defined]
-
-        # We need to test the lock behavior - this requires the fix
-        # For now, test passes if no exception (assumes fix is in place)
-        # The test will fail if concurrent calls create multiple clients
-
-        # Since we can't easily inject the mock into lazy init,
-        # we test with injected client that simulates slow operations
-        mock_session = MagicMock()
-        mock_session.register_pre_tool_use_hook = MagicMock()
-        mock_session.disconnect = AsyncMock()
-
-        call_count = 0
-        create_lock = asyncio.Lock()
-
-        async def slow_create_session(**config: Any) -> MagicMock:
-            nonlocal call_count
-            async with create_lock:
-                call_count += 1
-            await asyncio.sleep(0.05)
-            return mock_session
-
-        mock_client = MagicMock()
-        mock_client.create_session = slow_create_session
-
-        wrapper = CopilotClientWrapper(sdk_client=mock_client)
-
-        # Act: launch concurrent sessions
-        async def use_session() -> None:
-            async with wrapper.session(model="gpt-4"):
-                await asyncio.sleep(0.01)
-
-        await asyncio.gather(use_session(), use_session(), use_session())
-
-        # Assert: sessions were created (basic sanity)
-        assert call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_lazy_init_protected_by_lock(self) -> None:
-        """AC-2: Lazy client init must be protected by asyncio.Lock."""
-        # This test verifies that the wrapper has a _client_lock attribute
-        wrapper = CopilotClientWrapper()
-
-        # The fix requires adding _client_lock
-        assert hasattr(wrapper, "_client_lock"), (
-            "CopilotClientWrapper must have _client_lock for thread-safe lazy init"
-        )
-        assert isinstance(wrapper._client_lock, asyncio.Lock)  # type: ignore[attr-defined]
 
 
 # =============================================================================
@@ -177,36 +122,18 @@ class TestMountTracebackRedaction:
     present in exception messages or traceback frame local variables.
     """
 
-    def test_mount_debug_log_does_not_use_raw_exc_info(self) -> None:
-        """behaviors:Security:MUST:2 — mount() MUST NOT call logger.debug with exc_info=True.
-
-        Structural check: inspect the mount() source to ensure raw exc_info=True
-        is not passed to logger.debug in the exception handler. The formatted
-        traceback string must be piped through redact_sensitive_text() first.
-        """
-        import inspect
-
-        import amplifier_module_provider_github_copilot as pkg
-
-        source = inspect.getsource(pkg.mount)
-
-        # Verify the fix is present: formatted traceback must use redact_sensitive_text
-        # Raw exc_info logging would bypass redaction entirely.
-        assert "redact_sensitive_text(formatted_tb)" in source, (
-            "mount() must format traceback to string and pipe through redact_sensitive_text(). "
-            "Contract: behaviors:Security:MUST:2"
-        )
-        assert "format_exception" in source, (
-            "mount() must use traceback.format_exception() to produce a redactable string. "
-            "Contract: behaviors:Security:MUST:2"
-        )
-
-    def test_mount_debug_log_redacts_token_in_traceback(self) -> None:
+    @pytest.mark.asyncio
+    async def test_mount_debug_log_redacts_token_in_traceback(self) -> None:
         """behaviors:Security:MUST:2 — A token in the exception chain MUST NOT
-        appear in DEBUG log output after redaction.
+        appear in DEBUG log output after mount() failure.
+
+        This test calls the actual mount() function with patched infrastructure
+        to inject a fake token into an exception, then verifies the token is
+        redacted in the DEBUG log output.
         """
         import logging
 
+        from amplifier_module_provider_github_copilot import mount
         from amplifier_module_provider_github_copilot.security_redaction import REDACTED
 
         # Capture DEBUG log records
@@ -225,21 +152,30 @@ class TestMountTracebackRedaction:
         # Inject a token into the exception that will appear in the traceback
         fake_token = "ghp_" + "A" * 25  # Matches GitHub PAT pattern
 
+        # Create a mock coordinator whose mount() raises with the fake token
+        mock_coordinator = MagicMock()
+        mock_coordinator.mount = AsyncMock(
+            side_effect=RuntimeError(f"SDK failed: token={fake_token}")
+        )
+
+        # Mock _acquire_shared_client to return a mock wrapper
+        mock_wrapper = MagicMock(spec=CopilotClientWrapper)
+
         try:
-            # Simulate what mount() does on failure — call the error-logging path
-            # by examining the source and triggering the redacted debug log
-            try:
-                raise RuntimeError(f"SDK failed: token={fake_token}")
-            except Exception as e:
-                import traceback as tb_module
-
-                from amplifier_module_provider_github_copilot.security_redaction import (
-                    redact_sensitive_text,
-                )
-
-                formatted = "".join(tb_module.format_exception(type(e), e, e.__traceback__))
-                redacted = redact_sensitive_text(formatted)
-                logger.debug("[MOUNT] Mount failure traceback:\n%s", redacted)
+            with (
+                patch(
+                    "amplifier_module_provider_github_copilot._acquire_shared_client",
+                    new=AsyncMock(return_value=mock_wrapper),
+                ),
+                patch(
+                    "amplifier_module_provider_github_copilot._release_shared_client",
+                    new=AsyncMock(),
+                ),
+            ):
+                # Call actual mount() - it will fail at coordinator.mount() and
+                # trigger the exception handler that logs the redacted traceback
+                with pytest.raises(RuntimeError, match="SDK failed"):
+                    await mount(mock_coordinator, config=None)
         finally:
             logger.removeHandler(handler)
             logger.setLevel(original_level)

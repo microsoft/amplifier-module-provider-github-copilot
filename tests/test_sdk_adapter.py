@@ -40,7 +40,7 @@ class TestSDKAdapterTypes:
         assert config_with_tokens.max_tokens == 1000
 
     def test_session_config_is_dataclass(self) -> None:
-        """AC-4: SessionConfig is a dataclass."""
+        """Contract: sdk-boundary:Types:MUST:2 — SessionConfig is a dataclass."""
         from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionConfig
 
         field_names = {f.name for f in fields(SessionConfig)}
@@ -56,16 +56,12 @@ class TestSDKAdapterExports:
         """sdk_adapter exports SessionConfig."""
         from amplifier_module_provider_github_copilot.sdk_adapter import SessionConfig
 
-        assert SessionConfig is not None
+        # Contract: sdk-boundary:Membrane:MUST:2
+        assert isinstance(SessionConfig, type)
 
     def test_exports_copilot_client_wrapper(self) -> None:
         """sdk_adapter exports CopilotClientWrapper."""
         from amplifier_module_provider_github_copilot.sdk_adapter import CopilotClientWrapper
 
-        assert CopilotClientWrapper is not None
-
-    def test_does_not_export_copilot_session_wrapper(self) -> None:
-        """sdk_adapter no longer exports CopilotSessionWrapper (raw session used instead)."""
-        import amplifier_module_provider_github_copilot.sdk_adapter as adapter
-
-        assert not hasattr(adapter, "CopilotSessionWrapper")
+        # Contract: sdk-boundary:Membrane:MUST:2
+        assert isinstance(CopilotClientWrapper, type)

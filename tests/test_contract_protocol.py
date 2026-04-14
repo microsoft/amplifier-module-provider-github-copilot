@@ -44,11 +44,12 @@ class TestProtocolGetInfo:
         info = provider.get_info()
 
         assert info.id == "github-copilot"
-        assert info.display_name is not None
-        assert info.capabilities is not None
+        # Contract: provider-protocol:get_info:MUST:1
+        assert info.display_name == "GitHub Copilot SDK"
+        assert info.capabilities == ["streaming", "tools"]
 
     def test_includes_capabilities(self, provider: GitHubCopilotProvider) -> None:
-        """provider-protocol:get_info:MUST:2 - Includes capabilities.
+        """provider-protocol:get_info:MUST:1 - Includes provider capabilities.
 
         Contract: Capabilities SHOULD use kernel constants from
         amplifier_core.capabilities (PROVIDER_CONTRACT.md:97).
@@ -62,6 +63,26 @@ class TestProtocolGetInfo:
         # Per kernel capabilities.py constants: STREAMING="streaming", TOOLS="tools"
         assert "streaming" in info.capabilities
         assert "tools" in info.capabilities
+
+    def test_get_info_includes_context_window(self, provider: GitHubCopilotProvider) -> None:
+        """provider-protocol:get_info:MUST:2 - Includes context_window for budget calculation.
+
+        Contract: provider-protocol:get_info:MUST:2
+
+        ProviderInfo.defaults MUST contain context_window so the kernel
+        can calculate token budgets without an API call.
+        """
+        # Contract: provider-protocol:get_info:MUST:2
+        info = provider.get_info()
+
+        assert "context_window" in info.defaults, (
+            "get_info() defaults must include 'context_window' for kernel budget calculation. "
+            "See provider-protocol:get_info:MUST:2"
+        )
+        assert info.defaults["context_window"] == 200000, (
+            f"context_window is {info.defaults['context_window']!r} but should be 200000. "
+            "Value comes from config/_models.py PROVIDER['defaults']['context_window']."
+        )
 
 
 class TestProtocolListModels:
@@ -80,10 +101,13 @@ class TestProtocolListModels:
         """provider-protocol:list_models:MUST:2 - Includes context_window per model."""
         models = await provider.list_models()
 
+        # Contract: provider-protocol:list_models:MUST:1
+        assert len(models) >= 1
         for model in models:
-            assert model.context_window is not None
+            assert isinstance(model.context_window, int)
             assert model.context_window > 0
-            assert model.max_output_tokens is not None
+            assert isinstance(model.max_output_tokens, int)
+            assert model.max_output_tokens > 0
 
 
 class TestProtocolComplete:
@@ -107,7 +131,7 @@ class TestProtocolComplete:
 
 
 class TestProtocolParseToolCalls:
-    """provider-protocol:parse_tool_calls:MUST:1-4"""
+    """provider-protocol:parse_tool_calls:MUST:1-5"""
 
     def test_extracts_tool_calls(self, provider: GitHubCopilotProvider) -> None:
         """provider-protocol:parse_tool_calls:MUST:1 - Extracts tool calls from response."""
@@ -127,7 +151,10 @@ class TestProtocolParseToolCalls:
         assert tool_calls[0].name == "read_file"
 
     def test_returns_empty_list_when_none(self, provider: GitHubCopilotProvider) -> None:
-        """provider-protocol:parse_tool_calls:MUST:2 - Returns empty list when no tool calls."""
+        """Contract: provider-protocol:parse_tool_calls:MUST:2
+
+        Returns empty list when no tool calls.
+        """
         response = MagicMock()
         response.tool_calls = []
 
@@ -136,7 +163,7 @@ class TestProtocolParseToolCalls:
         assert tool_calls == []
 
     def test_preserves_tool_call_ids(self, provider: GitHubCopilotProvider) -> None:
-        """provider-protocol:parse_tool_calls:MUST:3 - Preserves tool call IDs."""
+        """Contract: provider-protocol:parse_tool_calls:MUST:3 - Preserves tool call IDs."""
         tc1 = MagicMock()
         tc1.id = "unique_id_123"
         tc1.name = "test_tool"
@@ -192,9 +219,29 @@ class TestProtocolParseToolCalls:
 
         tool_calls = provider.parse_tool_calls(response)
 
-        # ToolCall should have 'arguments' attribute
-        assert hasattr(tool_calls[0], "arguments")
         assert tool_calls[0].arguments == {"key": "value"}
+
+    def test_is_synchronous(self, provider: GitHubCopilotProvider) -> None:
+        """parse_tool_calls MUST be a plain function, never a coroutine.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:5
+
+        The kernel calls this method without ``await`` across every bridge
+        (gRPC, WASM, Python). An ``async def`` implementation returns a coroutine
+        object — Python coroutines are truthy, so the kernel's tool-dispatch loop
+        would treat every response as having tool calls. That failure is silent:
+        no exception, no type error, no warning.
+
+        Evidence:
+            - ``amplifier_core/interfaces.py``: ``def parse_tool_calls(...)``
+            - ``amplifier-core/crates/amplifier-core/src/traits.rs:188``:
+              ``fn parse_tool_calls(&self, ...) -> Vec<ToolCall>``
+            - ``amplifier-core/.../bridges/wasm_provider.rs:255``: inline comment —
+              "Call WASM synchronously. parse_tool_calls is not async in the trait"
+        """
+        import inspect
+
+        assert not inspect.iscoroutinefunction(provider.parse_tool_calls)
 
 
 class TestConcreteProtocolBehavior:

@@ -20,6 +20,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from amplifier_core import ModuleCoordinator
 
 
 # Mock SubprocessConfig that accepts github_token
@@ -42,12 +43,14 @@ class TestMountFailurePath:
     async def test_mount_raises_on_provider_init_failure(self) -> None:
         """mount() raises when GitHubCopilotProvider.__init__ fails.
 
+        Contract: sdk-boundary:BinaryResolution:MUST:8
         Contract: sdk-boundary.md - fail-fast on init failure
         P2 Fix: Raise instead of return None.
         """
+        # Contract: provider-protocol:mount:MUST:2
         from amplifier_module_provider_github_copilot import mount
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.mount = AsyncMock()
 
         # Patch GitHubCopilotProvider to fail during __init__
@@ -65,9 +68,10 @@ class TestMountFailurePath:
         Contract: sdk-boundary.md - propagate failures
         P2 Fix: Raise instead of return None.
         """
+        # Contract: provider-protocol:mount:MUST:2
         from amplifier_module_provider_github_copilot import mount
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.mount = AsyncMock(side_effect=RuntimeError("Coordinator error"))
 
         with pytest.raises(RuntimeError, match="Coordinator error"):
@@ -80,9 +84,10 @@ class TestMountFailurePath:
         Contract: sdk-boundary.md - observability
         P2 Fix: Log then raise (not return None).
         """
+        # Contract: behaviors:Logging:MUST:1
         from amplifier_module_provider_github_copilot import mount
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.mount = AsyncMock(side_effect=ValueError("Test error"))
 
         with caplog.at_level(logging.ERROR):
@@ -98,49 +103,21 @@ class TestMountFailurePath:
 
         Contract: sdk-boundary.md - cleanup MUST be returned
         """
+        # Contract: provider-protocol:mount:MUST:2
         from amplifier_module_provider_github_copilot import mount
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.mount = AsyncMock()
 
         result = await mount(coordinator, config=None)
 
         # On success, should return a cleanup function (not None)
-        assert result is not None
         assert callable(result)
-
-
-class TestMagicMockSpec:
-    """DEMagicMock with spec= for type safety."""
-
-    def test_mock_with_spec_prevents_invalid_attribute_access(self) -> None:
-        """MagicMock(spec=) raises AttributeError for invalid attributes.
-
-        This demonstrates why spec= matters for test quality.
-        """
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        # Without spec, MagicMock allows any attribute (dangerous!)
-        mock_without_spec = MagicMock()
-        _ = mock_without_spec.nonexistent_method()  # This silently succeeds
-
-        # With spec, MagicMock raises AttributeError for invalid attributes
-        mock_with_spec = MagicMock(spec=GitHubCopilotProvider)
-        with pytest.raises(AttributeError):
-            _ = mock_with_spec.nonexistent_method()  # This raises
-
-    def test_provider_mock_with_spec_has_required_methods(self) -> None:
-        """MagicMock(spec=Provider) has all required methods."""
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        mock = MagicMock(spec=GitHubCopilotProvider)
-
-        # These should work (methods exist on GitHubCopilotProvider)
-        assert hasattr(mock, "get_info")
-        assert hasattr(mock, "list_models")
-        assert hasattr(mock, "complete")
-        assert hasattr(mock, "parse_tool_calls")
-        assert hasattr(mock, "close")
+        assert asyncio.iscoroutinefunction(result), (
+            "mount() must return an async cleanup callable (coroutine function). "
+            "Got sync callable — cleanup cannot await provider.cancel_emit_tasks() or "
+            "_release_shared_client(). See provider-protocol:mount:MUST:2"
+        )
 
 
 class TestConcurrentSessionDenyHook:
@@ -159,10 +136,11 @@ class TestConcurrentSessionDenyHook:
         # Track session configs to verify deny hook
         session_configs: list[dict[str, Any]] = []
 
-        mock_session = MagicMock()
+        mock_session = MagicMock(spec=["disconnect", "session_id"])
         mock_session.disconnect = AsyncMock()
         mock_session.session_id = "test-session"
 
+        # Cannot spec CopilotClient: SDK not installed in test environment
         mock_client_instance = AsyncMock()
         mock_client_instance.start = AsyncMock()
 
@@ -198,6 +176,7 @@ class TestConcurrentSessionDenyHook:
 
             await asyncio.gather(*[get_session() for _ in range(3)])
 
+            # Contract: deny-destroy:DenyHook:MUST:1
             # All 3 sessions should have deny hook in config
             assert len(session_configs) == 3
             for config in session_configs:
@@ -224,10 +203,11 @@ class TestConcurrentSessionDenyHook:
 
         captured_hook: Any = None
 
-        mock_session = MagicMock()
+        mock_session = MagicMock(spec=["disconnect", "session_id"])
         mock_session.disconnect = AsyncMock()
         mock_session.session_id = "test-session"
 
+        # Cannot spec CopilotClient: SDK not installed in test environment
         mock_client_instance = AsyncMock()
         mock_client_instance.start = AsyncMock()
 
@@ -258,9 +238,6 @@ class TestConcurrentSessionDenyHook:
             async with wrapper.session():
                 pass  # Just need to create session to capture hook
 
-            # Call the captured hook and verify it returns denial
-            assert captured_hook is not None, "Hook was not captured"
-
             # Call the hook with mock tool use request
             # SDK hooks take (input_data, context) as per _make_deny_hook_config
             mock_input_data = {"toolName": "read_file", "arguments": {"path": "/etc/passwd"}}
@@ -268,25 +245,58 @@ class TestConcurrentSessionDenyHook:
 
             result = captured_hook(mock_input_data, mock_context)
 
-            # The deny hook should return something indicating denial
-            # (The exact shape depends on SDK version, but should not be None/empty)
-            assert result is not None, "Deny hook must return a result"
+            # Contract: deny-destroy:DenyHook:MUST:2
+            assert isinstance(result, dict), (
+                f"Deny hook must return a dict, got {type(result).__name__!r}. "
+                "See client.py:DENY_ALL and deny-destroy:DenyHook:MUST:2"
+            )
+            assert result["permissionDecision"] == "deny", (
+                f"permissionDecision is {result.get('permissionDecision')!r} but must be 'deny'. "
+                "See deny-destroy:DenyHook:MUST:2"
+            )
+            assert result["permissionDecisionReason"] == "Processing", (
+                f"permissionDecisionReason is {result.get('permissionDecisionReason')!r} "
+                "but must be 'Processing'."
+            )
+            assert result["suppressOutput"] is True, (
+                f"suppressOutput is {result.get('suppressOutput')!r} but must be True. "
+                "Suppression prevents denial from polluting conversation context."
+            )
 
 
-class TestF069DeadCodeRemoval:
-    """Verify _complete_fn dead code removed."""
+class TestQualityGates:
+    """Contract: provider-protocol:QualityGates:MUST:1,2
 
-    def test_complete_fn_attribute_removed(self) -> None:
-        """GitHubCopilotProvider no longer has _complete_fn attribute.
+    Verify pyright configuration covers tests/ and the full repo.
+    Actual pyright runs are enforced by CI; these tests verify the
+    infrastructure (pyrightconfig.json) is correctly configured.
+    """
 
-        The _complete_fn was never assigned after init,
-        so it was dead code. Now removed.
-        """
-        from unittest.mock import MagicMock
+    def test_pyright_config_includes_tests(self) -> None:
+        """Contract: provider-protocol:QualityGates:MUST:1 — test files must be type-checked."""
+        import json
+        from pathlib import Path
 
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        config_path = Path(__file__).parent.parent / "pyrightconfig.json"
+        assert config_path.exists(), "pyrightconfig.json must exist at repo root"
 
-        provider = GitHubCopilotProvider(config=None, coordinator=MagicMock())
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        include = config.get("include", [])
+        assert "tests" in include, (
+            f"pyrightconfig.json 'include' must contain 'tests' for type-clean test files. "
+            f"Got: {include}"
+        )
 
-        # _complete_fn should NOT exist anymore
-        assert not hasattr(provider, "_complete_fn"), "_complete_fn attribute should be removed"
+    def test_pyright_config_includes_full_repo(self) -> None:
+        """Contract: provider-protocol:QualityGates:MUST:2 — full repo must be type-checked."""
+        import json
+        from pathlib import Path
+
+        config_path = Path(__file__).parent.parent / "pyrightconfig.json"
+        assert config_path.exists(), "pyrightconfig.json must exist at repo root"
+
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        include = config.get("include", [])
+        assert "amplifier_module_provider_github_copilot" in include, (
+            f"pyrightconfig.json 'include' must contain source package. Got: {include}"
+        )

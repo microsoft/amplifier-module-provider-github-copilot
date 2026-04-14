@@ -13,8 +13,6 @@ Contract: behaviors:ConfigLoading:MUST:6
 
 from __future__ import annotations
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Singleton config defaults
 # ---------------------------------------------------------------------------
@@ -23,10 +21,10 @@ import pytest
 class TestSingletonSectionValidation:
     """Validation: singleton config has correct defaults."""
 
-    def test_missing_singleton_section_raises(self) -> None:
+    def test_singleton_config_has_defaults(self) -> None:
         """SingletonConfig has lock_timeout_seconds default.
 
-        Contract: sdk-protection:Singleton:MUST:8
+        Contract: provider-protocol:mount:MUST:5
         """
         from amplifier_module_provider_github_copilot.config_loader import (
             SingletonConfig,
@@ -38,10 +36,10 @@ class TestSingletonSectionValidation:
         assert isinstance(config.singleton, SingletonConfig)
         assert config.singleton.lock_timeout_seconds > 0
 
-    def test_empty_singleton_section_raises(self) -> None:
+    def test_singleton_lock_timeout_positive(self) -> None:
         """SingletonConfig lock_timeout_seconds is positive.
 
-        Contract: sdk-protection:Singleton:MUST:8
+        Contract: provider-protocol:mount:MUST:5
         """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_sdk_protection_config,
@@ -51,10 +49,10 @@ class TestSingletonSectionValidation:
         config = load_sdk_protection_config()
         assert config.singleton.lock_timeout_seconds >= 1.0
 
-    def test_missing_lock_timeout_raises(self) -> None:
+    def test_lock_timeout_is_float(self) -> None:
         """lock_timeout_seconds is accessible and valid.
 
-        Contract: sdk-protection:Singleton:MUST:8 — timeout is defined
+        Contract: provider-protocol:mount:MUST:5 — timeout is defined
         """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_sdk_protection_config,
@@ -62,7 +60,6 @@ class TestSingletonSectionValidation:
 
         load_sdk_protection_config.cache_clear()
         config = load_sdk_protection_config()
-        assert hasattr(config.singleton, "lock_timeout_seconds")
         assert isinstance(config.singleton.lock_timeout_seconds, float)
 
 
@@ -72,19 +69,10 @@ class TestSingletonSectionValidation:
 
 
 class TestSdkSectionKeyValidation:
-    """Each required key in sdk section must be present as attribute."""
+    """SDK config attributes have correct default values."""
 
-    @pytest.mark.parametrize(
-        "required_key",
-        [
-            "log_level",
-            "log_level_env_var",
-            "prewarm_subprocess",
-            "valid_log_levels",
-        ],
-    )
-    def test_missing_sdk_key_raises(self, required_key: str) -> None:
-        """SDK config has all required keys as attributes.
+    def test_sdk_defaults(self) -> None:
+        """SDK config has all required keys with correct defaults.
 
         Contract: sdk-protection:Subprocess:MUST:7
         """
@@ -94,9 +82,17 @@ class TestSdkSectionKeyValidation:
 
         load_sdk_protection_config.cache_clear()
         config = load_sdk_protection_config()
-        assert hasattr(config.sdk, required_key), (
-            f"SdkConfig missing required attribute: {required_key}"
-        )
+        assert config.sdk.log_level == "info"
+        assert config.sdk.log_level_env_var == "COPILOT_SDK_LOG_LEVEL"
+        assert config.sdk.prewarm_subprocess is False
+        assert set(config.sdk.valid_log_levels) == {
+            "none",
+            "error",
+            "warning",
+            "info",
+            "debug",
+            "all",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +103,7 @@ class TestSdkSectionKeyValidation:
 class TestValidLogLevelsValidation:
     """valid_log_levels must be a list with expected entries."""
 
-    def test_valid_log_levels_not_a_list_raises(self) -> None:
+    def test_valid_log_levels_is_list(self) -> None:
         """sdk.valid_log_levels is a list (not string).
 
         Contract: sdk-protection:Subprocess:MUST:7
@@ -120,7 +116,7 @@ class TestValidLogLevelsValidation:
         config = load_sdk_protection_config()
         assert isinstance(config.sdk.valid_log_levels, list)
 
-    def test_invalid_log_level_not_in_allowlist_raises(self) -> None:
+    def test_log_level_in_allowlist(self) -> None:
         """sdk.log_level must be in valid_log_levels allowlist.
 
         Contract: sdk-protection:Subprocess:MUST:7 — Validate log_level against allowlist
@@ -142,7 +138,7 @@ class TestValidLogLevelsValidation:
 class TestPrewarmBooleanValidation:
     """prewarm_subprocess must be a literal boolean."""
 
-    def test_prewarm_as_string_true_raises(self) -> None:
+    def test_prewarm_is_bool_not_string(self) -> None:
         """sdk.prewarm_subprocess is a bool, not a string.
 
         Contract: behaviors:ConfigLoading:MUST:6 — Reject string booleans
@@ -156,7 +152,7 @@ class TestPrewarmBooleanValidation:
         assert isinstance(config.sdk.prewarm_subprocess, bool)
         assert not isinstance(config.sdk.prewarm_subprocess, str)
 
-    def test_prewarm_as_integer_raises(self) -> None:
+    def test_prewarm_is_literal_bool(self) -> None:
         """sdk.prewarm_subprocess is not an integer.
 
         Contract: behaviors:ConfigLoading:MUST:6 — Reject string booleans
@@ -192,18 +188,10 @@ class TestPrewarmBooleanValidation:
 
 
 class TestToolCaptureSectionKeyValidation:
-    """Each required key in tool_capture section must be present as attribute."""
+    """Tool capture config attributes have correct default values."""
 
-    @pytest.mark.parametrize(
-        "required_key",
-        [
-            "first_turn_only",
-            "deduplicate",
-            "log_capture_events",
-        ],
-    )
-    def test_missing_tool_capture_key_raises(self, required_key: str) -> None:
-        """ToolCaptureConfig has all required attributes.
+    def test_tool_capture_defaults(self) -> None:
+        """ToolCaptureConfig has all required attributes with correct defaults.
 
         Contract: sdk-protection:ToolCapture:MUST:1,2
         """
@@ -213,9 +201,9 @@ class TestToolCaptureSectionKeyValidation:
 
         load_sdk_protection_config.cache_clear()
         config = load_sdk_protection_config()
-        assert hasattr(config.tool_capture, required_key), (
-            f"ToolCaptureConfig missing required attribute: {required_key}"
-        )
+        assert config.tool_capture.first_turn_only is True
+        assert config.tool_capture.deduplicate is True
+        assert config.tool_capture.log_capture_events is True
 
 
 # ---------------------------------------------------------------------------
@@ -224,19 +212,10 @@ class TestToolCaptureSectionKeyValidation:
 
 
 class TestSessionSectionKeyValidation:
-    """Each required key in session section must be present as attribute."""
+    """Session config attributes have correct default values."""
 
-    @pytest.mark.parametrize(
-        "required_key",
-        [
-            "explicit_abort",
-            "abort_timeout_seconds",
-            "idle_timeout_seconds",
-            "disconnect_timeout_seconds",
-        ],
-    )
-    def test_missing_session_key_raises(self, required_key: str) -> None:
-        """SessionProtectionConfig has all required attributes.
+    def test_session_defaults(self) -> None:
+        """SessionProtectionConfig has all required attributes with correct defaults.
 
         Contract: sdk-protection:Session:MUST:3,4
         """
@@ -246,9 +225,10 @@ class TestSessionSectionKeyValidation:
 
         load_sdk_protection_config.cache_clear()
         config = load_sdk_protection_config()
-        assert hasattr(config.session, required_key), (
-            f"SessionProtectionConfig missing required attribute: {required_key}"
-        )
+        assert config.session.explicit_abort is True
+        assert config.session.abort_timeout_seconds == 5.0
+        assert config.session.idle_timeout_seconds == 30.0
+        assert config.session.disconnect_timeout_seconds == 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +239,7 @@ class TestSessionSectionKeyValidation:
 class TestTopLevelSectionValidation:
     """tool_capture, session, sdk, singleton sections are all present."""
 
-    def test_missing_tool_capture_section_raises(self) -> None:
+    def test_tool_capture_has_correct_type(self) -> None:
         """SdkProtectionConfig has tool_capture attribute."""
         from amplifier_module_provider_github_copilot.config_loader import (
             SdkProtectionConfig,
@@ -272,7 +252,7 @@ class TestTopLevelSectionValidation:
         assert isinstance(config, SdkProtectionConfig)
         assert isinstance(config.tool_capture, ToolCaptureConfig)
 
-    def test_missing_session_section_raises(self) -> None:
+    def test_session_has_correct_type(self) -> None:
         """SdkProtectionConfig has session attribute."""
         from amplifier_module_provider_github_copilot.config_loader import (
             SessionProtectionConfig,
@@ -283,7 +263,7 @@ class TestTopLevelSectionValidation:
         config = load_sdk_protection_config()
         assert isinstance(config.session, SessionProtectionConfig)
 
-    def test_missing_sdk_section_raises(self) -> None:
+    def test_sdk_has_correct_type(self) -> None:
         """SdkProtectionConfig has sdk attribute."""
         from amplifier_module_provider_github_copilot.config_loader import (
             SdkConfig,
@@ -294,18 +274,22 @@ class TestTopLevelSectionValidation:
         config = load_sdk_protection_config()
         assert isinstance(config.sdk, SdkConfig)
 
-    def test_empty_yaml_raises(self) -> None:
+    def test_top_level_config_valid(self) -> None:
         """load_sdk_protection_config() returns valid SdkProtectionConfig."""
         from amplifier_module_provider_github_copilot.config_loader import (
+            SdkConfig,
             SdkProtectionConfig,
+            SessionProtectionConfig,
+            SingletonConfig,
+            ToolCaptureConfig,
             load_sdk_protection_config,
         )
 
         load_sdk_protection_config.cache_clear()
         config = load_sdk_protection_config()
         assert isinstance(config, SdkProtectionConfig)
-        # All required subsections present
-        assert config.tool_capture is not None
-        assert config.session is not None
-        assert config.sdk is not None
-        assert config.singleton is not None
+        # All required subsections present with correct types
+        assert isinstance(config.tool_capture, ToolCaptureConfig)
+        assert isinstance(config.session, SessionProtectionConfig)
+        assert isinstance(config.sdk, SdkConfig)
+        assert isinstance(config.singleton, SingletonConfig)

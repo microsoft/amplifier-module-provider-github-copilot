@@ -425,6 +425,12 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | `sdk-boundary:Membrane:MUST:2` | Only _imports.py has SDK imports |
 | `sdk-boundary:Membrane:MUST:5` | Fail at import time if SDK not installed |
 
+### ImportQuarantine
+
+| Anchor | Clause |
+|--------|--------|
+| `sdk-boundary:ImportQuarantine:MUST:6` | Multi-level fallback chains for SDK types that moved between versions |
+
 ### Types
 
 | Anchor | Clause |
@@ -475,6 +481,8 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | `sdk-boundary:Session:MUST:1` | SDK CopilotClient.create_session() accepts kwargs (model=, streaming=, on_permission_request=, hooks=) |
 | `sdk-boundary:Lifecycle:MUST:1` | SDK CopilotClient has async start() and stop() lifecycle methods |
 | `sdk-boundary:Auth:MUST:1` | SDK CopilotClient accepts SubprocessConfig(github_token=...) |
+| `sdk-boundary:Auth:MUST:2` | Token resolution follows SDK priority order; empty string treated as absent |
+| `sdk-boundary:Auth:MUST:3` | Fail closed (ConfigurationError) when explicit token resolved but SubprocessConfig unavailable |
 | `sdk-boundary:Events:MUST:1` | Provider uses session.on() + session.send(prompt, attachments=...) pattern |
 | `sdk-boundary:Send:MUST:1` | session.send(prompt: str, attachments=...) replaces send({"prompt":...}) |
 | `sdk-boundary:Models:MUST:1` | SDK CopilotClient.list_models() returns list[ModelInfo] |
@@ -626,6 +634,38 @@ This MUST be translated to `InvalidRequestError` (non-retryable) per `error-hier
 | `sdk-boundary:client-lifecycle:MUST:2` | Retry after failure reinitializes CopilotClient |
 | `sdk-boundary:client-lifecycle:MUST:3` | Original exception propagates (not swallowed) |
 | `sdk-boundary:client-lifecycle:REGRESSION` | Successful start retains _owned_client for reuse |
+
+---
+
+## Authentication
+
+### Token Resolution
+
+The provider MUST resolve auth tokens from environment variables in the official SDK priority order
+(documented in SDK `docs/auth/index.md`).
+
+### MUST Constraints
+
+1. **MUST** scan environment variables in this exact order: `COPILOT_AGENT_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`
+2. **MUST** treat an empty string token as absent — resolution MUST continue to the next candidate
+3. **MUST** return `None` when no non-empty token is found in any variable
+4. **MUST** raise `ConfigurationError` (fail closed) when a token is resolved but `SubprocessConfig` is unavailable
+5. **MUST NOT** silently ignore an explicit token under any circumstance, including when `SKIP_SDK_CHECK` is set
+6. **MUST NOT** fall through to default/ambient SDK authentication when an explicit token is present but cannot be applied
+
+### Rationale
+
+- **Priority order**: Agent-mode tokens (`COPILOT_AGENT_TOKEN`) take highest precedence; GitHub Actions tokens (`GITHUB_TOKEN`) are lowest. This matches the SDK's documented auth hierarchy.
+- **Empty-string fallthrough**: Prevents treating declared-but-empty env vars as valid tokens.
+- **Fail closed**: An explicit token that cannot be applied indicates an SDK version mismatch. Continuing with ambient auth would silently escalate privileges via an unexpected authentication context (OWASP A07: Identification and Authentication Failures).
+
+### Test Anchors
+
+| Anchor | Clause |
+|--------|--------|
+| `sdk-boundary:Auth:MUST:1` | SDK CopilotClient accepts SubprocessConfig(github_token=...) |
+| `sdk-boundary:Auth:MUST:2` | Token resolution follows SDK priority order; empty string treated as absent |
+| `sdk-boundary:Auth:MUST:3` | Fail closed (ConfigurationError) when explicit token resolved but SubprocessConfig unavailable |
 
 ---
 

@@ -1,9 +1,10 @@
 # Contract: Event Vocabulary
 
 ## Version
-- **Current:** 1.2
+- **Current:** 1.3
 - **Module Reference:** amplifier_module_provider_github_copilot/streaming.py
 - **Correction:** 2026-03-15 — Removed erroneous `src/` prefix
+- **Amendment:** 2026-04-13 — Added Bridge:MUST:3 (BRIDGE event data flattening requirement)
 - **Config:** amplifier_module_provider_github_copilot/config/events.yaml
 - **Status:** Specification
 
@@ -159,6 +160,45 @@ DomainEvent(
 
 ---
 
+## BRIDGE Event Data Flattening
+
+**event-vocabulary:Bridge:MUST:3**
+
+For all BRIDGE events, `translate_event` MUST promote all SDK event data fields to the top level
+of `DomainEvent.data`. The result MUST be a flat `dict[str, Any]` with no nested SDK objects under
+the `"data"` key and no residual `"data"` sub-key. Non-`data` fields from the envelope (e.g.
+`message_id`, `finish_reason`) are passed through as-is and are not subject to the serialisability
+guarantee.
+
+**Mechanism:** `_extract_event_data()` handles two shapes:
+
+1. **Dict path** — `sdk_event["data"]` is a plain dict (legacy, test, or pre-extracted events):
+   all sub-keys are merged into the result at the top level.
+
+2. **Object path** — `sdk_event["data"]` is a `SessionEventData` object (real SDK path, after
+   `extract_event_fields()` runs): `extract_event_fields()` is called recursively on the object
+   and its fields are merged at the top level.
+
+In both cases the raw `"data"` key is consumed and does not appear in `DomainEvent.data`.
+
+**Rationale:**
+
+- `StreamingAccumulator.add()` reads all fields via `event.data.get(key)` directly
+  (e.g. `event.data.get("text", "")`, `event.data.get("finish_reason", "stop")`).
+- `StreamingAccumulator.add()` stores `event.data` as `self.usage` for `USAGE_UPDATE` events;
+  a non-flat dict would produce incorrect token counts.
+- Any code that logs or serialises `DomainEvent` requires `DomainEvent.data` to be a plain
+  `dict[str, Any]`. A retained `SessionEventData` object in the dict silently breaks
+  `json.dumps()` with `TypeError`.
+
+**Upstream evidence:** `EventRouter.__call__()` calls `self._queue.put_nowait(sdk_event)` with
+the raw `SessionEvent` object. `extract_event_fields()` at `provider.py:L752` returns a dict
+that includes the `"data": <SessionEventData>` key (not excluded by `_ENVELOPE_FIELDS`).
+`_extract_event_data()` is the only barrier preventing that object from reaching
+`DomainEvent.data`.
+
+---
+
 ## Finish Reason Mapping
 
 | SDK Reason | Domain Reason |
@@ -245,6 +285,7 @@ finish_reason_map:
 |--------|--------|
 | `event-vocabulary:Bridge:MUST:1` | BRIDGE events translated |
 | `event-vocabulary:Bridge:MUST:2` | Uses config classification |
+| `event-vocabulary:Bridge:MUST:3` | BRIDGE event data promoted to top-level serialisable dict; no nested SDK objects |
 
 ### Consume
 

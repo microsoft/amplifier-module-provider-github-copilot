@@ -17,8 +17,15 @@ from pathlib import Path
 import pytest
 
 from amplifier_module_provider_github_copilot.error_translation import (
+    ConfigurationError,
+    ContextLengthError,
     ErrorConfig,
+    InvalidToolCallError,
     LLMError,
+    LLMTimeoutError,
+    ProviderUnavailableError,
+    RateLimitError,
+    StreamError,
     load_error_config,
     translate_sdk_error,
 )
@@ -44,7 +51,10 @@ def translate_fn() -> Callable[..., LLMError]:
 
 
 class TestF035ErrorClassesExist:
-    """New error classes must exist in error_translation module."""
+    """New error classes must exist in error_translation module.
+
+    # Contract: error-hierarchy:Kernel:MUST:1
+    """
 
     @pytest.mark.parametrize(
         "class_name",
@@ -64,10 +74,14 @@ class TestF035ErrorClassesExist:
 
 
 class TestF035KernelErrorMap:
-    """KERNEL_ERROR_MAP must include new types."""
+    """KERNEL_ERROR_MAP must include new types.
+
+    # Contract: error-hierarchy:Kernel:MUST:1
+    """
 
     def test_kernel_error_map_has_new_types(self) -> None:
         """Map - All new error types must be in KERNEL_ERROR_MAP."""
+        import amplifier_module_provider_github_copilot.error_translation as et
         from amplifier_module_provider_github_copilot.error_translation import KERNEL_ERROR_MAP
 
         required_types = [
@@ -80,10 +94,16 @@ class TestF035KernelErrorMap:
 
         for error_type in required_types:
             assert error_type in KERNEL_ERROR_MAP, f"{error_type} missing from KERNEL_ERROR_MAP"
+            assert KERNEL_ERROR_MAP[error_type] is getattr(et, error_type), (
+                f"Kernel:MUST:1 — KERNEL_ERROR_MAP[{error_type!r}] must map to the exact class"
+            )
 
 
 class TestF035P0CircuitBreaker:
-    """P0: Circuit breaker false positive fix (CRITICAL)."""
+    """P0: Circuit breaker false positive fix (CRITICAL).
+
+    # Contract: unanchored — see contracts/error-hierarchy.md mapping table
+    """
 
     def test_circuit_breaker_pattern_exists(self, error_config: ErrorConfig) -> None:
         """P0:Exists - Circuit breaker pattern must exist in config."""
@@ -92,11 +112,17 @@ class TestF035P0CircuitBreaker:
             for m in error_config.mappings
             if any("circuit breaker" in p.lower() for p in m.string_patterns)
         ]
-        assert len(circuit_patterns) >= 1, "Must have circuit breaker pattern"
+        assert len(circuit_patterns) == 1, (
+            "error-hierarchy — expected 1 circuit breaker pattern in config, "
+            f"got {len(circuit_patterns)}"
+        )
         assert circuit_patterns[0].retryable is False, "Circuit breaker must NOT be retryable"
 
     def test_circuit_breaker_before_timeout(self, error_config: ErrorConfig) -> None:
-        """P0:Order - Circuit breaker MUST come before timeout pattern."""
+        """P0:Order - Circuit breaker MUST come before timeout pattern.
+
+        # Contract: error-hierarchy:Translation:MUST:3
+        """
         circuit_idx = None
         timeout_idx = None
 
@@ -106,8 +132,8 @@ class TestF035P0CircuitBreaker:
             if m.kernel_error == "LLMTimeoutError":
                 timeout_idx = i
 
-        assert circuit_idx is not None, "Circuit breaker pattern not found"
-        assert timeout_idx is not None, "Timeout pattern not found"
+        assert isinstance(circuit_idx, int), "Circuit breaker pattern not found"
+        assert isinstance(timeout_idx, int), "Timeout pattern not found"
         assert circuit_idx < timeout_idx, (
             f"Circuit breaker (idx={circuit_idx}) must come before timeout (idx={timeout_idx})"
         )
@@ -115,27 +141,34 @@ class TestF035P0CircuitBreaker:
     def test_circuit_breaker_not_retryable(
         self, error_config: ErrorConfig, translate_fn: Callable[..., LLMError]
     ) -> None:
-        """P0:Retryable - Circuit breaker MUST NOT be retryable."""
+        """P0:Retryable - Circuit breaker MUST NOT be retryable.
+
+        # Contract: error-hierarchy:Translation:MUST:3
+        """
         exc = Exception("Circuit breaker TRIPPED: timeout=3720.0s > max=60.0s")
         result = translate_fn(exc, error_config)
 
-        assert result.__class__.__name__ == "ProviderUnavailableError"
+        assert isinstance(result, ProviderUnavailableError)
         assert result.retryable is False
 
     def test_circuit_breaker_not_timeout_error(
         self, error_config: ErrorConfig, translate_fn: Callable[..., LLMError]
     ) -> None:
-        """P0:FalsePositive - Circuit breaker MUST NOT match LLMTimeoutError."""
+        """P0:FalsePositive - Circuit breaker MUST NOT match LLMTimeoutError.
+
+        # Contract: error-hierarchy:Translation:MUST:3
+        """
         exc = Exception("Circuit breaker TRIPPED: timeout=3720.0s > max=60.0s")
         result = translate_fn(exc, error_config)
 
-        assert result.__class__.__name__ != "LLMTimeoutError", (
-            "Circuit breaker matched LLMTimeoutError - this causes infinite retry loops!"
-        )
+        assert not isinstance(result, LLMTimeoutError)
 
 
 class TestF035P1ContextLength:
-    """P1: ContextLengthError mappings."""
+    """P1: ContextLengthError mappings.
+
+    # Contract: error-hierarchy:Translation:MUST:3
+    """
 
     @pytest.mark.parametrize(
         "message",
@@ -152,9 +185,7 @@ class TestF035P1ContextLength:
         """P1 - Token/context errors MUST map to ContextLengthError."""
         result = translate_fn(Exception(message), error_config)
 
-        assert result.__class__.__name__ == "ContextLengthError", (
-            f"Expected ContextLengthError for '{message[:50]}...', got {result.__class__.__name__}"
-        )
+        assert isinstance(result, ContextLengthError)
         assert result.retryable is False
 
     def test_400_without_token_not_context_error(
@@ -164,13 +195,14 @@ class TestF035P1ContextLength:
         exc = Exception("HTTP 400 Bad Request: invalid JSON syntax")
         result = translate_fn(exc, error_config)
 
-        assert result.__class__.__name__ != "ContextLengthError", (
-            "Generic 400 error should not match ContextLengthError"
-        )
+        assert not isinstance(result, ContextLengthError)
 
 
 class TestF035P2StreamError:
-    """P2: StreamError mappings."""
+    """P2: StreamError mappings.
+
+    # Contract: error-hierarchy:Translation:MUST:3
+    """
 
     @pytest.mark.parametrize(
         "message",
@@ -187,14 +219,15 @@ class TestF035P2StreamError:
         """P2 - Stream errors MUST map to StreamError."""
         result = translate_fn(Exception(message), error_config)
 
-        assert result.__class__.__name__ == "StreamError", (
-            f"Expected StreamError for '{message[:50]}...', got {result.__class__.__name__}"
-        )
+        assert isinstance(result, StreamError)
         assert result.retryable is True  # Streams are retryable
 
 
 class TestF035P3InvalidToolCall:
-    """P3: InvalidToolCallError mappings."""
+    """P3: InvalidToolCallError mappings.
+
+    # Contract: error-hierarchy:Translation:MUST:3
+    """
 
     @pytest.mark.parametrize(
         "message",
@@ -211,14 +244,15 @@ class TestF035P3InvalidToolCall:
         """P3 - Tool errors MUST map to InvalidToolCallError."""
         result = translate_fn(Exception(message), error_config)
 
-        assert result.__class__.__name__ == "InvalidToolCallError", (
-            f"Expected InvalidToolCallError for '{message[:50]}', got {result.__class__.__name__}"
-        )
+        assert isinstance(result, InvalidToolCallError)
         assert result.retryable is False
 
 
 class TestF035P4ConfigurationError:
-    """P4: ConfigurationError mappings."""
+    """P4: ConfigurationError mappings.
+
+    # Contract: error-hierarchy:Translation:MUST:3
+    """
 
     @pytest.mark.parametrize(
         "message",
@@ -234,9 +268,7 @@ class TestF035P4ConfigurationError:
         """P4 - Config errors MUST map to ConfigurationError."""
         result = translate_fn(Exception(message), error_config)
 
-        assert result.__class__.__name__ == "ConfigurationError", (
-            f"Expected ConfigurationError for '{message[:50]}...', got {result.__class__.__name__}"
-        )
+        assert isinstance(result, ConfigurationError)
         assert result.retryable is False
 
 
@@ -246,11 +278,15 @@ class TestF035EdgeCases:
     def test_empty_message_fallthrough(
         self, error_config: ErrorConfig, translate_fn: Callable[..., LLMError]
     ) -> None:
-        """Edge - Empty message falls through to default."""
+        """Edge - Empty message falls through to default.
+
+        Contract: error-hierarchy:Default:MUST:1
+        """
         exc = Exception("")
         result = translate_fn(exc, error_config)
         # Should get default ProviderUnavailableError
-        assert result.__class__.__name__ == "ProviderUnavailableError"
+        assert isinstance(result, ProviderUnavailableError)
+        assert result.retryable is False
 
     def test_timeout_without_circuit_breaker(
         self, error_config: ErrorConfig, translate_fn: Callable[..., LLMError]
@@ -258,7 +294,7 @@ class TestF035EdgeCases:
         """Edge - Regular timeout still matches LLMTimeoutError."""
         exc = Exception("Request timed out after 30 seconds")
         result = translate_fn(exc, error_config)
-        assert result.__class__.__name__ == "LLMTimeoutError"
+        assert isinstance(result, LLMTimeoutError)
         assert result.retryable is True
 
     def test_generic_connection_error_maps_to_provider_unavailable_error(
@@ -271,5 +307,82 @@ class TestF035EdgeCases:
         """
         exc = Exception("connection error occurred")
         result = translate_fn(exc, error_config)
-        assert result.__class__.__name__ == "ProviderUnavailableError"
+        assert isinstance(result, ProviderUnavailableError)
         assert result.retryable is True
+
+
+class TestProviderField:
+    """error-hierarchy:Kernel:MUST:2 — All translated errors must set provider field.
+
+    # Contract: error-hierarchy:Kernel:MUST:2
+    """
+
+    @pytest.mark.parametrize(
+        ("exc", "expected_class"),
+        [
+            # Type-name match: exception class name matches sdk_patterns
+            (ConnectionError("some connection failure"), ProviderUnavailableError),
+            # String-pattern match: message matches "connection refused"
+            (RuntimeError("connection refused by remote host"), ProviderUnavailableError),
+            # String-pattern match: message matches rate limit pattern
+            (Exception("HTTP 429 rate limit exceeded"), RateLimitError),
+            # Default fallback: unknown exception type with non-matching message
+            (ValueError("completely unknown error xyz123"), ProviderUnavailableError),
+        ],
+    )
+    def test_provider_field_set(self, exc: Exception, expected_class: type[LLMError]) -> None:
+        """All translation paths must set provider='github-copilot'.
+
+        Contract: error-hierarchy:Kernel:MUST:2
+        """
+        from amplifier_module_provider_github_copilot.error_translation import (
+            load_error_config,
+            translate_sdk_error,
+        )
+
+        config = load_error_config()
+        result = translate_sdk_error(exc, config)
+        assert isinstance(result, expected_class)
+        assert result.provider == "github-copilot"
+
+
+class TestExceptionChaining:
+    """error-hierarchy:Translation:MUST:3 — Original exception must be chained via __cause__.
+
+    # Contract: error-hierarchy:Translation:MUST:3
+    """
+
+    def test_chaining_on_mapped_path(self) -> None:
+        """translate_sdk_error must chain original exc via __cause__ on a mapped path.
+
+        Contract: error-hierarchy:Translation:MUST:3
+        """
+        from amplifier_module_provider_github_copilot.error_translation import (
+            load_error_config,
+            translate_sdk_error,
+        )
+
+        config = load_error_config()
+        # Use a string pattern that maps to ProviderUnavailableError via "connection refused"
+        exc = RuntimeError("connection refused by server")
+        result = translate_sdk_error(exc, config)
+        assert result.__cause__ is exc, (
+            f"Translation:MUST:3 — __cause__ must be original exception, got {result.__cause__!r}"
+        )
+
+    def test_chaining_on_default_path(self) -> None:
+        """translate_sdk_error must chain original exc via __cause__ on the default fallback.
+
+        Contract: error-hierarchy:Translation:MUST:3
+        """
+        from amplifier_module_provider_github_copilot.error_translation import (
+            load_error_config,
+            translate_sdk_error,
+        )
+
+        config = load_error_config()
+        exc = RuntimeError("completely unknown error xyz")
+        result = translate_sdk_error(exc, config)
+        assert result.__cause__ is exc, (
+            "Translation:MUST:3 — __cause__ must be chained on default fallback path too"
+        )

@@ -183,7 +183,7 @@ class EventRouter:
         # 5. Queue event for processing
         try:
             self._queue.put_nowait(sdk_event)
-        except asyncio.QueueFull:  # pragma: no cover
+        except asyncio.QueueFull:
             # Defensive: queue size is bounded, but overflow rare in practice
             logger.debug(
                 "[STREAMING] Event queue full, dropping delta: %s",

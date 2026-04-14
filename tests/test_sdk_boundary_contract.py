@@ -53,6 +53,7 @@ class TestSessionConfigContract:
         SDK built-ins are blocked because they're not in the allowlist.
 
         Contract: deny-destroy:Allowlist:MUST:1 — available_tools = tool names
+        Contract: deny-destroy:Allowlist:MUST:2 — allowlist blocks SDK built-ins
         Contract: sdk-boundary:ToolForwarding:MUST:1 — tools forwarded to session
         """
         mock_client = ConfigCapturingMock()
@@ -82,6 +83,7 @@ class TestSessionConfigContract:
         SDK ref: copilot/types.py SystemMessageConfig
         SDK ref: copilot/client.py line 522-524 (system_message handling)
         """
+        # Contract: sdk-boundary:Config:MUST:2
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -97,6 +99,7 @@ class TestSessionConfigContract:
     @pytest.mark.asyncio
     async def test_system_message_absent_when_not_provided(self) -> None:
         """No system_message key when caller doesn't provide one."""
+        # Contract: sdk-boundary:Config:MUST:2
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -125,6 +128,7 @@ class TestSessionConfigContract:
     @pytest.mark.asyncio
     async def test_streaming_always_enabled(self) -> None:
         """Streaming MUST be enabled for event-based tool capture."""
+        # Contract: sdk-boundary:Config:MUST:4
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -137,6 +141,7 @@ class TestSessionConfigContract:
     @pytest.mark.asyncio
     async def test_model_passed_through(self) -> None:
         """Model parameter forwarded to SDK session config."""
+        # Contract: sdk-boundary:Session:MUST:1
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -227,18 +232,6 @@ class TestToolForwardingContract:
 
         # Verify each tool has SDK-required attributes
         for tool in config["tools"]:
-            # SDK does attribute access, not dict access
-            assert hasattr(tool, "name"), "tool MUST have 'name' attribute"
-            assert hasattr(tool, "description"), "tool MUST have 'description' attribute"
-            assert hasattr(tool, "parameters"), "tool MUST have 'parameters' attribute"
-            assert hasattr(tool, "overrides_built_in_tool"), (
-                "tool MUST have 'overrides_built_in_tool' attribute"
-            )
-            assert hasattr(tool, "skip_permission"), "tool MUST have 'skip_permission' attribute"
-            assert hasattr(tool, "handler"), (
-                "tool MUST have 'handler' attribute (SDK checks it in session.py)"
-            )
-
             # Verify values are correct
             assert tool.name == "bash"
             assert tool.description == "Run shell commands"
@@ -303,33 +296,48 @@ class TestToolForwardingContract:
 
     @pytest.mark.asyncio
     async def test_execute_sdk_completion_accepts_tools_param(self) -> None:
-        """_execute_sdk_completion MUST accept 'tools' parameter.
+        """_execute_sdk_completion MUST forward tools to SDK session.
 
         Contract: provider-protocol:complete:MUST:2
         Layer: Provider._execute_sdk_completion() → CopilotClientWrapper.session()
 
-        This test verifies the PROVIDER layer method signature includes tools.
+        This test behaviorally verifies tools are forwarded through the provider.
         """
-        import inspect
+        from types import SimpleNamespace
 
         from amplifier_module_provider_github_copilot.provider import (
             GitHubCopilotProvider,
         )
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
 
-        provider = GitHubCopilotProvider()
-        # Access protected method for signature introspection
-        sig = inspect.signature(
-            provider._execute_sdk_completion  # pyright: ignore[reportPrivateUsage]
-        )
-        param_names = list(sig.parameters.keys())
+        # Contract: sdk-boundary:Session:MUST:1 (all config forwarded through boundary)
+        mock_client = MockCopilotClientWrapper(events=[text_delta_event("ok")])
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        assert "tools" in param_names, (
-            f"_execute_sdk_completion MUST accept 'tools' parameter. Current params: {param_names}"
+        # Simulate tool passed via ChatRequest
+        tool = SimpleNamespace(
+            name="test_tool",
+            description="A test tool",
+            parameters={"type": "object"},
         )
+        request = SimpleNamespace(
+            messages=[SimpleNamespace(role="user", content="test")],
+            model="gpt-4o",
+            tools=[tool],
+            attachments=None,
+            system_message=None,
+        )
+
+        await provider.complete(request)  # type: ignore[arg-type]
+
+        # Behavioral proof: MockCopilotClientWrapper.session() recorded tools
+        assert mock_client.last_tools is not None  # narrowed for pyright
+        assert len(mock_client.last_tools) == 1, "Exactly one tool MUST be forwarded"
 
     @pytest.mark.asyncio
     async def test_tools_none_when_not_provided(self) -> None:
         """No tools key when caller doesn't provide tools."""
+        # Contract: sdk-boundary:Session:MUST:1
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -392,6 +400,7 @@ class TestConfigInvariants:
     @pytest.mark.parametrize("model", ["gpt-4", "gpt-4o", "claude-sonnet-4", None])
     async def test_invariants_hold_for_any_model(self, model: str | None) -> None:
         """Config invariants hold regardless of model selection."""
+        # Contract: sdk-boundary:Config:MUST:1,3,4
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -427,6 +436,7 @@ class TestConfigInvariants:
         self, system_message: str | None
     ) -> None:
         """Config invariants hold regardless of system message."""
+        # Contract: sdk-boundary:Config:MUST:1,2,4
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
@@ -451,6 +461,7 @@ class TestConfigInvariants:
         Guards against typos or wrong key names that SDK silently ignores.
         SDK ref: copilot/types.py SessionConfig fields
         """
+        # Contract: sdk-boundary:Config:MUST:6
         KNOWN_SDK_KEYS = {
             "session_id",
             "client_name",
@@ -513,7 +524,7 @@ class TestRuntimeSDKTypeLeak:
         )
 
     def test_all_exported_classes_are_domain_types(self) -> None:
-        """sdk-boundary:TypeTranslation:MUST:1 — Public class exports are domain types.
+        """Contract: sdk-boundary:Types:MUST:1 — Public class exports are domain types.
 
         All class objects in sdk_adapter.__all__ must be defined in our package,
         not imported directly from the Copilot SDK.
@@ -538,7 +549,7 @@ class TestRuntimeSDKTypeLeak:
 
     @pytest.mark.asyncio
     async def test_session_context_manager_yields_domain_type(self) -> None:
-        """sdk-boundary:TypeTranslation:MUST:4 — session() yields domain type, not SDK object.
+        """Contract: sdk-boundary:Types:MUST:3 — session() yields domain type, not SDK object.
 
         At runtime, the yielded value must be SessionHandle (domain), not the raw SDK session.
         """
@@ -565,3 +576,134 @@ class TestRuntimeSDKTypeLeak:
             assert handle is not mock_sdk_session, (
                 "session() must not yield the raw SDK session object directly"
             )
+
+
+class TestSessionEventPattern:
+    """Verify provider uses session.on() + send() + unsubscribe() pattern.
+
+    Contract: sdk-boundary:Events:MUST:1
+
+    The provider MUST register an event handler via on() BEFORE calling send(),
+    then call the returned unsubscribe function in the finally block.
+
+    Replaces the source-scan tests deleted from test_sdk_api_conformance.py.
+    Behavioral proof: MockSDKSession.send() delivers events only to registered
+    handlers — if on() is skipped, no text arrives and response.text_content == "".
+    """
+
+    @pytest.mark.asyncio
+    async def test_provider_registers_handler_before_send_and_unsubscribes(
+        self,
+    ) -> None:
+        """Provider MUST call on() before send(), then unsubscribe() in finally.
+
+        Contract: sdk-boundary:Events:MUST:1
+        Contract: deny-destroy:NoExecution:MUST:1
+        Contract: deny-destroy:NoExecution:MUST:2
+
+        Behavioral proof via MockSDKSession semantics:
+        - send() delivers events ONLY to handlers registered via on().
+          If on() is skipped: _handlers empty → no events → text_content == "".
+        - After completion, _handlers is empty → unsubscribe() was called.
+        - last_prompt is str → send(prompt=str, ...) was called.
+        """
+        from types import SimpleNamespace
+
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+        from tests.fixtures.sdk_mocks import (
+            MockCopilotClientWrapper,
+            MockSDKSession,
+            text_delta_event,
+        )
+
+        expected_text = "response from sdk"
+        mock_client = MockCopilotClientWrapper(events=[text_delta_event(expected_text)])
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        # SimpleNamespace avoids MagicMock-without-spec; provider uses getattr() access
+        request = SimpleNamespace(
+            messages=[SimpleNamespace(role="user", content="test event pattern")],
+            model="gpt-4o",
+            tools=None,
+            attachments=None,
+            system_message=None,
+        )
+
+        response = await provider.complete(request)  # type: ignore[arg-type]
+
+        session = mock_client._session  # type: ignore[attr-defined]
+        assert isinstance(session, MockSDKSession), (
+            "provider.complete() MUST create a session via client.session()"
+        )
+
+        # Proves send(prompt: str) was called — last_prompt set only during send()
+        assert isinstance(session.last_prompt, str), (
+            f"session.send() MUST be called with a str prompt. "
+            f"Got {type(session.last_prompt).__name__!r}."
+        )
+
+        # Proves unsubscribe() was called in finally — handlers removed after completion
+        assert len(session._handlers) == 0, (
+            f"unsubscribe() MUST be called in finally block. "
+            f"{len(session._handlers)} handler(s) remain — possible resource leak."
+        )
+
+        # Proves on() was called BEFORE send():
+        # text_delta_event delivered → handler was registered when send() ran.
+        # If on() were skipped: _handlers empty → no events → content is empty list.
+        from amplifier_core import TextBlock
+
+        assert len(response.content) == 1, (
+            f"on() MUST be called before send() so handler receives text_delta events. "
+            f"content list must have exactly 1 TextBlock, got {len(response.content)}."
+        )
+        block = response.content[0]
+        assert isinstance(block, TextBlock), (
+            f"Expected TextBlock from text_delta_event, got {type(block).__name__!r}."
+        )
+        assert block.text == expected_text, (
+            f"TextBlock.text must equal delivered event text. "
+            f"Expected {expected_text!r}, got {block.text!r}."
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_uses_string_prompt_not_dict(self) -> None:
+        """session.send() MUST be called with (prompt: str), not send({"prompt": ...}).
+
+        Contract: sdk-boundary:Send:MUST:1
+
+        SDK v0.2.0 changed from send({"prompt": ...}) to send(prompt, attachments=...).
+        This test catches reversion to the dict-based API.
+        """
+        from types import SimpleNamespace
+
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, MockSDKSession
+
+        mock_client = MockCopilotClientWrapper(events=[])
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        request = SimpleNamespace(
+            messages=[SimpleNamespace(role="user", content="check prompt type")],
+            model="gpt-4o",
+            tools=None,
+            attachments=None,
+            system_message=None,
+        )
+
+        await provider.complete(request)  # type: ignore[arg-type]
+
+        session = mock_client._session  # type: ignore[attr-defined]
+        assert isinstance(session, MockSDKSession)
+
+        # SDK v0.2.0: send(prompt: str, attachments=...) — prompt is a plain str.
+        # Old API: send({"prompt": ...}) — a dict. last_prompt being str catches reversion.
+        assert isinstance(session.last_prompt, str), (
+            f"session.send() MUST receive a str prompt (sdk-boundary:Send:MUST:1). "
+            f"Got {type(session.last_prompt).__name__!r}. "
+            "Reversion to send(dict) would produce a non-str last_prompt."
+        )

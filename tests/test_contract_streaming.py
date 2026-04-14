@@ -8,10 +8,10 @@ Tests streaming behavior compliance.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from amplifier_module_provider_github_copilot.streaming import (
-    AccumulatedResponse,
     DomainEvent,
     DomainEventType,
     StreamingAccumulator,
@@ -41,7 +41,7 @@ class TestStreamingAccumulator:
         assert result.text_content == "Hello world"
 
     def test_produces_complete_response_on_turn_complete(self) -> None:
-        """streaming-contract:Accumulation:MUST:2 — Complete response on TURN_COMPLETE."""
+        """Contract: streaming-contract:Accumulation:MUST:2 — Complete response on TURN_COMPLETE."""
         accumulator = StreamingAccumulator()
 
         accumulator.add(
@@ -59,7 +59,7 @@ class TestStreamingAccumulator:
         assert result.finish_reason == "STOP"
 
     def test_separates_text_and_thinking_content(self) -> None:
-        """streaming-contract:ContentTypes:MUST:1 — Separates text and thinking."""
+        """Contract: streaming-contract:ContentTypes:MUST:1 — Separates text and thinking."""
         accumulator = StreamingAccumulator()
 
         # block_type is on the DomainEvent itself, not in data
@@ -103,7 +103,7 @@ class TestToolCallCapture:
         assert result.tool_calls[0]["name"] == "read_file"
 
     def test_tool_calls_in_final_response(self) -> None:
-        """streaming-contract:ToolCapture:MUST:2 — Tool calls in final response."""
+        """Contract: streaming-contract:ToolCapture:MUST:2 — Tool calls in final response."""
         accumulator = StreamingAccumulator()
 
         accumulator.add(
@@ -129,21 +129,6 @@ class TestToolCallCapture:
 
 class TestAccumulatedResponse:
     """streaming-contract:Response:MUST:1"""
-
-    def test_accumulated_response_structure(self) -> None:
-        """streaming-contract:Response:MUST:1 — Response has expected structure."""
-        response = AccumulatedResponse(
-            text_content="Hello",
-            thinking_content="",
-            tool_calls=[],
-            finish_reason="STOP",
-            usage=None,
-        )
-
-        assert hasattr(response, "text_content")
-        assert hasattr(response, "thinking_content")
-        assert hasattr(response, "tool_calls")
-        assert hasattr(response, "finish_reason")
 
     def test_empty_accumulator_returns_defaults(self) -> None:
         """Empty accumulator returns sensible defaults."""
@@ -185,7 +170,8 @@ class TestFinishReasonNormalization:
         # Convert to ChatResponse - finish_reason should be normalized
         response = accumulator.to_chat_response()
 
-        assert response.tool_calls is not None
+        # Contract: streaming-contract:FinishReason:MUST:5
+        assert isinstance(response.tool_calls, list)
         assert len(response.tool_calls) == 1
         # CRITICAL: finish_reason must be "tool_calls" even without TURN_COMPLETE
         assert response.finish_reason == "tool_calls", (
@@ -215,10 +201,8 @@ class TestFinishReasonNormalization:
         response = accumulator.to_chat_response()
 
         assert response.tool_calls is None or len(response.tool_calls) == 0
-        # Should default to end_turn when no tools
-        assert response.finish_reason in ("end_turn", "stop"), (
-            f"Expected finish_reason='end_turn' or 'stop', got '{response.finish_reason}'"
-        )
+        # Should default to "stop" when no tools (streaming.py:372 returns exact string "stop")
+        assert response.finish_reason == "stop"
 
     def test_finish_reason_preserved_when_turn_complete_received(self) -> None:
         """TURN_COMPLETE finish_reason is preserved when received.
@@ -278,7 +262,7 @@ class TestFinishReasonNormalization:
         response = accumulator.to_chat_response()
 
         # CRITICAL: Must be "tool_calls" even though SDK sent "stop"
-        assert response.tool_calls is not None
+        assert isinstance(response.tool_calls, list)
         assert len(response.tool_calls) == 1
         assert response.finish_reason == "tool_calls", (
             f"Expected finish_reason='tool_calls' to override SDK's 'stop' "
@@ -319,17 +303,21 @@ class TestThinkingBlockSignaturePreservation:
         response = accumulator.to_chat_response()
 
         # Should have thinking content
-        assert response.content is not None
-        assert len(response.content) > 0
+        assert isinstance(response.content, list)
+        assert len(response.content) == 1
 
         # Find the ThinkingBlock
+        from amplifier_core import ThinkingBlock
+
         thinking_block = None
         for block in response.content:
             if hasattr(block, "thinking"):
                 thinking_block = block
                 break
 
-        assert thinking_block is not None, "ThinkingBlock not found in response.content"
+        assert isinstance(thinking_block, ThinkingBlock), (
+            "ThinkingBlock not found in response.content"
+        )
 
         # CRITICAL: signature MUST be preserved for multi-turn extended thinking
         assert hasattr(thinking_block, "signature"), "ThinkingBlock missing 'signature' attribute"
@@ -361,13 +349,15 @@ class TestThinkingBlockSignaturePreservation:
         response = accumulator.to_chat_response()
 
         # Should have thinking content
+        from amplifier_core import ThinkingBlock
+
         thinking_block = None
         for block in response.content:
             if hasattr(block, "thinking"):
                 thinking_block = block
                 break
 
-        assert thinking_block is not None
+        assert isinstance(thinking_block, ThinkingBlock)
         # signature should be None (not missing, not error)
         assert thinking_block.signature is None
 
@@ -420,13 +410,14 @@ def _make_event_router(
 
 
 class TestEventRouterToolCaptureAbortIntegration:
-    """streaming-contract:abort-on-capture:MUST:1
+    """streaming-contract:ToolCapture:MUST:1
 
     EventRouter routes ASSISTANT_MESSAGE → ToolCaptureHandler → abort signal.
+    (Abort callback is implementation behavior, not contracted.)
     """
 
     def test_abort_signal_fires_when_tool_captured(self) -> None:
-        """streaming-contract:abort-on-capture:MUST:1 — abort when tools captured.
+        """streaming-contract:ToolCapture:MUST:1 — tool capture triggers abort callback.
 
         When EventRouter receives an ASSISTANT_MESSAGE with tool_requests,
         the ToolCaptureHandler fires `on_capture_complete` (the abort callback).
@@ -454,7 +445,7 @@ class TestEventRouterToolCaptureAbortIntegration:
         )
 
     def test_tools_are_captured_via_event_router(self) -> None:
-        """streaming-contract:abort-on-capture:MUST:1 — tools forwarded to capture handler."""
+        """streaming-contract:ToolCapture:MUST:1 — tools forwarded to capture handler."""
 
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
@@ -495,10 +486,13 @@ class TestEventRouterTTFTWarning:
 
         content_event: dict[str, Any] = {"type": "assistant.delta", "data": {}}
 
-        with patch("amplifier_module_provider_github_copilot.event_router.logger") as mock_logger:
+        with patch(
+            "amplifier_module_provider_github_copilot.event_router.logger", spec=logging.Logger
+        ) as mock_logger:
             router(content_event)
 
         mock_logger.warning.assert_called_once()
+        mock_logger.warn.assert_not_called()
         warning_msg = mock_logger.warning.call_args[0][0]
         assert "TTFT" in warning_msg or "first token" in warning_msg.lower()
 
@@ -512,12 +506,15 @@ class TestEventRouterTTFTWarning:
 
         content_event: dict[str, Any] = {"type": "assistant.delta", "data": {}}
 
-        with patch("amplifier_module_provider_github_copilot.event_router.logger") as mock_logger:
+        with patch(
+            "amplifier_module_provider_github_copilot.event_router.logger", spec=logging.Logger
+        ) as mock_logger:
             router(content_event)  # first event — fires warning
             router(content_event)  # second event — must NOT fire again
 
         # warning called exactly once
         assert mock_logger.warning.call_count == 1
+        mock_logger.warn.assert_not_called()
 
 
 class TestEventRouterErrorHandling:
@@ -642,7 +639,9 @@ class TestThinkingBlockConsolidation:
     """
 
     def test_empty_text_deltas_do_not_fragment_thinking_blocks(self) -> None:
-        """streaming-contract:Accumulation:MUST:3 — empty text events must not fragment thinking.
+        """Contract: streaming-contract:Accumulation:MUST:3
+
+        Empty text events must not fragment thinking.
 
         Simulates the SDK pattern: assistant.streaming_delta (empty) interleaved
         with assistant.reasoning_delta events. The accumulator MUST consolidate all
@@ -702,7 +701,7 @@ class TestThinkingBlockConsolidation:
 
         response = accumulator.to_chat_response()
 
-        assert response.content_blocks is not None
+        assert isinstance(response.content_blocks, list)
         thinking_blocks = [b for b in response.content_blocks if isinstance(b, ThinkingContent)]
         assert len(thinking_blocks) == 1, (
             f"streaming-contract:Accumulation:MUST:3 — must produce ONE ThinkingContent "
@@ -728,7 +727,7 @@ class TestToChatResponse:
     """
 
     def test_text_content_produces_textblock_in_content(self) -> None:
-        """streaming-contract:StreamingResponse:MUST:3
+        """Contract: streaming-contract:StreamingResponse:MUST:3
 
         Text deltas produce TextBlock (Pydantic from message_models) in response.content.
         """
@@ -752,8 +751,8 @@ class TestToChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.content is not None
-        assert len(response.content) >= 1
+        assert isinstance(response.content, list)
+        assert len(response.content) == 1
         # Must be a TextBlock (Pydantic from message_models), not a plain string
         text_block = response.content[0]
         assert hasattr(text_block, "text"), (
@@ -812,17 +811,16 @@ class TestToChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.content_blocks is not None, (
+        assert isinstance(response.content_blocks, list), (
             "content_blocks must be populated when text present"
         )
-        assert len(response.content_blocks) >= 1
+        assert len(response.content_blocks) == 1
         # Must be TextContent (dataclass from content_models) — has .text attribute
         # Filter to TextContent blocks (exclude ToolCallContent which has no .text)
         from amplifier_core import TextContent
 
         text_blocks = [b for b in response.content_blocks if isinstance(b, TextContent)]
-        block_types = [type(b).__name__ for b in response.content_blocks]
-        assert len(text_blocks) >= 1, f"Expected at least one TextContent block, got {block_types}"
+        assert len(text_blocks) == 1, "Expected exactly one TextContent block"
         block = text_blocks[0]
         assert hasattr(block, "text"), (
             f"Expected TextContent dataclass with .text attribute, got {type(block)}"
@@ -830,7 +828,7 @@ class TestToChatResponse:
         assert block.text == "Streaming response"
 
     def test_tool_call_produces_pydantic_toolcall_in_response(self) -> None:
-        """streaming-contract:StreamingResponse:MUST:3
+        """Contract: streaming-contract:StreamingResponse:MUST:3
 
         Tool calls in the accumulator produce ToolCall Pydantic objects
         with correct .id, .name, .arguments fields in response.tool_calls.
@@ -851,7 +849,7 @@ class TestToChatResponse:
 
         response = accumulator.to_chat_response()
 
-        assert response.tool_calls is not None
+        assert isinstance(response.tool_calls, list)
         assert len(response.tool_calls) == 1
         tc = response.tool_calls[0]
         # Must use .arguments (not .input — per provider-protocol:parse_tool_calls:MUST:4)

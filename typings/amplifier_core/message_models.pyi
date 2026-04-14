@@ -3,6 +3,14 @@
 from typing import Any, Literal
 
 
+class Message:
+    """Message in a chat conversation (Pydantic model)."""
+    role: str
+    content: str | list[Any]
+    
+    def __init__(self, *, role: str, content: str | list[Any], **kwargs: Any) -> None: ...
+
+
 class TextBlock:
     """Text block in a message (Pydantic model)."""
     type: Literal["text"]
@@ -59,6 +67,7 @@ class ToolCall:
 
 
 __all__ = [
+    "Message",
     "TextBlock",
     "ThinkingBlock", 
     "ToolCallBlock",

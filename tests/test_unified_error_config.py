@@ -12,14 +12,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 
 class TestUnifiedErrorConfigLoading:
     """Unify Error Config Loading."""
 
     def test_load_error_config_from_file_path_includes_context_extraction(self) -> None:
-        """error-hierarchy:config:MUST:1 — file path loading must include context_extraction.
+        """Contract: error-hierarchy:Config:MUST:1
+
+        File path loading must include context_extraction.
 
         When loading error config from a file path, context_extraction patterns
         MUST be parsed and included in the ErrorMapping objects.
@@ -37,19 +37,28 @@ class TestUnifiedErrorConfigLoading:
             / "errors.yaml"
         )
 
-        if not config_path.exists():
-            pytest.skip(f"Config file not found: {config_path}")
+        assert config_path.exists(), f"Required config file missing: {config_path}"
 
         config = load_error_config(config_path)
 
-        # Verify config loaded successfully
-        assert len(config.mappings) > 0
+        # Exact count from errors.yaml (17 mappings)
+        assert len(config.mappings) == 17
 
-        # Check if any mapping has context_extraction (may not all have it)
-        # The important thing is the parser handles the field correctly
-        for mapping in config.mappings:
-            # context_extraction should be a list (possibly empty)
-            assert isinstance(mapping.context_extraction, list)
+        # At least one mapping must have non-empty context_extraction (parsing verified)
+        mappings_with_ctx = [m for m in config.mappings if m.context_extraction]
+        assert len(mappings_with_ctx) >= 1, (
+            "No mappings have context_extraction — YAML parsing may have failed"
+        )
+
+        # Verify InvalidToolCallError mapping has expected extraction patterns
+        invalid_tool_mappings = [
+            m for m in config.mappings if m.kernel_error == "InvalidToolCallError"
+        ]
+        assert len(invalid_tool_mappings) == 1
+        ctx = invalid_tool_mappings[0].context_extraction
+        assert len(ctx) == 2
+        assert ctx[0].field == "tool_name"
+        assert ctx[0].pattern == "tool '([^']+)'"
 
     def test_client_load_error_config_includes_context_extraction(self) -> None:
         """error-hierarchy:config:MUST:2 — client loading must include context_extraction.
@@ -63,13 +72,18 @@ class TestUnifiedErrorConfigLoading:
 
         config = _load_error_config_once()  # type: ignore[no-untyped-call]
 
-        # Verify config loaded successfully
-        # (May be fallback config if file not found, but should still work)
-        assert config is not None
+        # Exact count from errors.yaml (17 mappings)
+        assert len(config.mappings) == 17
 
-        # All mappings should have context_extraction list (possibly empty)
-        for mapping in config.mappings:
-            assert isinstance(mapping.context_extraction, list)
+        # Verify InvalidToolCallError mapping has expected extraction patterns
+        invalid_tool_mappings = [
+            m for m in config.mappings if m.kernel_error == "InvalidToolCallError"
+        ]
+        assert len(invalid_tool_mappings) == 1
+        ctx = invalid_tool_mappings[0].context_extraction
+        assert len(ctx) == 2
+        assert ctx[0].field == "tool_name"
+        assert ctx[0].pattern == "tool '([^']+)'"
 
     def test_both_loading_paths_produce_identical_results(self) -> None:
         """error-hierarchy:config:MUST:3 — both paths must produce same results.
@@ -96,8 +110,7 @@ class TestUnifiedErrorConfigLoading:
             / "errors.yaml"
         )
 
-        if not config_path.exists():
-            pytest.skip(f"Config file not found: {config_path}")
+        assert config_path.exists(), f"Required config file missing: {config_path}"
 
         file_config = load_error_config(config_path)
 
@@ -126,12 +139,13 @@ class TestUnifiedErrorConfigLoading:
     def test_error_translation_with_context_extraction_from_client_config(
         self,
     ) -> None:
-        """error-hierarchy:config:MUST:4 — client config supports context extraction.
+        """Contract: error-hierarchy:Config:MUST:4 — client config supports context extraction.
 
         Error translation using config loaded via _load_error_config_once()
         MUST correctly extract context from error messages when configured.
         """
         from amplifier_module_provider_github_copilot.error_translation import (
+            InvalidToolCallError,
             translate_sdk_error,
         )
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
@@ -140,35 +154,13 @@ class TestUnifiedErrorConfigLoading:
 
         config = _load_error_config_once()  # type: ignore[no-untyped-call]
 
-        # Create an error that should match a mapping with context extraction
-        # Using InvalidToolCallError pattern from errors.yaml
-        test_error = RuntimeError("Tool conflict detected: tool_name='my_tool'")
+        # Message matches string_pattern "tool conflict" AND context_extraction regex
+        # Pattern: "tool '([^']+)'" captures tool_name from "tool 'my_tool'"
+        test_error = RuntimeError("tool conflict: tool 'my_tool' conflicts with a built-in")
 
         translated = translate_sdk_error(test_error, config)
 
-        # Translation should work (not crash on context_extraction)
-        assert translated is not None
-        # The error message might include context suffix if pattern matched
-        # The key test is that it doesn't crash
-
-    def test_load_error_config_graceful_degradation(self) -> None:
-        """error-hierarchy:config:SHOULD:1 — missing config should fall back gracefully.
-
-        If the config file is missing, load_error_config should return
-        a default ErrorConfig with sensible defaults.
-
-        Three-Medium: default_retryable=False matches YAML default (errors.yaml:128)
-        and loader fallback for consistency.
-        """
-        from amplifier_module_provider_github_copilot.error_translation import (
-            load_error_config,
-        )
-
-        # Load from non-existent path
-        config = load_error_config(Path("/nonexistent/path/errors.yaml"))
-
-        # Should return default config, not crash
-        assert config is not None
-        assert config.default_error == "ProviderUnavailableError"
-        # Three-Medium: default_retryable=False (conservative: unknown errors don't retry)
-        assert config.default_retryable is False
+        assert isinstance(translated, InvalidToolCallError)
+        assert translated.retryable is False
+        # Context extraction appends [context: tool_name=my_tool, conflict_type=built-in]
+        assert "tool_name=my_tool" in str(translated)

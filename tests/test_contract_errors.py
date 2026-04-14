@@ -95,18 +95,15 @@ class TestErrorConfigCompliance:
         filter_mappings = [
             m for m in error_config.mappings if "ContentFilter" in str(m.kernel_error)
         ]
+        assert len(filter_mappings) == 1, "Expected exactly one ContentFilter mapping"
 
         for mapping in filter_mappings:
             assert not mapping.retryable, "ContentFilter errors should not be retryable"
 
     def test_has_default_fallback(self, error_config: ErrorConfig) -> None:
         """error-hierarchy:Default:MUST:1 - Has default fallback mapping."""
-        # ErrorConfig has default_error and default_retryable attributes
-        assert error_config.default_error is not None, "Must have default error type"
-        assert (
-            error_config.default_error in VALID_KERNEL_ERRORS
-            or error_config.default_error == "ProviderUnavailableError"
-        )
+        # Contract: error-hierarchy:Default:MUST:1
+        assert error_config.default_error == "ProviderUnavailableError"
 
 
 class TestErrorTranslationFunction:
@@ -129,8 +126,7 @@ class TestErrorTranslationFunction:
         for exc in test_exceptions:
             result = translate_sdk_error(exc, error_config)
             # Should always return an LLMError, never raise
-            assert result is not None
-            assert hasattr(result, "provider")
+            assert result.provider == "github-copilot"
 
     def test_sets_provider_attribute(self, error_config: ErrorConfig) -> None:
         """error-hierarchy:Kernel:MUST:2 - Sets provider='github-copilot'."""
@@ -173,8 +169,7 @@ class TestErrorConfigFile:
         )
         content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-        assert content is not None
-        assert "error_mappings" in content or "mappings" in content
+        assert "error_mappings" in content
 
     def test_errors_yaml_has_version(self) -> None:
         """Config file should have version field."""

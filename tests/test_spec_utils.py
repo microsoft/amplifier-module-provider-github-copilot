@@ -6,6 +6,7 @@ Contract Reference: sdk-boundary:BinaryResolution:MUST:2
 
 from __future__ import annotations
 
+import importlib.machinery  # noqa: F401  # Used in MagicMock spec=
 from unittest.mock import MagicMock, patch
 
 
@@ -25,10 +26,11 @@ class TestGetCopilotSpecOrigin:
         # If not installed, we should get None
         result = get_copilot_spec_origin()
 
-        # Result is either a valid path string or None
-        assert result is None or isinstance(result, str)
-        if result:
-            assert "copilot" in result.lower() or result.endswith(".py")
+        # Contract: sdk-boundary:BinaryResolution:MUST:2
+        # Result is a valid path string (copilot SDK is installed in this env)
+        assert isinstance(result, str)
+        assert "copilot" in result.lower()
+        assert result.lower().endswith("__init__.py")
 
     def test_returns_none_when_package_not_found(self) -> None:
         """Returns None when package doesn't exist.
@@ -59,8 +61,9 @@ class TestGetCopilotSpecOrigin:
         """
         import importlib.util
 
+        # Contract: sdk-boundary:BinaryResolution:MUST:2
         # Create a mock spec with origin
-        mock_spec = MagicMock()
+        mock_spec = MagicMock(spec=importlib.machinery.ModuleSpec)  # type: ignore[reportAttributeAccessIssue]
         mock_spec.origin = "/path/to/copilot/__init__.py"
 
         with patch.object(importlib.util, "find_spec", return_value=mock_spec) as mock_find:
@@ -85,8 +88,9 @@ class TestGetCopilotSpecOrigin:
         """
         import importlib.util
 
+        # Contract: sdk-boundary:BinaryResolution:MUST:2
         # Mock spec exists but origin is None
-        mock_spec = MagicMock()
+        mock_spec = MagicMock(spec=importlib.machinery.ModuleSpec)  # type: ignore[reportAttributeAccessIssue]
         mock_spec.origin = None
 
         with patch.object(importlib.util, "find_spec", return_value=mock_spec):

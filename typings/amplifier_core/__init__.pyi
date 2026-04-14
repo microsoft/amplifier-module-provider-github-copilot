@@ -128,8 +128,9 @@ class ThinkingBlock:
     """Thinking block for Pydantic context persistence (Pydantic BaseModel)."""
     type: str
     thinking: str
+    signature: str | None
     
-    def __init__(self, *, thinking: str, type: str = "thinking", **kwargs: Any) -> None: ...
+    def __init__(self, *, thinking: str, type: str = "thinking", signature: str | None = None, **kwargs: Any) -> None: ...
 
 
 @dataclass

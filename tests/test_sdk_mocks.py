@@ -20,7 +20,7 @@ class TestSessionEventShape:
         from tests.fixtures.sdk_mocks import SessionEvent, SessionEventType
 
         event = SessionEvent(type=SessionEventType.SESSION_IDLE)
-        assert hasattr(event.type, "value"), "type should be enum with .value"
+        assert event.type.value == "session.idle"
         assert isinstance(event.type, SessionEventType)
 
     def test_session_event_type_value_is_string(self) -> None:
@@ -86,7 +86,8 @@ class TestMockSDKSessionBehavior:
         # Should receive SessionEvent objects
         assert len(received) >= 1
         assert isinstance(received[0], SessionEvent)
-        assert hasattr(received[0].type, "value")
+        # Contract: event-vocabulary:Bridge:MUST:1
+        assert received[0].type.value == "assistant.message_delta"
 
     @pytest.mark.asyncio
     async def test_mock_session_accepts_legacy_dicts(self) -> None:

@@ -121,11 +121,9 @@ class TestDisconnectFailureEscalation:
             # Should now have error logged
             assert mock_logger.error.call_count == 1
             # Check error message mentions resource leak
+            # Contract: sdk-protection:Session:MUST:3
             error_call_args = str(mock_logger.error.call_args)
-            assert (
-                "resource leak" in error_call_args.lower()
-                or "disconnect" in error_call_args.lower()
-            )
+            assert "potential resource leak" in error_call_args.lower()
 
     @pytest.mark.asyncio
     async def test_warning_logged_on_every_failure(self) -> None:
@@ -154,7 +152,6 @@ class TestDisconnectFailureInit:
     def test_counter_initialized_to_zero(self) -> None:
         """Counter should be initialized to 0 in __init__."""
         wrapper = CopilotClientWrapper()
-        assert hasattr(wrapper, "_disconnect_failures")
         assert wrapper._disconnect_failures == 0  # type: ignore[reportPrivateUsage]  # Testing internal state
 
 
@@ -195,8 +192,14 @@ class TestDisconnectTimeout:
 
         # Patch config to use a tiny timeout so the test runs fast.
         # Contract: sdk-protection:Session:MUST:3 — timeout sourced from YAML
-        mock_config = MagicMock()
-        mock_config.session.disconnect_timeout_seconds = 0.05
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SdkProtectionConfig,
+            SessionProtectionConfig,
+        )
+
+        mock_config = SdkProtectionConfig(
+            session=SessionProtectionConfig(disconnect_timeout_seconds=0.05)
+        )
         with patch(
             "amplifier_module_provider_github_copilot.sdk_adapter.client.load_sdk_protection_config",
             return_value=mock_config,
@@ -218,8 +221,5 @@ class TestDisconnectTimeout:
         )
 
         config = load_sdk_protection_config()
-        assert hasattr(config.session, "disconnect_timeout_seconds"), (
-            "SessionProtectionConfig must have disconnect_timeout_seconds field"
-        )
         assert isinstance(config.session.disconnect_timeout_seconds, float)
         assert config.session.disconnect_timeout_seconds > 0

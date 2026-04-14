@@ -3,23 +3,26 @@ Kernel Type Integration Tests.
 
 These tests verify the provider returns kernel types that pass isinstance() checks.
 
-NOTE: Tests use pytest.importorskip() to gracefully skip if amplifier_core unavailable.
+Contract: contracts/provider-protocol.md
 """
 
 from typing import cast
 
 import pytest
 
-# Skip entire module if amplifier_core not installed
-pytest.importorskip("amplifier_core")
-
 
 class TestKernelTypeCompliance:
-    """Tests that provider returns actual kernel types."""
+    """Tests that provider returns actual kernel types.
+
+    Contract: provider-protocol:get_info:MUST:1
+    """
 
     @pytest.mark.asyncio
     async def test_provider_info_is_kernel_type(self) -> None:
-        """AC-1 - get_info() returns amplifier_core.ProviderInfo."""
+        """AC-1 - get_info() returns amplifier_core.ProviderInfo.
+
+        # Contract: provider-protocol:get_info:MUST:1
+        """
         from amplifier_core import ProviderInfo as KernelProviderInfo
 
         from amplifier_module_provider_github_copilot import GitHubCopilotProvider
@@ -32,12 +35,12 @@ class TestKernelTypeCompliance:
             f"get_info() returned {type(info).__name__}, expected ProviderInfo from amplifier_core"
         )
 
-        # Verify required kernel fields exist
-        assert hasattr(info, "id")
-        assert hasattr(info, "display_name")
-        assert hasattr(info, "credential_env_vars")
-        assert hasattr(info, "defaults")
-        assert hasattr(info, "capabilities")
+        # Verify required kernel fields have correct types
+        assert isinstance(info.id, str)
+        assert isinstance(info.display_name, str)
+        assert isinstance(info.credential_env_vars, list)
+        assert isinstance(info.defaults, dict)
+        assert isinstance(info.capabilities, list)
 
     @pytest.mark.asyncio
     async def test_list_models_returns_kernel_types(self) -> None:
@@ -45,6 +48,8 @@ class TestKernelTypeCompliance:
 
         Note: This test uses explicit mocking because list_models() now calls SDK
         dynamically, and in tests without SDK connection, we need to mock the response.
+
+        # Contract: provider-protocol:list_models:MUST:1
         """
         from unittest.mock import patch
 
@@ -82,12 +87,12 @@ class TestKernelTypeCompliance:
             assert isinstance(model, KernelModelInfo), (
                 f"list_models() returned {type(model).__name__}, expected ModelInfo"
             )
-            # Verify required kernel fields
-            assert hasattr(model, "id")
-            assert hasattr(model, "display_name")
-            assert hasattr(model, "context_window")
-            assert hasattr(model, "max_output_tokens")
-            assert hasattr(model, "capabilities")  # noqa: E501
+            # Verify required kernel fields have correct types
+            assert isinstance(model.id, str)
+            assert isinstance(model.display_name, str)
+            assert isinstance(model.context_window, int)
+            assert isinstance(model.max_output_tokens, int)
+            assert isinstance(model.capabilities, list)
 
     def test_error_translation_produces_kernel_errors(self) -> None:
         """AC-2 - translate_sdk_error() returns amplifier_core.llm_errors types."""
@@ -127,7 +132,10 @@ class TestKernelTypeCompliance:
         )
 
     def test_tool_call_is_kernel_type(self) -> None:
-        """AC-3 - parse_tool_calls() returns amplifier_core.ToolCall."""
+        """AC-3 - parse_tool_calls() returns amplifier_core.ToolCall.
+
+        # Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_core import ChatResponse
         from amplifier_core import ToolCall as KernelToolCall
 
@@ -143,11 +151,6 @@ class TestKernelTypeCompliance:
 
         class MockResponse:
             tool_calls = [MockToolCall()]
-
-        # parse_tool_calls must be a METHOD on provider (per Protocol)
-        assert hasattr(provider, "parse_tool_calls"), (
-            "parse_tool_calls must be a method on provider class"
-        )
 
         result = provider.parse_tool_calls(cast(ChatResponse, MockResponse()))
 

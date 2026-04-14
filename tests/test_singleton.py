@@ -18,7 +18,11 @@ from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from amplifier_core import ModuleCoordinator
 
+from amplifier_module_provider_github_copilot.config._sdk_protection import (
+    SdkProtectionConfig,
+)
 from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
 
 # ============================================================================
@@ -91,7 +95,10 @@ class TestSingletonLifecycle:
 
     @pytest.mark.asyncio
     async def test_refcount_increments_on_acquire(self) -> None:
-        """Each _acquire_shared_client() increments refcount."""
+        """Each _acquire_shared_client() increments refcount.
+
+        Contract: provider-protocol:mount:MUST:2
+        """
         import amplifier_module_provider_github_copilot as provider_module
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -112,7 +119,10 @@ class TestSingletonLifecycle:
 
     @pytest.mark.asyncio
     async def test_refcount_decrements_on_release(self) -> None:
-        """Each _release_shared_client() decrements refcount."""
+        """Each _release_shared_client() decrements refcount.
+
+        Contract: provider-protocol:mount:MUST:2
+        """
         import amplifier_module_provider_github_copilot as provider_module
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -164,7 +174,10 @@ class TestSingletonLifecycle:
 
     @pytest.mark.asyncio
     async def test_negative_refcount_impossible(self) -> None:
-        """Extra _release_shared_client() calls don't go negative."""
+        """Extra _release_shared_client() calls don't go negative.
+
+        Contract: provider-protocol:mount:MUST:2
+        """
         import amplifier_module_provider_github_copilot as provider_module
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -303,7 +316,7 @@ class TestLockTimeout:
     async def test_lock_timeout_raises_timeout_error(self) -> None:
         """30s lock timeout raises TimeoutError when lock is held.
 
-        Contract: sdk-protection:Singleton:MUST:8
+        Contract: provider-protocol:mount:MUST:5
         Timeout value sourced from config/_sdk_protection.py singleton.lock_timeout_seconds.
         """
         import threading
@@ -325,9 +338,15 @@ class TestLockTimeout:
         try:
             lock_held.wait(timeout=1.0)
             # Patch config to return a tiny timeout so the test runs fast.
-            # Contract: sdk-protection:Singleton:MUST:8 — timeout sourced from YAML
-            mock_config = MagicMock()
-            mock_config.singleton.lock_timeout_seconds = 0.01
+            # Contract: provider-protocol:mount:MUST:5 — timeout sourced from YAML
+            from amplifier_module_provider_github_copilot.config._sdk_protection import (
+                SingletonConfig,
+            )
+
+            mock_config = MagicMock(spec=SdkProtectionConfig)
+            mock_singleton = MagicMock(spec=SingletonConfig)
+            mock_singleton.lock_timeout_seconds = 0.01
+            mock_config.singleton = mock_singleton
             with patch(
                 "amplifier_module_provider_github_copilot.load_sdk_protection_config",
                 return_value=mock_config,
@@ -341,7 +360,7 @@ class TestLockTimeout:
     def test_state_lock_is_eager_threading_lock(self) -> None:
         """_state_lock is a threading.Lock, eagerly initialized at import time.
 
-        Contract: sdk-protection:Singleton:MUST:8
+        Contract: provider-protocol:mount:MUST:5
         No asyncio.Lock at module level — threading.Lock is event-loop-safe.
         """
         import threading
@@ -353,7 +372,7 @@ class TestLockTimeout:
     def test_lock_timeout_in_singleton_config(self) -> None:
         """lock_timeout_seconds must be present in SingletonConfig.
 
-        Contract: sdk-protection:Singleton:MUST:8
+        Contract: provider-protocol:mount:MUST:5
         Three-Medium: timeout policy lives in YAML, not as Python constant.
         """
         from amplifier_module_provider_github_copilot.config_loader import (
@@ -361,9 +380,7 @@ class TestLockTimeout:
         )
 
         config = load_sdk_protection_config()
-        assert hasattr(config.singleton, "lock_timeout_seconds"), (
-            "SdkProtectionConfig.singleton must have lock_timeout_seconds field"
-        )
+        assert config.singleton.lock_timeout_seconds == 30.0
         assert isinstance(config.singleton.lock_timeout_seconds, float)
         assert config.singleton.lock_timeout_seconds > 0
 
@@ -431,7 +448,7 @@ class TestMountIntegration:
         """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator = MagicMock()
+        mock_coordinator = MagicMock(spec=ModuleCoordinator)
         mock_coordinator.mount = AsyncMock()
 
         with (
@@ -447,7 +464,9 @@ class TestMountIntegration:
             cleanup = await provider_module.mount(mock_coordinator)
 
             mock_acquire.assert_called_once()
-            assert cleanup is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(cleanup)
+            assert asyncio.iscoroutinefunction(cleanup)
 
     @pytest.mark.asyncio
     async def test_cleanup_calls_release(self) -> None:
@@ -457,7 +476,7 @@ class TestMountIntegration:
         """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator = MagicMock()
+        mock_coordinator = MagicMock(spec=ModuleCoordinator)
         mock_coordinator.mount = AsyncMock()
 
         with (
@@ -474,7 +493,9 @@ class TestMountIntegration:
             mock_acquire.return_value = mock_client
 
             cleanup = await provider_module.mount(mock_coordinator)
-            assert cleanup is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(cleanup)
+            assert asyncio.iscoroutinefunction(cleanup)
 
             await cleanup()
             mock_release.assert_called_once()
@@ -487,7 +508,7 @@ class TestMountIntegration:
         """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator = MagicMock()
+        mock_coordinator = MagicMock(spec=ModuleCoordinator)
         mock_coordinator.mount = AsyncMock()
 
         cancel_tasks_called = False
@@ -515,7 +536,9 @@ class TestMountIntegration:
             mock_acquire.return_value = mock_client
 
             cleanup = await provider_module.mount(mock_coordinator)
-            assert cleanup is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(cleanup)
+            assert asyncio.iscoroutinefunction(cleanup)
 
             await cleanup()
 
@@ -530,7 +553,7 @@ class TestMountIntegration:
         """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator = MagicMock()
+        mock_coordinator = MagicMock(spec=ModuleCoordinator)
         mock_coordinator.mount = AsyncMock(side_effect=RuntimeError("Mount failed"))
 
         with (
@@ -560,9 +583,9 @@ class TestMountIntegration:
         """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator1 = MagicMock()
+        mock_coordinator1 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator1.mount = AsyncMock()
-        mock_coordinator2 = MagicMock()
+        mock_coordinator2 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator2.mount = AsyncMock()
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -576,8 +599,11 @@ class TestMountIntegration:
             cleanup1 = await provider_module.mount(mock_coordinator1)
             cleanup2 = await provider_module.mount(mock_coordinator2)
 
-            assert cleanup1 is not None
-            assert cleanup2 is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(cleanup1)
+            assert asyncio.iscoroutinefunction(cleanup1)
+            assert callable(cleanup2)
+            assert asyncio.iscoroutinefunction(cleanup2)
 
             # Both should use the same client
             assert provider_module._shared_client is mock_client
@@ -605,12 +631,15 @@ class TestConcurrentAccess:
 
     @pytest.mark.asyncio
     async def test_concurrent_mounts_serialized(self) -> None:
-        """Two concurrent mount() calls share client via lock serialization."""
+        """Two concurrent mount() calls share client via lock serialization.
+
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator1 = MagicMock()
+        mock_coordinator1 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator1.mount = AsyncMock()
-        mock_coordinator2 = MagicMock()
+        mock_coordinator2 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator2.mount = AsyncMock()
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -627,8 +656,11 @@ class TestConcurrentAccess:
                 provider_module.mount(mock_coordinator2),
             )
 
-            assert results[0] is not None
-            assert results[1] is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(results[0])
+            assert asyncio.iscoroutinefunction(results[0])
+            assert callable(results[1])
+            assert asyncio.iscoroutinefunction(results[1])
 
             # Both should use the same client
             assert provider_module._shared_client is mock_client
@@ -758,7 +790,7 @@ class TestMountExceptionPaths:
         """
         import amplifier_module_provider_github_copilot as m
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.mount = AsyncMock(side_effect=Exception("coordinator error"))
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -781,7 +813,7 @@ class TestMountExceptionPaths:
         """
         import amplifier_module_provider_github_copilot as m
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
 
         with patch.object(
             m,
@@ -801,7 +833,7 @@ class TestMountExceptionPaths:
         """
         import amplifier_module_provider_github_copilot as m
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
 
         with patch.object(
             m,
@@ -858,9 +890,9 @@ class TestSessionIsolation:
         ) -> None:
             captured_providers.append(provider)
 
-        mock_coordinator1 = MagicMock()
+        mock_coordinator1 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator1.mount = AsyncMock(side_effect=capture_mount)
-        mock_coordinator2 = MagicMock()
+        mock_coordinator2 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator2.mount = AsyncMock(side_effect=capture_mount)
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -875,8 +907,11 @@ class TestSessionIsolation:
             cleanup2 = await provider_module.mount(mock_coordinator2)
 
         # Both cleanups should exist
-        assert cleanup1 is not None
-        assert cleanup2 is not None
+        # Contract: provider-protocol:mount:MUST:2
+        assert callable(cleanup1)
+        assert asyncio.iscoroutinefunction(cleanup1)
+        assert callable(cleanup2)
+        assert asyncio.iscoroutinefunction(cleanup2)
 
         # Two independent providers should have been created
         assert len(captured_providers) == 2
@@ -900,9 +935,9 @@ class TestSessionIsolation:
         """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator1 = MagicMock()
+        mock_coordinator1 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator1.mount = AsyncMock()
-        mock_coordinator2 = MagicMock()
+        mock_coordinator2 = MagicMock(spec=ModuleCoordinator)
         mock_coordinator2.mount = AsyncMock()
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -919,7 +954,9 @@ class TestSessionIsolation:
             assert provider_module._shared_client_refcount == 2
 
             # Cleanup first session
-            assert cleanup1 is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(cleanup1)
+            assert asyncio.iscoroutinefunction(cleanup1)
             await cleanup1()
 
             # Client should still be alive (refcount > 0)
@@ -928,7 +965,9 @@ class TestSessionIsolation:
             mock_client.close.assert_not_called()
 
             # Second session cleanup releases last reference
-            assert cleanup2 is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(cleanup2)
+            assert asyncio.iscoroutinefunction(cleanup2)
             await cleanup2()
 
             # Now client should be closed
@@ -976,7 +1015,7 @@ class TestSessionIsolation:
         """
         import amplifier_module_provider_github_copilot as provider_module
 
-        mock_coordinator = MagicMock()
+        mock_coordinator = MagicMock(spec=ModuleCoordinator)
         mock_coordinator.mount = AsyncMock()
 
         mock_client = MagicMock(spec=CopilotClientWrapper)
@@ -988,7 +1027,9 @@ class TestSessionIsolation:
             return_value=mock_client,
         ):
             cleanup = await provider_module.mount(mock_coordinator)
-            assert cleanup is not None
+            # Contract: provider-protocol:mount:MUST:2
+            assert callable(cleanup)
+            assert asyncio.iscoroutinefunction(cleanup)
 
             # First cleanup
             await cleanup()

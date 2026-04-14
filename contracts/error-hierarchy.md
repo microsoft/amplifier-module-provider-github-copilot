@@ -271,6 +271,12 @@ Both paths MUST:
 |--------|--------|
 | `error-hierarchy:Context:SHOULD:1` | Error messages include actionable context |
 
+### ConnectionError
+
+| Anchor | Clause |
+|--------|--------|
+| `error-hierarchy:ConnectionError:MUST:1` | SDK ConnectionError maps to ProviderUnavailableError (not NetworkError) |
+
 ### Config
 
 | Anchor | Clause |

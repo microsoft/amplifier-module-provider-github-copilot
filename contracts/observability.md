@@ -92,6 +92,8 @@ events:
 | `observability:Events:MUST:1` | Guard hook calls |
 | `observability:Events:MUST:2` | Emit llm:request before send |
 | `observability:Events:MUST:3` | Emit llm:response after complete |
+| `observability:Events:MUST:4` | Work without coordinator (standalone mode) |
+| `observability:Events:MUST:5` | MUST NOT assume coordinator.hooks.emit() exists |
 | `observability:Events:SHOULD:3` | Include sdk_pid in llm:response |
 | `observability:Verbosity:MUST:1` | Single raw_payloads flag |
 | `observability:Payload:SHOULD:1` | Type-safe content counting |

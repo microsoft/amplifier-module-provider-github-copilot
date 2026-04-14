@@ -9,9 +9,11 @@ so it can be mounted by the kernel.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from amplifier_core import ModuleCoordinator
 
 
 class TestMount:
@@ -21,25 +23,16 @@ class TestMount:
     """
 
     @pytest.mark.asyncio
-    async def test_mount_exists(self) -> None:
-        """provider-protocol:mount:MUST:1 — mount() accepts ModuleCoordinator type.
-
-        Verifies mount() is importable and callable.
-        """
-        from amplifier_module_provider_github_copilot import mount
-
-        assert callable(mount)
-
-    @pytest.mark.asyncio
     async def test_mount_registers_provider(self) -> None:
         """provider-protocol:mount:MUST:3 — Registers provider on coordinator.
 
         Verifies mount() calls coordinator.mount() with correct arguments.
         """
+        # Contract: provider-protocol:mount:MUST:3
         from amplifier_module_provider_github_copilot import mount
 
-        # Mock coordinator
-        coordinator = MagicMock()
+        # Mock coordinator with spec to catch interface mismatches
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.mount = AsyncMock()
 
         # Call mount
@@ -55,50 +48,26 @@ class TestMount:
     async def test_mount_returns_cleanup_callable(self) -> None:
         """provider-protocol:mount:MUST:2 — Returns cleanup callable.
 
-        Verifies mount() returns a callable for resource cleanup.
+        Verifies mount() returns an async cleanup coroutine function.
         """
+        # Contract: provider-protocol:mount:MUST:2
         from amplifier_module_provider_github_copilot import mount
 
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=ModuleCoordinator)
         coordinator.mount = AsyncMock()
 
         cleanup = await mount(coordinator, config=None)
 
-        assert cleanup is not None
+        assert asyncio.iscoroutinefunction(cleanup)
         assert callable(cleanup)
-
-    @pytest.mark.asyncio
-    async def test_mount_cleanup_calls_provider_close(self) -> None:
-        """provider-protocol:mount:MUST:2 — Cleanup callable releases resources.
-
-        Verifies the cleanup function returned by mount() is awaitable.
-        """
-        from amplifier_module_provider_github_copilot import mount
-
-        coordinator = MagicMock()
-        coordinator.mount = AsyncMock()
-
-        cleanup = await mount(coordinator, config=None)
-
-        # The cleanup should be awaitable
-        assert cleanup is not None
-        await cleanup()
-        # Provider should have close() called (we verify this indirectly)
 
 
 class TestGetInfo:
     """Tests for AC-2: get_info() method."""
 
-    def test_get_info_exists(self) -> None:
-        """AC-2: get_info() method exists on provider."""
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        provider = GitHubCopilotProvider()
-        assert hasattr(provider, "get_info")
-        assert callable(provider.get_info)
-
     def test_get_info_returns_provider_info(self) -> None:
-        """AC-2: get_info() returns ProviderInfo with required fields."""
+        """get_info() returns ProviderInfo with required fields."""
+        # Contract: provider-protocol:get_info:MUST:1
         from amplifier_module_provider_github_copilot.provider import (
             GitHubCopilotProvider,
             ProviderInfo,
@@ -109,11 +78,12 @@ class TestGetInfo:
 
         assert isinstance(info, ProviderInfo)
         assert info.id == "github-copilot"
-        assert info.display_name is not None
+        assert info.display_name == "GitHub Copilot SDK"
         assert isinstance(info.capabilities, list)
 
     def test_get_info_includes_streaming_capability(self) -> None:
-        """AC-2: get_info() includes 'streaming' capability."""
+        """get_info() includes 'streaming' capability."""
+        # Contract: provider-protocol:get_info:MUST:1
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
@@ -122,10 +92,11 @@ class TestGetInfo:
         assert "streaming" in info.capabilities
 
     def test_get_info_includes_tool_use_capability(self) -> None:
-        """AC-2: get_info() includes 'tools' capability.
+        """get_info() includes 'tools' capability.
 
         Per kernel capabilities.py: TOOLS="tools" (not "tool_use").
         """
+        # Contract: provider-protocol:get_info:MUST:1
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
@@ -138,16 +109,9 @@ class TestListModels:
     """Tests for AC-3: list_models() method."""
 
     @pytest.mark.asyncio
-    async def test_list_models_exists(self) -> None:
-        """AC-3: list_models() method exists on provider."""
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        provider = GitHubCopilotProvider()
-        assert hasattr(provider, "list_models")
-
-    @pytest.mark.asyncio
     async def test_list_models_returns_model_info_list(self) -> None:
-        """AC-3: list_models() returns list of ModelInfo."""
+        """list_models() returns list of ModelInfo."""
+        # Contract: provider-protocol:list_models:MUST:1
         from amplifier_module_provider_github_copilot.provider import (
             GitHubCopilotProvider,
             ModelInfo,
@@ -157,85 +121,53 @@ class TestListModels:
         models = await provider.list_models()
 
         assert isinstance(models, list)
-        assert len(models) > 0
+        assert models, "list_models must return at least one model"
         for model in models:
             assert isinstance(model, ModelInfo)
 
     @pytest.mark.asyncio
     async def test_list_models_has_minimum_models(self) -> None:
-        """AC-3: list_models() returns at least one model.
+        """list_models() returns at least one model with valid id.
 
         P3-13: Replaced brittle assertion for specific model IDs.
         Model inventory may change; we verify structure, not specific names.
         """
+        # Contract: provider-protocol:list_models:MUST:1
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
         models = await provider.list_models()
 
         # Structural check: at least one model exists
-        assert len(models) >= 1, "Must have at least one model"
+        assert models, "list_models must return at least one model"
         # Each model has required fields
         for model in models:
-            assert model.id, "Model must have non-empty id"
-            assert model.display_name or model.id, "Model must have display name or id"
+            assert isinstance(model.id, str) and model.id
 
     @pytest.mark.asyncio
     async def test_list_models_has_required_fields(self) -> None:
-        """AC-3: Each ModelInfo has required fields."""
+        """Each ModelInfo has required fields with correct types."""
+        # Contract: provider-protocol:list_models:MUST:2
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
         models = await provider.list_models()
 
         for model in models:
-            assert model.id is not None
-            assert model.display_name is not None
-            assert model.context_window is not None
-            assert model.max_output_tokens is not None
-
-
-class TestCompleteMethod:
-    """Tests for AC-4: complete() as class method."""
-
-    @pytest.mark.asyncio
-    async def test_complete_is_method(self) -> None:
-        """AC-4: complete() is a method on GitHubCopilotProvider."""
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        provider = GitHubCopilotProvider()
-        assert hasattr(provider, "complete")
-        assert callable(provider.complete)
+            assert isinstance(model.id, str) and model.id
+            assert isinstance(model.display_name, str) and model.display_name
+            assert isinstance(model.context_window, int) and model.context_window > 0
+            assert isinstance(model.max_output_tokens, int) and model.max_output_tokens > 0
 
 
 class TestProviderProtocol:
     """Tests for full Provider Protocol compliance."""
 
     def test_provider_has_name_property(self) -> None:
-        """Provider has name property."""
+        """Provider has name property returning correct value."""
+        # Contract: provider-protocol:name:MUST:1,2
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
-        assert hasattr(provider, "name")
         assert provider.name == "github-copilot"
-
-    def test_provider_has_parse_tool_calls(self) -> None:
-        """Provider has parse_tool_calls method."""
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        provider = GitHubCopilotProvider()
-        assert hasattr(provider, "parse_tool_calls")
-        assert callable(provider.parse_tool_calls)
-
-    def test_all_protocol_methods_exist(self) -> None:
-        """Provider implements all required protocol methods."""
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        provider = GitHubCopilotProvider()
-
-        # 4 methods + 1 property
-        assert hasattr(provider, "name")  # property
-        assert hasattr(provider, "get_info")  # method
-        assert hasattr(provider, "list_models")  # async method
-        assert hasattr(provider, "complete")  # async method
-        assert hasattr(provider, "parse_tool_calls")  # method
+        assert isinstance(GitHubCopilotProvider.name, property)

@@ -83,7 +83,7 @@ class TestExtractEventDataWithObjectData:
         """data field that is an object with __dict__ is extracted via extract_event_fields.
 
         Line ~591 in streaming.py — elif hasattr(v, '__dict__'):
-        Contract: streaming-contract:EventExtraction:MUST:1
+        Contract: event-vocabulary:Bridge:MUST:3
         """
         from amplifier_module_provider_github_copilot.streaming import (
             _extract_event_data,  # pyright: ignore[reportPrivateUsage]
@@ -105,11 +105,9 @@ class TestExtractEventDataWithObjectData:
 
         result = _extract_event_data(sdk_event)
 
-        # The data object should have been flattened into result
-        # extract_event_fields maps delta_content → text
-        assert result is not None
-        # At minimum, some key should have been extracted from the data object
-        assert isinstance(result, dict)
+        # Contract: sdk-boundary:EventShape:MUST:2
+        # Data object's delta_content is extracted
+        assert result == {"delta_content": "Hello from SDK"}
 
     def test_data_dict_is_flattened_normally(self) -> None:
         """data field as dict uses the normal dict path (not the __dict__ branch)."""
@@ -124,7 +122,8 @@ class TestExtractEventDataWithObjectData:
 
         result = _extract_event_data(sdk_event)
 
-        assert "delta_content" in result or len(result) > 0
+        # Contract: sdk-boundary:EventShape:MUST:2
+        assert result["delta_content"] == "from dict"
 
     def test_non_data_keys_are_preserved(self) -> None:
         """Non-'data', non-'type' keys in SDK event are passed through."""
@@ -225,7 +224,7 @@ class TestExtractEventDataPrimitiveData:
         """data field that is a primitive (not dict, no __dict__) is silently dropped.
 
         Line 591 in streaming.py — elif hasattr(v, '__dict__'): evaluates False
-        Contract: streaming-contract:EventExtraction:MUST:1 — graceful handling
+        Contract: event-vocabulary:Bridge:MUST:3 — graceful handling
 
         Both the isinstance(v, dict) and hasattr(v, '__dict__') conditions are False
         for a primitive (e.g., int 42), so neither branch fires and data is skipped.

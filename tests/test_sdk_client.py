@@ -15,27 +15,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 
-class TestCopilotClientWrapperClass:
-    """AC-1: CopilotClientWrapper class has required methods."""
-
-    def test_class_exists(self) -> None:
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
-
-        assert CopilotClientWrapper is not None
-
-    def test_has_session(self) -> None:
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
-
-        assert hasattr(CopilotClientWrapper, "session")
-
-    def test_has_close(self) -> None:
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
-
-        assert hasattr(CopilotClientWrapper, "close")
-        assert callable(CopilotClientWrapper.close)
-
-
-class TestSessionYieldsRawSession:
+class TestSessionYieldsSessionHandle:
     """session() yields the raw SDK session, not a wrapper."""
 
     @pytest.mark.asyncio
@@ -160,14 +140,6 @@ class TestClose:
 class TestDenyHookInClient:
     """_make_deny_hook_config() is canonical; create_deny_hook() is deleted (D-006)."""
 
-    def test_create_deny_hook_removed_from_client(self) -> None:
-        """D-006: create_deny_hook() must not exist — replaced by _make_deny_hook_config()."""
-        import amplifier_module_provider_github_copilot.sdk_adapter.client as client_mod
-
-        assert not hasattr(client_mod, "create_deny_hook"), (
-            "create_deny_hook() was not deleted — D-006 requires removal"
-        )
-
     def test_deny_all_constant_exists_in_client(self) -> None:
         from amplifier_module_provider_github_copilot.sdk_adapter.client import DENY_ALL
 
@@ -193,6 +165,8 @@ class TestSDKIsolation:
 
     def test_no_copilot_imports_in_domain_modules(self) -> None:
         """Non-adapter Python modules must not import from 'copilot'.
+
+        Contract: sdk-boundary:Membrane:MUST:1
 
         Uses Python's AST module for accurate import detection that
         ignores docstrings, comments, and string literals.

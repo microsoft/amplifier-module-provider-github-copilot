@@ -18,14 +18,31 @@ from unittest.mock import AsyncMock
 import pytest
 
 
+class _MockSDKSession:
+    """Minimal stub for the raw SDK session object used in deny hook tests."""
+
+    session_id: str = "test-session"
+
+    async def disconnect(self) -> None: ...
+
+
+class _MockSDKClient:
+    """Minimal stub for copilot.CopilotClient used in deny hook tests."""
+
+    async def create_session(self, **kwargs: Any) -> _MockSDKSession: ...
+
+
 def _make_mock_sdk_client() -> tuple[AsyncMock, AsyncMock]:
     """Return (mock_sdk_client, mock_sdk_session) for session() tests."""
-    mock_sdk_session = AsyncMock()
+    mock_sdk_session = AsyncMock(spec=_MockSDKSession)
     mock_sdk_session.session_id = "sess-deny-test"
-    mock_sdk_session.disconnect = AsyncMock()
+    mock_sdk_session.disconnect = AsyncMock(spec=_MockSDKSession.disconnect)
 
-    mock_sdk_client = AsyncMock()
-    mock_sdk_client.create_session = AsyncMock(return_value=mock_sdk_session)
+    mock_sdk_client = AsyncMock(spec=_MockSDKClient)
+    mock_sdk_client.create_session = AsyncMock(
+        spec=_MockSDKClient.create_session,
+        return_value=mock_sdk_session,
+    )
 
     return mock_sdk_client, mock_sdk_session
 

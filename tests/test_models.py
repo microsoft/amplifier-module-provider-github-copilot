@@ -71,6 +71,12 @@ class MockSDKModelInfo:
     default_reasoning_effort: str | None = None
 
 
+class _MockSDKClient:
+    """Minimal stub for SDK client used in model discovery tests."""
+
+    async def list_models(self) -> list[MockSDKModelInfo]: ...
+
+
 # =============================================================================
 # Test Fixtures
 # =============================================================================
@@ -755,8 +761,8 @@ class TestNoHardcodedModelLists:
 
         models_config = load_models_config()
 
-        # Should have defaults (policy)
-        assert models_config.defaults is not None, "models.yaml should contain default model policy"
+        # Should have defaults (policy) with correct default model
+        assert models_config.defaults["model"] == "claude-opus-4.5"
 
         # Should NOT have a full model catalog
         # If models section exists, it should be for fallback defaults ONLY
@@ -790,14 +796,15 @@ class TestModelDiscoveryErrors:
 
         from amplifier_module_provider_github_copilot.models import fetch_models
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=_MockSDKClient)
         mock_client.list_models = AsyncMock(side_effect=Exception("SDK connection failed"))
 
         with pytest.raises(ProviderUnavailableError) as exc_info:
             await fetch_models(mock_client)
 
-        # Check error includes actionable information
-        assert "SDK" in str(exc_info.value) or "model" in str(exc_info.value).lower()
+        # Check error includes the exact documented message
+        # Contract: behaviors:ModelDiscoveryError:MUST:1
+        assert "Failed to fetch models from SDK" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_error_message_includes_reason(self) -> None:
@@ -809,18 +816,17 @@ class TestModelDiscoveryErrors:
 
         from amplifier_module_provider_github_copilot.models import fetch_models
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=_MockSDKClient)
         mock_client.list_models = AsyncMock(side_effect=ConnectionError("Network unreachable"))
 
         with pytest.raises(ProviderUnavailableError) as exc_info:
             await fetch_models(mock_client)
 
-        error_msg = str(exc_info.value).lower()
-        # Should explain what happened
-        assert any(
-            word in error_msg
-            for word in ["connection", "network", "unavailable", "failed", "model"]
-        )
+        error_msg = str(exc_info.value)
+        # Should contain the documented error message prefix
+        # Contract: behaviors:ModelDiscoveryError:MUST:2
+        assert "Failed to fetch models from SDK" in error_msg
+        assert "SDK connection unavailable" in error_msg
 
 
 # =============================================================================

@@ -395,6 +395,8 @@ class StreamingChatResponse(ChatResponse):
 | `streaming-contract:StreamingResponse:MUST:3` | content uses message_models types |
 | `streaming-contract:StreamingResponse:MUST:4` | content_blocks is None when empty |
 | `streaming-contract:ContentTypes:MUST:1` | Uses kernel content types |
+| `streaming-contract:ThinkingBlock:MUST:1` | Provider MUST preserve reasoning_opaque as ThinkingBlock.signature |
+| `streaming-contract:ToolCallBlock:MUST:1` | Provider MUST append ToolCallBlock to content for each tool call |
 | `streaming-contract:Accumulation:MUST:1` | Deltas accumulated in order |
 | `streaming-contract:Accumulation:MUST:2` | Block boundaries maintained |
 | `streaming-contract:ToolCapture:MUST:1` | Tool calls captured |

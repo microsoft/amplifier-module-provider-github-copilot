@@ -31,10 +31,16 @@ class MockChatResponse:
 
 
 class TestParseToolCalls:
-    """Tests for parse_tool_calls function."""
+    """Tests for parse_tool_calls function.
+
+    Contract: provider-protocol:parse_tool_calls:MUST:1
+    """
 
     def test_empty_tool_calls_returns_empty_list(self) -> None:
-        """No tool_calls in response → empty list."""
+        """No tool_calls in response → empty list.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(content=[], tool_calls=None)
@@ -42,7 +48,10 @@ class TestParseToolCalls:
         assert result == []
 
     def test_empty_list_tool_calls_returns_empty_list(self) -> None:
-        """Empty tool_calls list → empty list."""
+        """Empty tool_calls list → empty list.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(content=[], tool_calls=[])
@@ -50,7 +59,10 @@ class TestParseToolCalls:
         assert result == []
 
     def test_single_tool_call_parsed(self) -> None:
-        """Single tool call extracted correctly."""
+        """Single tool call extracted correctly.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(
@@ -64,7 +76,10 @@ class TestParseToolCalls:
         assert result[0].arguments == {"path": "test.py"}
 
     def test_multiple_tool_calls_parsed(self) -> None:
-        """Multiple tool calls all extracted."""
+        """Multiple tool calls all extracted.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(
@@ -84,7 +99,10 @@ class TestParseToolCalls:
         assert result[2].name == "bash"
 
     def test_string_arguments_parsed_as_json(self) -> None:
-        """String arguments are JSON-parsed."""
+        """String arguments are JSON-parsed.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(
@@ -148,18 +166,28 @@ class TestParseToolCalls:
 
 
 class TestToolCallType:
-    """Tests for ToolCall dataclass."""
+    """Tests for ToolCall dataclass.
+
+    Contract: provider-protocol:parse_tool_calls:MUST:4
+    """
 
     def test_tool_call_has_arguments_not_input(self) -> None:
-        """ToolCall uses 'arguments' field per kernel contract (E3)."""
+        """ToolCall uses 'arguments' field per kernel contract (E3).
+
+        Contract: provider-protocol:parse_tool_calls:MUST:4
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import ToolCall
 
         tc = ToolCall(id="1", name="test", arguments={"key": "value"})
-        assert hasattr(tc, "arguments")
-        assert not hasattr(tc, "input")
+        assert tc.arguments == {"key": "value"}
+        with pytest.raises(AttributeError):
+            _ = tc.input  # type: ignore[attr-defined]
 
     def test_tool_call_fields(self) -> None:
-        """ToolCall has required fields: id, name, arguments."""
+        """ToolCall has required fields: id, name, arguments.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:4
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import ToolCall
 
         tc = ToolCall(id="tc-123", name="read_file", arguments={"path": "/etc/hosts"})
@@ -168,7 +196,10 @@ class TestToolCallType:
         assert tc.arguments == {"path": "/etc/hosts"}
 
     def test_tool_call_empty_arguments(self) -> None:
-        """ToolCall can have empty arguments dict."""
+        """ToolCall can have empty arguments dict.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:4
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import ToolCall
 
         tc = ToolCall(id="1", name="get_time", arguments={})
@@ -176,10 +207,16 @@ class TestToolCallType:
 
 
 class TestEdgeCases:
-    """Edge case tests for tool parsing."""
+    """Edge case tests for tool parsing.
+
+    Contract: provider-protocol:parse_tool_calls:MUST:1
+    """
 
     def test_nested_arguments(self) -> None:
-        """Nested dict arguments are preserved."""
+        """Nested dict arguments are preserved.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         nested = {"config": {"nested": {"deep": "value"}}, "list": [1, 2, 3]}
@@ -191,7 +228,10 @@ class TestEdgeCases:
         assert result[0].arguments == nested
 
     def test_unicode_in_arguments(self) -> None:
-        """Unicode characters in arguments are preserved."""
+        """Unicode characters in arguments are preserved.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(
@@ -203,7 +243,10 @@ class TestEdgeCases:
         assert result[0].arguments["text"] == "Hello 世界 🌍"  # type: ignore[index]
 
     def test_special_characters_in_tool_name(self) -> None:
-        """Tool names with special characters are preserved."""
+        """Tool names with special characters are preserved.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:1
+        """
         from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(
@@ -216,14 +259,14 @@ class TestEdgeCases:
 
 # ============================================================================
 # Fake Tool Call Detection Tests
-# Contract: provider-protocol:complete:MUST:5
+# Contract: provider-protocol:complete:MUST:6
 # ============================================================================
 
 
 class TestFakeToolCallDetection:
     """Tests for fake tool call detection patterns.
 
-    Contract: provider-protocol:complete:MUST:5
+    Contract: provider-protocol:complete:MUST:6
     These tests verify detection of LLM-generated text that looks like
     tool calls but isn't actual structured tool calls.
     """
@@ -231,7 +274,7 @@ class TestFakeToolCallDetection:
     def test_detects_bracket_style_fake_call(self) -> None:
         """[Tool Call: bash(...)] detected as fake.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             contains_fake_tool_calls,
@@ -242,12 +285,12 @@ class TestFakeToolCallDetection:
         text = 'I will run this command: [Tool Call: bash(command="ls -la")]'
         detected, pattern = contains_fake_tool_calls(text, config)
         assert detected is True
-        assert pattern is not None
+        assert pattern == r"\[Tool Call:\s*\w+"
 
     def test_detects_xml_style_fake_call(self) -> None:
         """<tool_used name="bash"> detected as fake.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             contains_fake_tool_calls,
@@ -258,12 +301,12 @@ class TestFakeToolCallDetection:
         text = '<tool_used name="bash"><command>ls -la</command></tool_used>'
         detected, pattern = contains_fake_tool_calls(text, config)
         assert detected is True
-        assert pattern is not None
+        assert pattern == r"<tool_used\s+name="
 
     def test_detects_xml_result_fake_call(self) -> None:
         """<tool_result name="bash"> detected as fake.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             contains_fake_tool_calls,
@@ -274,12 +317,12 @@ class TestFakeToolCallDetection:
         text = '<tool_result name="bash">output here</tool_result>'
         detected, pattern = contains_fake_tool_calls(text, config)
         assert detected is True
-        assert pattern is not None
+        assert pattern == r"<tool_result\s+name="
 
     def test_ignores_normal_text(self) -> None:
         """Clean text without fake patterns returns False.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             contains_fake_tool_calls,
@@ -295,7 +338,7 @@ class TestFakeToolCallDetection:
     def test_ignores_empty_text(self) -> None:
         """Empty string returns False.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             contains_fake_tool_calls,
@@ -310,7 +353,7 @@ class TestFakeToolCallDetection:
     def test_mention_of_tool_call_not_detected(self) -> None:
         """Normal mention of 'tool call' in conversation not detected.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             contains_fake_tool_calls,
@@ -325,7 +368,7 @@ class TestFakeToolCallDetection:
     def test_case_insensitive_detection(self) -> None:
         """Detection is case insensitive.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             contains_fake_tool_calls,
@@ -341,13 +384,13 @@ class TestFakeToolCallDetection:
 class TestShouldRetryForFakeToolCalls:
     """Tests for retry decision logic.
 
-    Contract: provider-protocol:complete:MUST:5
+    Contract: provider-protocol:complete:MUST:6
     """
 
     def test_no_retry_when_real_tool_calls_present(self) -> None:
         """Structured tool calls suppress retry even if fake text present.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             load_fake_tool_detection_config,
@@ -367,7 +410,7 @@ class TestShouldRetryForFakeToolCalls:
     def test_no_retry_when_no_tools_available(self) -> None:
         """Text-only completion skips detection entirely.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             load_fake_tool_detection_config,
@@ -387,7 +430,7 @@ class TestShouldRetryForFakeToolCalls:
     def test_retry_when_fake_detected_no_real_tools_tools_available(self) -> None:
         """Fake text + no real calls + tools available = retry.
 
-        Contract: provider-protocol:complete:MUST:5
+        Contract: provider-protocol:complete:MUST:6
         """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             load_fake_tool_detection_config,
@@ -402,13 +445,13 @@ class TestShouldRetryForFakeToolCalls:
             config=config,
         )
         assert should_retry is True
-        assert pattern is not None
+        assert pattern == r"\[Tool Call:\s*\w+"
 
 
 class TestFakeToolLogging:
     """Tests for fake tool call logging functions.
 
-    Contract: provider-protocol:complete:MUST:5
+    Contract: provider-protocol:complete:MUST:6
     Contract: behaviors:Logging:MUST:4
     """
 
@@ -631,11 +674,14 @@ class TestFakeToolLogging:
 class TestTruncateText:
     """Tests for _truncate_text helper.
 
-    Coverage: fake_tool_detection._truncate_text
+    Contract: behaviors:Logging:MUST:4
     """
 
     def test_truncate_text_short_unchanged(self) -> None:
-        """Short text unchanged."""
+        """Short text unchanged.
+
+        Contract: behaviors:Logging:MUST:4
+        """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             _truncate_text,  # type: ignore[reportPrivateUsage]
         )
@@ -644,7 +690,10 @@ class TestTruncateText:
         assert result == "hello"
 
     def test_truncate_text_at_limit_unchanged(self) -> None:
-        """Text at exact limit unchanged."""
+        """Text at exact limit unchanged.
+
+        Contract: behaviors:Logging:MUST:4
+        """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             _truncate_text,  # type: ignore[reportPrivateUsage]
         )
@@ -653,7 +702,10 @@ class TestTruncateText:
         assert result == "hello"
 
     def test_truncate_text_over_limit_truncated(self) -> None:
-        """Long text truncated with ellipsis."""
+        """Long text truncated with ellipsis.
+
+        Contract: behaviors:Logging:MUST:4
+        """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             _truncate_text,  # type: ignore[reportPrivateUsage]
         )
@@ -662,7 +714,10 @@ class TestTruncateText:
         assert result == "hello..."
 
     def test_truncate_text_zero_limit(self) -> None:
-        """Zero limit returns original."""
+        """Zero limit returns original.
+
+        Contract: behaviors:Logging:MUST:4
+        """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             _truncate_text,  # type: ignore[reportPrivateUsage]
         )
@@ -671,7 +726,10 @@ class TestTruncateText:
         assert result == "hello"
 
     def test_truncate_text_negative_limit(self) -> None:
-        """Negative limit returns original."""
+        """Negative limit returns original.
+
+        Contract: behaviors:Logging:MUST:4
+        """
         from amplifier_module_provider_github_copilot.fake_tool_detection import (
             _truncate_text,  # type: ignore[reportPrivateUsage]
         )
@@ -683,11 +741,14 @@ class TestTruncateText:
 class TestLoggingConfigDefaults:
     """Tests for LoggingConfig default values.
 
-    Contract: behaviors:Logging:MUST:1-5
+    Contract: behaviors:Logging:MUST:4
     """
 
     def test_logging_config_secure_defaults(self) -> None:
-        """Secure defaults: sensitive logging disabled by default."""
+        """Secure defaults: sensitive logging disabled by default.
+
+        Contract: behaviors:Logging:MUST:4
+        """
         from amplifier_module_provider_github_copilot.fake_tool_detection import LoggingConfig
 
         config = LoggingConfig()
@@ -698,7 +759,10 @@ class TestLoggingConfigDefaults:
         assert config.log_response_text_limit == 500
 
     def test_logging_config_custom_values(self) -> None:
-        """LoggingConfig accepts custom values."""
+        """LoggingConfig accepts custom values.
+
+        Contract: behaviors:Logging:MUST:4
+        """
         from amplifier_module_provider_github_copilot.fake_tool_detection import LoggingConfig
 
         config = LoggingConfig(

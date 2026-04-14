@@ -21,6 +21,26 @@ from tests.fixtures.sdk_responses import (
 )
 
 
+# Stub classes for mock spec= constraints
+class _SessionEventSpec:
+    """Minimal stub for SDK SessionEvent used as MagicMock spec."""
+
+    type: str
+    __dict__: dict[str, Any]
+
+    def get(self, key: str, default: Any = None) -> Any: ...
+
+
+class _SessionSpec:
+    """Minimal stub for SDK session used as MagicMock spec."""
+
+    session_id: str
+
+    def on(self, handler: Any) -> Any: ...
+    async def send(self, prompt: str, attachments: list[Any] | None = None) -> str: ...
+    async def disconnect(self) -> None: ...
+
+
 class TestSDKResponseExtraction:
     """AC-1: Fix SDK response extraction to handle Data.content attribute."""
 
@@ -45,7 +65,10 @@ class TestSDKResponseExtraction:
         assert "content=" not in result  # No field name in output
 
     def test_extracts_content_from_response_wrapper(self) -> None:
-        """MUST handle response.data -> Data.content path."""
+        """MUST handle response.data -> Data.content path.
+
+        Contract: sdk-response:extraction:MUST:2
+        """
         from amplifier_module_provider_github_copilot.provider import (
             extract_response_content,
         )
@@ -131,7 +154,7 @@ class TestSDKResponseExtraction:
         )
 
         # Object with both .data and .content
-        mock_response = MagicMock()
+        mock_response = MagicMock(spec=["data", "content"])
         mock_response.data = MockData(content="from data")
         mock_response.content = "from content"
 
@@ -170,7 +193,7 @@ class TestE2ECompletionWithRealisticData:
                 event_data = self._events[self._index]
                 self._index += 1
                 # Create event object with dict-like access
-                event = MagicMock()
+                event = MagicMock(spec=_SessionEventSpec)
                 for k, v in event_data.items():
                     setattr(event, k, v)
                 event.get = lambda k, d=None, e=event_data: e.get(k, d)  # type: ignore[assignment]
@@ -189,19 +212,20 @@ class TestE2ECompletionWithRealisticData:
             system_message: str | None = None,
         ):
             # Use correct SDK API pattern (send + on)
-            mock_session = MagicMock()
+            mock_session = MagicMock(spec=_SessionSpec)
+            mock_session.session_id = "test-session-id"
             handlers: list[Any] = []
 
             def mock_on(handler: Any) -> MagicMock:
                 handlers.append(handler)
-                return MagicMock()  # unsubscribe
+                return MagicMock(spec=type(lambda: None))  # unsubscribe callable
 
             mock_session.on = MagicMock(side_effect=mock_on)
 
             async def mock_send(prompt: str, attachments: list[Any] | None = None) -> str:
                 # Deliver events via handler callback
                 for event_data in events:
-                    event = MagicMock()
+                    event = MagicMock(spec=_SessionEventSpec)
                     for k, v in event_data.items():
                         setattr(event, k, v)
                     event.__dict__.update(event_data)
@@ -209,7 +233,7 @@ class TestE2ECompletionWithRealisticData:
                     for handler in handlers:
                         handler(event)
                 # Signal completion
-                idle_event = MagicMock()
+                idle_event = MagicMock(spec=_SessionEventSpec)
                 idle_event.type = "SESSION_IDLE"
                 idle_event.__dict__["type"] = "SESSION_IDLE"
                 for handler in handlers:
@@ -373,7 +397,7 @@ class TestReasoningOpaqueExtraction:
         result = extract_event_fields(MockEvent())
 
         # Should handle gracefully - no error, just no reasoning_opaque key
-        assert "reasoning_opaque" not in result or result.get("reasoning_opaque") is None
+        assert "reasoning_opaque" not in result
         assert result.get("reasoning_text") == "Simple reasoning"
 
 

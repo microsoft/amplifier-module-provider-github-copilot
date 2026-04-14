@@ -29,8 +29,27 @@ class MockSubprocessConfig:
         self.log_level = log_level
 
 
+class _MockSDKSession:
+    """Minimal stub for the raw SDK session object used in cleanup tests."""
+
+    session_id: str = "test-session"
+
+    async def disconnect(self) -> None: ...
+
+
+class _MockSDKClient:
+    """Minimal stub for copilot.CopilotClient used in cleanup tests."""
+
+    async def create_session(self, **kwargs: Any) -> _MockSDKSession: ...
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+
+
 class TestFailedStartCleanup:
-    """SDK Client Failed-Start Cleanup."""
+    """SDK Client Failed-Start Cleanup.
+
+    # Contract: sdk-boundary:client-lifecycle:MUST:1
+    """
 
     @pytest.mark.asyncio
     async def test_failed_start_clears_owned_client(self) -> None:
@@ -39,6 +58,9 @@ class TestFailedStartCleanup:
         When start() raises an exception, _owned_client MUST be reset to None
         so subsequent session() calls can retry initialization.
         """
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ProviderUnavailableError,
+        )
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
@@ -47,7 +69,7 @@ class TestFailedStartCleanup:
 
         # Mock CopilotClient to raise on start()
         mock_client_class = MagicMock()
-        mock_client_instance = MagicMock()
+        mock_client_instance = MagicMock(spec=_MockSDKClient)
         mock_client_instance.start = AsyncMock(side_effect=RuntimeError("Start failed"))
         mock_client_class.return_value = mock_client_instance
 
@@ -63,13 +85,10 @@ class TestFailedStartCleanup:
                     MockSubprocessConfig,
                 ),
             ):
-                # First attempt should raise
-                with pytest.raises(Exception) as exc_info:
+                # RuntimeError from start() is translated to ProviderUnavailableError
+                with pytest.raises(ProviderUnavailableError):
                     async with wrapper.session(model="gpt-4"):
                         pass
-
-                # Verify the exception is propagated (original or translated)
-                assert exc_info.value is not None
 
                 # CRITICAL: _owned_client should be None after failed start
                 # This is the bug fix — previously it retained the broken client
@@ -77,7 +96,7 @@ class TestFailedStartCleanup:
 
     @pytest.mark.asyncio
     async def test_retry_after_failed_start_reinitializes_client(self) -> None:
-        """sdk-boundary:client-lifecycle:MUST:2 — retry after failure must reinitialize.
+        """Contract: sdk-boundary:client-lifecycle:MUST:2 — retry after failure must reinitialize.
 
         After a failed start(), the next session() call MUST attempt
         to create a new CopilotClient instance.
@@ -93,14 +112,14 @@ class TestFailedStartCleanup:
         def create_client(*args: Any, **kwargs: Any) -> MagicMock:
             nonlocal call_count
             call_count += 1
-            mock_client = MagicMock()
+            mock_client = MagicMock(spec=_MockSDKClient)
             if call_count == 1:
                 # First call: start fails
                 mock_client.start = AsyncMock(side_effect=RuntimeError("Start failed"))
             else:
                 # Second call: start succeeds
                 mock_client.start = AsyncMock()
-                mock_session = MagicMock()
+                mock_session = MagicMock(spec=_MockSDKSession)
                 mock_session.disconnect = AsyncMock()
                 # Use on() + send() pattern instead of register_pre_tool_use_hook
                 mock_session.on = MagicMock(return_value=lambda: None)
@@ -141,7 +160,7 @@ class TestFailedStartCleanup:
 
     @pytest.mark.asyncio
     async def test_original_exception_propagated(self) -> None:
-        """sdk-boundary:client-lifecycle:MUST:3 — original exception must be propagated.
+        """Contract: sdk-boundary:client-lifecycle:MUST:3 — original exception must be propagated.
 
         When start() raises, the exception (or translated version) must propagate
         to the caller. The cleanup must not swallow the error.
@@ -153,7 +172,7 @@ class TestFailedStartCleanup:
         wrapper = CopilotClientWrapper()
 
         mock_client_class = MagicMock()
-        mock_client_instance = MagicMock()
+        mock_client_instance = MagicMock(spec=_MockSDKClient)
         mock_client_instance.start = AsyncMock(side_effect=RuntimeError("Connection refused"))
         mock_client_class.return_value = mock_client_instance
 
@@ -169,13 +188,18 @@ class TestFailedStartCleanup:
                     MockSubprocessConfig,
                 ),
             ):
-                with pytest.raises(Exception) as exc_info:
+                # RuntimeError from start() is translated to ProviderUnavailableError
+                from amplifier_module_provider_github_copilot.error_translation import (
+                    ProviderUnavailableError,
+                )
+
+                with pytest.raises(ProviderUnavailableError) as exc_info:
                     async with wrapper.session(model="gpt-4"):
                         pass
 
-                # Exception should be raised (either original or translated)
-                # The key is that it's NOT swallowed
-                assert exc_info.value is not None
+                # Exception should be raised with original context (not swallowed)
+                assert isinstance(exc_info.value, ProviderUnavailableError)
+                assert "Connection refused" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_successful_start_retains_client(self) -> None:
@@ -191,9 +215,9 @@ class TestFailedStartCleanup:
         wrapper = CopilotClientWrapper()
 
         mock_client_class = MagicMock()
-        mock_client_instance = MagicMock()
+        mock_client_instance = MagicMock(spec=_MockSDKClient)
         mock_client_instance.start = AsyncMock()
-        mock_session = MagicMock()
+        mock_session = MagicMock(spec=_MockSDKSession)
         mock_session.disconnect = AsyncMock()
         # Use on() + send() pattern instead of register_pre_tool_use_hook
         mock_session.on = MagicMock(return_value=lambda: None)

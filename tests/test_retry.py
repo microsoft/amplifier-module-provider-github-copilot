@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from amplifier_core import ChatResponse
 
 # ============================================================================
 # Retry Config Tests
@@ -26,16 +27,6 @@ import pytest
 
 class TestRetryConfigLoading:
     """Tests for retry config loading from YAML."""
-
-    def test_load_retry_config_returns_dataclass(self) -> None:
-        """Config loader must return structured RetryConfig."""
-        from amplifier_module_provider_github_copilot.provider import load_retry_config
-
-        config = load_retry_config()
-        assert hasattr(config, "max_attempts")
-        assert hasattr(config, "base_delay_ms")
-        assert hasattr(config, "max_delay_ms")
-        assert hasattr(config, "jitter_factor")
 
     def test_retry_config_has_expected_defaults(self) -> None:
         """Config values match behaviors.md specification."""
@@ -227,9 +218,7 @@ class TestRetryBehavior:
             await provider.complete(request)
 
         # The error should be the NetworkError (retryable but exhausted)
-        assert "Connection refused" in str(exc_info.value) or "NetworkError" in str(
-            type(exc_info.value)
-        )
+        assert "Connection refused" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_success_after_retry_returns_response(self) -> None:
@@ -285,7 +274,8 @@ class TestRetryBehavior:
         request.tools = []
 
         # Should succeed on second attempt
-        _ = await provider.complete(request)
+        result = await provider.complete(request)
+        assert result.text is None  # No text events delivered, just idle
 
         # Call count should be 2 (one fail, one success)
         assert call_count == 2
@@ -488,7 +478,7 @@ class TestRawExceptionTranslation:
             await provider.complete(request)
 
         # Should have retried (TimeoutError is typically retryable)
-        assert call_count >= 1
+        assert call_count == 3
 
     @pytest.mark.asyncio
     async def test_raw_non_retryable_exception_fails_fast(self) -> None:
@@ -562,42 +552,38 @@ class TestFakeToolCorrectionRetry:
             call_count += 1
 
             mock_session = MagicMock()
-            events_fired = False
+            registered_handler: Any = None
 
             def mock_on(handler: Any) -> Any:
-                nonlocal events_fired
-                if not events_fired:
-                    events_fired = True
-                    # First call: fake tool call text, second call: clean text
-                    if call_count == 1:
-                        # Mock text delta with fake tool call
-                        text_event = MagicMock()
-                        text_event.type = MagicMock()
-                        text_event.type.value = "assistantMessageDelta"
-                        text_event.data = MagicMock()
-                        text_event.data.delta = MagicMock()
-                        text_event.data.delta.content = "[Tool Call: bash(command='ls')]"
-                    else:
-                        # Second call: clean response
-                        text_event = MagicMock()
-                        text_event.type = MagicMock()
-                        text_event.type.value = "assistantMessageDelta"
-                        text_event.data = MagicMock()
-                        text_event.data.delta = MagicMock()
-                        text_event.data.delta.content = "Here is the file listing."
-
-                    handler(text_event)
-
-                    # Idle event to end
-                    idle_event = MagicMock()
-                    idle_event.type = MagicMock()
-                    idle_event.type.value = "session_idle"
-                    handler(idle_event)
-
+                nonlocal registered_handler
+                registered_handler = handler
                 return lambda: None
 
+            async def mock_send(*args: Any, **kwargs: Any) -> None:
+                # Fire events AFTER send is called (simulates async SDK behavior)
+                await asyncio.sleep(0)  # Yield to event loop
+                if registered_handler:
+                    # First call: fake tool call text, second call: clean text
+                    # For dict events, use 'text' field (accumulator expects this)
+                    if call_count == 1:
+                        text_event = {
+                            "type": "assistant.message_delta",
+                            "data": {"text": "[Tool Call: bash(command='ls')]"},
+                        }
+                    else:
+                        text_event = {
+                            "type": "assistant.message_delta",
+                            "data": {"text": "Here is the file listing."},
+                        }
+
+                    registered_handler(text_event)
+
+                    # Idle event to end
+                    idle_event = {"type": "session.idle"}
+                    registered_handler(idle_event)
+
             mock_session.on = mock_on
-            mock_session.send = AsyncMock()
+            mock_session.send = mock_send
             mock_session.abort = AsyncMock()
             yield mock_session
 
@@ -611,8 +597,9 @@ class TestFakeToolCorrectionRetry:
         result = await provider.complete(request)
 
         # Should have been called multiple times (original + correction)
-        assert call_count >= 1
-        assert result is not None
+        assert call_count == 2
+        assert isinstance(result, ChatResponse)
+        assert result.text == "Here is the file listing."
 
     # NOTE: test_fake_tool_correction_exception_logs_exhausted removed
     # Lines 560-563 (exception handler in correction retry) are only reachable

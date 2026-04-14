@@ -17,34 +17,12 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from amplifier_core import ChatRequest
+from amplifier_core.message_models import Message
 
 # =============================================================================
 # Contract Discovery Tests (verify contract and config exist)
 # =============================================================================
-
-
-class TestBehaviorsContractExists:
-    """Verify behaviors contract exists."""
-
-    def test_behaviors_contract_exists(self) -> None:
-        """behaviors.md contract must exist."""
-        contract_path = Path("contracts/behaviors.md")
-        assert contract_path.exists(), "contracts/behaviors.md must exist"
-
-
-class TestRetryConfigDeferred:
-    """Verify retry config is present in wheel and matches contract values."""
-
-    def test_behaviors_contract_defines_retry_policy(self) -> None:
-        """behaviors:Retry:MUST:1 — contract defines max_attempts=3."""
-        contract_path = Path("contracts/behaviors.md")
-        content = contract_path.read_text(encoding="utf-8")
-
-        # Verify contract defines expected values
-        assert "max_attempts: 3" in content
-        assert "strategy: exponential_with_jitter" in content
-        assert "base_delay_ms: 1000" in content
-        assert "jitter_factor: 0.1" in content
 
 
 # =============================================================================
@@ -57,7 +35,7 @@ class TestRetryBehavior:
 
     @pytest.mark.asyncio
     async def test_retryable_error_is_retried(self) -> None:
-        """behaviors:Retry:MUST:4 — Retryable errors trigger retry.
+        """Contract: behaviors:Retry:MUST:4 — Retryable errors trigger retry.
 
         When SDK raises a retryable error (e.g., LLMTimeoutError with retryable=True),
         the provider should retry up to max_attempts before propagating the error.
@@ -86,7 +64,7 @@ class TestRetryBehavior:
         mock_client.session = mock_session_raises_retryable
         provider._client = mock_client  # type: ignore[assignment]
 
-        mock_request = MagicMock()
+        mock_request = MagicMock(spec=ChatRequest)
         mock_request.messages = [{"role": "user", "content": "test"}]
         mock_request.model = "test-model"
 
@@ -127,7 +105,7 @@ class TestRetryBehavior:
         mock_client.session = mock_session_raises_non_retryable
         provider._client = mock_client  # type: ignore[assignment]
 
-        mock_request = MagicMock()
+        mock_request = MagicMock(spec=ChatRequest)
         mock_request.messages = [{"role": "user", "content": "test"}]
         mock_request.model = "test-model"
 
@@ -233,52 +211,6 @@ class TestBoundedQueueBehavior:
     PR #32 Review: Found divergence where production path had unbounded queue.
     """
 
-    def test_production_path_uses_bounded_queue(self) -> None:
-        """behaviors:Streaming:MUST:4 — Production path must use bounded queue.
-
-        Verifies provider.py:_execute_sdk_completion() creates queue with maxsize.
-        This is a code inspection test since the production path is not easily
-        testable via mocks without risking the very bug we're catching.
-        """
-        import ast
-        from pathlib import Path
-
-        provider_path = Path("amplifier_module_provider_github_copilot/provider.py")
-        source = provider_path.read_text(encoding="utf-8")
-
-        # Parse and find asyncio.Queue() calls
-        tree = ast.parse(source)
-
-        queue_calls: list[ast.Call] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                # Check for asyncio.Queue() or Queue()
-                func = node.func
-                if isinstance(func, ast.Attribute) and func.attr == "Queue":
-                    queue_calls.append(node)
-                elif isinstance(func, ast.Name) and func.id == "Queue":
-                    queue_calls.append(node)
-
-        # There should be at least one Queue call in provider.py
-        assert len(queue_calls) > 0, "provider.py must have asyncio.Queue() calls"
-
-        # ALL Queue calls must have maxsize argument
-        for call in queue_calls:
-            has_maxsize = False
-            # Check positional args
-            if len(call.args) > 0:
-                has_maxsize = True
-            # Check keyword args
-            for kw in call.keywords:
-                if kw.arg == "maxsize":
-                    has_maxsize = True
-                    break
-
-            assert has_maxsize, (
-                f"asyncio.Queue() at line {call.lineno} must have maxsize argument. "
-                "Contract: behaviors:Streaming:MUST:4 — MUST NOT block on queue full"
-            )
-
     # test_completion_path_uses_bounded_queue removed - completion.py deleted (Issue #6)
 
     def test_queue_size_matches_config(self) -> None:
@@ -340,129 +272,148 @@ class TestBoundedQueueBehavior:
 
         assert items == ["event_1", "event_2"], "Queue should have original events"
 
-    def test_queue_full_handling_pattern_in_provider(self) -> None:
-        """behaviors:Streaming:MUST:4 — Verify provider has QueueFull handling.
-
-        Code inspection test that verifies the streaming event handler catches QueueFull,
-        logs a message, and continues (not just that queue has maxsize).
-        Post-P1.6 refactor: event_router.py contains the QueueFull handling logic.
-        """
-        import re
-        from pathlib import Path
-
-        # P1.6 refactor: QueueFull handling now lives in event_router.py
-        event_router_path = Path("amplifier_module_provider_github_copilot/event_router.py")
-        source = event_router_path.read_text(encoding="utf-8")
-
-        # Verify QueueFull exception is caught
-        assert "except asyncio.QueueFull:" in source, (
-            "event_router.py must catch asyncio.QueueFull exception"
-        )
-
-        # Verify logging happens in the except block
-        # Look for pattern: except QueueFull: ... logger.(debug|warning|info)
-        queuefull_pattern = r"except asyncio\.QueueFull:.*?logger\.(debug|warning|info)"
-        match = re.search(queuefull_pattern, source, re.DOTALL)
-        assert match, "event_router.py must log when QueueFull is caught (for observability)"
-
-        # Verify return statement after QueueFull (proves we don't propagate)
-        return_after_pattern = r"except asyncio\.QueueFull:.*?return"
-        match = re.search(return_after_pattern, source, re.DOTALL)
-        assert match, "event_router.py must return after QueueFull (drop event, don't propagate)"
-
     @pytest.mark.asyncio
     async def test_event_handler_logs_on_queue_full(self, caplog: pytest.LogCaptureFixture) -> None:
-        """behaviors:Streaming:MUST:4 — Event handler MUST log when dropping events.
+        """behaviors:Streaming:MUST:4 — EventRouter MUST log when dropping events.
 
-        Runtime behavioral test: simulates the exact event handler pattern
-        from provider.py and verifies logging occurs when queue is full.
-
-        This tests the actual RUNTIME behavior, not just code structure.
+        Runtime behavioral test using the ACTUAL EventRouter class (not a local copy).
+        Verifies production logging occurs when bounded queue is full.
         """
         import asyncio
         import logging
+        import time
 
-        from amplifier_module_provider_github_copilot.sdk_adapter import extract_event_type
+        from amplifier_module_provider_github_copilot.event_router import EventRouter
+        from amplifier_module_provider_github_copilot.sdk_adapter import ToolCaptureHandler
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+        from tests.fixtures.sdk_mocks import text_delta_event
 
-        # Set up logging capture at DEBUG level (where QueueFull is logged)
         caplog.set_level(logging.DEBUG)
 
-        # Create a tiny bounded queue (same pattern as provider.py)
-        queue: asyncio.Queue[dict[str, str]] = asyncio.Queue(maxsize=2)
+        # Tiny bounded queue to easily trigger QueueFull
+        queue: asyncio.Queue[object] = asyncio.Queue(maxsize=2)
+        idle_event = asyncio.Event()
+        error_holder: list[Exception] = []
+        usage_holder: list[dict[str, int]] = []
+        capture_handler = ToolCaptureHandler()
+        ttft_state: dict[str, object] = {"checked": False, "start_time": time.time()}
+        event_config = load_event_config()
 
-        # Simulate the event handler from provider.py (lines 603-638)
-        # This is the EXACT logic we're testing
-        def event_handler(sdk_event: dict[str, str]) -> bool:
-            """Returns True if event was queued, False if dropped."""
-            event_type = extract_event_type(sdk_event)
+        router = EventRouter(
+            queue=queue,
+            idle_event=idle_event,
+            error_holder=error_holder,
+            usage_holder=usage_holder,
+            capture_handler=capture_handler,
+            ttft_state=ttft_state,
+            ttft_threshold_ms=15000,
+            event_config=event_config,
+            emit_streaming_content=lambda _: None,
+        )
 
-            try:
-                queue.put_nowait(sdk_event)
-                return True
-            except asyncio.QueueFull:
-                # Contract: behaviors:Streaming:MUST:4 — drop on full, don't block
-                logging.getLogger(__name__).debug(
-                    "[STREAMING] Event queue full, dropping delta: %s",
-                    event_type,
-                )
-                return False
+        # Fill queue to capacity
+        router(text_delta_event("hello"))
+        router(text_delta_event("world"))
+        assert queue.full(), "Queue should be full after maxsize events"
 
-        # Fill the queue to capacity
-        event1 = {"type": "assistant.message_delta", "data": "hello"}
-        event2 = {"type": "assistant.message_delta", "data": "world"}
-        assert event_handler(event1), "First event should be queued"
-        assert event_handler(event2), "Second event should be queued"
-        assert queue.full(), "Queue should be full"
-
-        # Now send more events - these should be dropped and logged
-        overflow_events = [
-            {"type": "assistant.message_delta", "data": f"overflow_{i}"} for i in range(5)
-        ]
-
-        dropped_count = 0
-        for event in overflow_events:
-            if not event_handler(event):
-                dropped_count += 1
-
-        # Verify all overflow events were dropped
-        assert dropped_count == 5, f"Expected 5 drops, got {dropped_count}"
+        # Overflow: 5 more events should be dropped and logged
+        for i in range(5):
+            router(text_delta_event(f"overflow_{i}"))
 
         # Verify logging occurred for each drop
         drop_logs = [r for r in caplog.records if "queue full" in r.message.lower()]
         assert len(drop_logs) == 5, (
             f"Expected 5 'queue full' log messages, got {len(drop_logs)}. "
-            f"Log messages: {[r.message for r in caplog.records]}"
+            f"Records: {[r.message for r in caplog.records]}"
         )
 
-        # Verify queue still has original events (not corrupted)
-        assert queue.qsize() == 2, "Queue should still have 2 events"
+        # Queue still has original 2 events (drops didn't corrupt it)
+        assert queue.qsize() == 2, "Queue should still have 2 original events"
+
+    @pytest.mark.asyncio
+    async def test_production_queue_is_bounded(self) -> None:
+        """behaviors:Streaming:MUST:4 — Production path creates bounded queue.
+
+        Verifies provider._execute_sdk_completion() creates asyncio.Queue with
+        maxsize > 0 (from streaming config). If reverted to Queue() with no
+        maxsize, this test fails.
+
+        Contract: behaviors:Streaming:MUST:4
+        """
+        import asyncio
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
+
+        captured_maxsizes: list[int] = []
+        original_queue = asyncio.Queue
+
+        def tracking_queue(maxsize: int = 0, **kwargs: object) -> asyncio.Queue[object]:  # type: ignore[type-arg]
+            captured_maxsizes.append(maxsize)
+            return original_queue(maxsize=maxsize, **kwargs)  # type: ignore[return-value]
+
+        mock_client = MockCopilotClientWrapper(events=[text_delta_event("hello")])
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        request = MagicMock(spec=ChatRequest)
+        request.model = "gpt-4"
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
+
+        with patch(
+            "amplifier_module_provider_github_copilot.provider.asyncio.Queue",
+            side_effect=tracking_queue,
+        ):
+            await provider.complete(request)
+
+        # At least one Queue must have been created with maxsize > 0
+        assert any(m > 0 for m in captured_maxsizes), (
+            f"No bounded queue found. Queue maxsizes: {captured_maxsizes}. "
+            "provider._execute_sdk_completion() MUST create "
+            "asyncio.Queue(maxsize=config.event_queue_size)"
+        )
 
 
 class TestModelResolution:
-    """Tests for behaviors:Models:MUST:1,2."""
+    """Tests for behaviors:Models:MUST:1,4."""
 
-    def test_invalid_model_raises_not_found_error(self) -> None:
-        """Invalid model raises NotFoundError.
+    @pytest.mark.asyncio
+    async def test_invalid_model_translates_to_not_found_error(self) -> None:
+        """behaviors:Models:MUST:1 — Invalid model request translates to NotFoundError.
 
-        Contract: behaviors:Models:MUST:1 — Raises NotFoundError for invalid model
+        When the SDK rejects a model (via ModelNotFoundError or string-pattern match),
+        the error translation layer MUST produce kernel NotFoundError.
+
+        Contract: behaviors:Models:MUST:1
         """
         from amplifier_core.llm_errors import NotFoundError
 
-        # NotFoundError is the expected type for invalid models
-        assert issubclass(NotFoundError, Exception)
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
 
-    def test_model_selection_priority(self) -> None:
-        """Model selection respects priority: request > config > YAML.
+        # ValueError with "model not found" maps to NotFoundError via error_translation
+        mock_client = MockCopilotClientWrapper(
+            events=[],
+            raise_on_session=ValueError("model not found: nonexistent-model-xyz"),
+        )
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        Contract: behaviors:Models:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.config_loader import load_models_config
+        request = MagicMock(spec=ChatRequest)
+        request.model = "nonexistent-model-xyz"
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
+        request.tools = None
+        request.max_tokens = None
+        request.temperature = None
+        request.stop = None
+        request.stream = None
 
-        config = load_models_config()
-
-        # Should have models list with defaults
-        assert len(config.models) > 0, "config.models should contain model definitions"
-        assert config.defaults.get("model"), "defaults['model'] should be set"
+        with pytest.raises(NotFoundError):
+            await provider.complete(request)
 
 
 class TestCacheInvalidation:
@@ -472,6 +423,8 @@ class TestCacheInvalidation:
         """invalidate_cache() removes existing cache file.
 
         Documents the invalidate_cache() function as public API.
+
+        # Contract: behaviors:ModelCache:SHOULD:3 (SHOULD, not MUST)
         """
         from amplifier_module_provider_github_copilot.model_cache import (
             invalidate_cache,
@@ -510,82 +463,74 @@ class TestSdkVersionConsistency:
     that matches pyproject.toml, not a stale version.
     """
 
-    def test_error_message_sdk_version_matches_pyproject_toml(self) -> None:
-        """sdk-boundary:ImportCheck:MUST — version in error message matches pyproject.toml.
+    def test_sdk_version_error_message_matches_metadata(self) -> None:
+        """sdk-boundary:Membrane:MUST:5 — error message version matches installed spec.
 
-        Regression prevention: The error message was previously telling users to install
-        >=0.1.32,<0.2.0 while pyproject.toml requires >=0.2.0,<0.3.0.
+        Regression prevention: The error message told users to install the wrong
+        SDK version. Uses _check_sdk_version() (extracted for testability) and
+        importlib.metadata to verify message matches actual declared dependency.
         """
+        import importlib.metadata
         import re
 
-        # Read pyproject.toml to get the authoritative SDK version requirement
-        pyproject_path = Path("pyproject.toml")
-        pyproject_content = pyproject_path.read_text(encoding="utf-8")
+        from packaging.requirements import Requirement
+        from packaging.specifiers import SpecifierSet
 
-        # Extract SDK version from pyproject.toml dependencies
-        sdk_pattern = r'"github-copilot-sdk([^"]+)"'
-        pyproject_match = re.search(sdk_pattern, pyproject_content)
-        assert pyproject_match, "pyproject.toml must declare github-copilot-sdk dependency"
-        pyproject_version = pyproject_match.group(1)  # e.g., ">=0.2.0,<0.3.0"
+        from amplifier_module_provider_github_copilot import _check_sdk_version
 
-        # Read __init__.py source and find the error message version
-        init_path = Path("amplifier_module_provider_github_copilot/__init__.py")
-        init_content = init_path.read_text(encoding="utf-8")
+        # Get declared SDK requirement from package metadata
+        requires = importlib.metadata.requires("amplifier-module-provider-github-copilot") or []
+        sdk_req = next((r for r in requires if r.startswith("github-copilot-sdk")), None)
+        assert isinstance(sdk_req, str), "Package must declare github-copilot-sdk dependency"
+        metadata_specifier = SpecifierSet(str(Requirement(sdk_req).specifier))
 
-        # Extract SDK version from the ImportError message
-        # Looking for: pip install 'github-copilot-sdk>=X.X.X,<Y.Y.Y'
-        error_pattern = r"pip install 'github-copilot-sdk([^']+)'"
-        error_match = re.search(error_pattern, init_content)
-        assert error_match, "__init__.py must have SDK install instruction in error message"
-        error_version = error_match.group(1)  # e.g., ">=0.2.0,<0.3.0"
+        # Trigger the error with an old SDK version
+        with pytest.raises(ImportError) as exc_info:
+            _check_sdk_version("0.1.33")
 
-        # The versions MUST match
-        assert error_version == pyproject_version, (
-            f"SDK version in error message does NOT match pyproject.toml!\n"
-            f"  Error message says: github-copilot-sdk{error_version}\n"
-            f"  pyproject.toml says: github-copilot-sdk{pyproject_version}\n"
-            f"  Fix __init__.py line ~35 to match pyproject.toml"
+        error_msg = str(exc_info.value)
+
+        # Extract version specifier from pip install instruction in error message
+        pip_match = re.search(r"pip install 'github-copilot-sdk([^']+)'", error_msg)
+        assert pip_match is not None and isinstance(pip_match.group(1), str), (
+            "Error message must contain pip install instruction"
+        )
+        message_specifier = SpecifierSet(pip_match.group(1))
+
+        # Compare normalized specifiers (order-independent)
+        assert message_specifier == metadata_specifier, (
+            f"Error message specifier {str(message_specifier)!r} != "
+            f"metadata specifier {str(metadata_specifier)!r}"
         )
 
 
 class TestPackageVersionConsistency:
     """Verify package __version__ matches pyproject.toml version.
 
-    Contract: provider-protocol:EP:MUST:1 — package identity must be consistent.
+    Contract: provider-protocol:public_api:MUST:1 — package identity must be consistent.
 
     The package __version__ is used by tools like pip show, importlib.metadata,
     and user code that checks provider version. It MUST match pyproject.toml
     to avoid confusion and version drift.
     """
 
-    def test_package_version_matches_pyproject_toml(self) -> None:
-        """Package __version__ must match pyproject.toml version exactly.
+    def test_package_version_matches_installed(self) -> None:
+        """Package __version__ matches installed package version.
 
-        Regression prevention: __version__ could be hardcoded and forgotten
-        during releases, causing version drift.
+        # Contract: provider-protocol:public_api:MUST:1
+        Regression prevention: __version__ could become stale during releases.
+        Uses importlib.metadata as the authoritative source.
         """
-        import re
+        import importlib.metadata
 
-        # Read pyproject.toml to get the authoritative package version
-        pyproject_path = Path("pyproject.toml")
-        pyproject_content = pyproject_path.read_text(encoding="utf-8")
-
-        # Extract version from pyproject.toml [project] section
-        # Looking for: version = "X.Y.Z"
-        version_pattern = r'version\s*=\s*"([^"]+)"'
-        pyproject_match = re.search(version_pattern, pyproject_content)
-        assert pyproject_match, "pyproject.toml must declare version"
-        pyproject_version = pyproject_match.group(1)  # e.g., "2.0.0"
-
-        # Import __version__ from the package
         from amplifier_module_provider_github_copilot import __version__
 
-        # The versions MUST match
-        assert __version__ == pyproject_version, (
-            f"Package __version__ does NOT match pyproject.toml!\n"
-            f"  __version__ says: {__version__}\n"
-            f"  pyproject.toml says: {pyproject_version}\n"
-            f"  Fix __init__.py __version__ = '{pyproject_version}' to match pyproject.toml"
+        # Let PackageNotFoundError propagate — missing package is a test failure
+        installed = importlib.metadata.version("amplifier-module-provider-github-copilot")
+
+        assert __version__ == installed, (
+            f"__version__ {__version__!r} does not match installed version "
+            f"{installed!r}. Fix __version__ in __init__.py to match pyproject.toml."
         )
 
     def test_package_version_is_valid_semver(self) -> None:
@@ -603,85 +548,6 @@ class TestPackageVersionConsistency:
             f"__version__ '{__version__}' is not valid semantic versioning. "
             f"Expected format: X.Y.Z or X.Y.Z-prerelease"
         )
-
-
-# =============================================================================
-# Documentation/YAML Consistency Tests
-# =============================================================================
-
-
-class TestDocstringYamlConsistency:
-    """Verify docstrings match YAML configuration.
-
-    Contract: Three-Medium Architecture — YAML is authoritative for policy values.
-    Docstrings must not contradict YAML.
-    """
-
-    def test_error_translation_default_retryable_docstring_matches_yaml(self) -> None:
-        """error-hierarchy:Default — docstring claim must match errors config.
-
-        Regression prevention: The docstring was saying retryable=True but
-        errors.yaml (authoritative) defines DEFAULT_RETRYABLE = False.
-
-        Updated: errors.yaml is authoritative (kept as YAML per council verdict).
-        DEFAULT_RETRYABLE = False is the canonical value defined in errors.yaml
-        via the default fallback in error_translation.py.
-        """
-        import re
-
-        # DEFAULT_RETRYABLE = False is the canonical value per errors.yaml policy.
-        # All mappings in errors.yaml have explicit retryable fields; the Python
-        # fallback in _load_error_config_cached uses False as the default.
-        config_retryable = "false"
-
-        # Read the module docstring
-        module_path = Path("amplifier_module_provider_github_copilot/error_translation.py")
-        module_content = module_path.read_text(encoding="utf-8")
-
-        # Extract retryable claim from docstring
-        # Looking for: retryable=True or retryable=False
-        docstring_match = re.search(r"retryable=(True|False)", module_content)
-        if docstring_match:
-            docstring_retryable = docstring_match.group(1).lower()  # "true" or "false"
-
-            assert docstring_retryable == config_retryable, (
-                f"error_translation.py docstring contradicts errors.yaml policy!\n"
-                f"  Docstring says: retryable={docstring_retryable.capitalize()}\n"
-                f"  errors.yaml canonical DEFAULT_RETRYABLE = False\n"
-                f"  Fix the docstring to say retryable=False"
-            )
-
-    def test_error_config_python_fallback_matches_yaml(self) -> None:
-        """Three-Medium — Python fallback defaults must match errors.yaml values.
-
-        The _load_error_config_cached function's Python fallback must use False
-        for the retryable default, matching the errors.yaml policy.
-
-        Updated: errors.yaml is authoritative (kept as YAML per council verdict).
-        """
-        import re
-
-        # DEFAULT_RETRYABLE = False per errors.yaml policy (all mappings are explicit,
-        # the Python fallback uses False as the safe default).
-        config_retryable = False
-
-        # Read Python fallback in error_translation.py
-        module_path = Path("amplifier_module_provider_github_copilot/error_translation.py")
-        module_content = module_path.read_text(encoding="utf-8")
-
-        # Find the hardcoded fallback: default.get("retryable", True/False)
-        fallback_match = re.search(
-            r'default\.get\(["\'"]retryable["\'"],\s*(True|False)\)', module_content
-        )
-        if fallback_match:
-            python_fallback = fallback_match.group(1) == "True"
-
-            assert python_fallback == config_retryable, (
-                f"Python fallback contradicts errors.yaml policy!\n"
-                f"  Python fallback: default.get('retryable', {python_fallback})\n"
-                f"  errors.yaml canonical DEFAULT_RETRYABLE = {config_retryable}\n"
-                f"  Fix Python fallback to use False (safe default)"
-            )
 
 
 # =============================================================================
@@ -726,9 +592,9 @@ class TestProductionPathWithMockClient:
         # Create request using proper kernel type
         from amplifier_core.message_models import TextBlock
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -738,10 +604,6 @@ class TestProductionPathWithMockClient:
         # Call the production complete() method
         # This uses _execute_sdk_completion(), NOT completion.py
         response = await provider.complete(request)
-
-        # Verify response has content
-        assert response.content is not None
-        assert len(response.content) > 0
 
         # Verify it's a TextBlock (kernel type)
         first_block = response.content[0]
@@ -759,9 +621,9 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=[])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4-turbo"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -790,9 +652,9 @@ class TestProductionPathWithMockClient:
             "description": "Get weather",
             "parameters": {},
         }
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = [tool]
         request.max_tokens = None
         request.temperature = None
@@ -801,9 +663,8 @@ class TestProductionPathWithMockClient:
 
         await provider.complete(request)
 
-        # Verify tools were passed to session
-        assert mock_client.last_tools is not None
-        assert len(mock_client.last_tools) == 1
+        # Verify tools were passed to session with exact content
+        assert mock_client.last_tools == [tool]
 
     @pytest.mark.asyncio
     async def test_mock_client_session_receives_system_message(self) -> None:
@@ -825,15 +686,15 @@ class TestProductionPathWithMockClient:
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
         # Create request with system message in messages
-        system_msg = MagicMock()
+        system_msg = MagicMock(spec=Message)
         system_msg.role = "system"
         system_msg.content = "You are a helpful coding assistant."
 
-        user_msg = MagicMock()
+        user_msg = MagicMock(spec=Message)
         user_msg.role = "user"
         user_msg.content = "Hello"
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
         request.messages = [system_msg, user_msg]
         request.tools = None
@@ -845,11 +706,10 @@ class TestProductionPathWithMockClient:
         await provider.complete(request)
 
         # Verify system_message was extracted and forwarded
-        assert mock_client.last_system_message is not None, (
+        assert mock_client.last_system_message == "You are a helpful coding assistant.", (
             "system_message was not forwarded to SDK session. "
             "This causes SDK to use default persona instead of bundle instructions."
         )
-        assert mock_client.last_system_message == "You are a helpful coding assistant."
 
     @pytest.mark.asyncio
     async def test_mock_client_propagates_errors_correctly(self) -> None:
@@ -868,9 +728,9 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -885,6 +745,9 @@ class TestProductionPathWithMockClient:
     async def test_session_disconnected_after_completion(self) -> None:
         """Session is always disconnected after completion.
 
+        # Contract: deny-destroy:Ephemeral:MUST:2
+        # Contract: provider-protocol:Complete:MUST:4
+
         Contract: deny-destroy.md — Session MUST be destroyed in finally block
         Replaces: test_completion.py::TestSessionLifecycle::
         test_session_created_and_destroyed_on_success
@@ -895,9 +758,9 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=[text_delta_event("hello")])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -907,12 +770,14 @@ class TestProductionPathWithMockClient:
         await provider.complete(request)
 
         # Session should be disconnected
-        assert mock_client.session_instance is not None
+        assert mock_client.session_instance is not None  # narrowed for pyright
         assert mock_client.session_instance.disconnected is True
 
     @pytest.mark.asyncio
     async def test_session_disconnected_on_error(self) -> None:
         """Session disconnected even when error occurs during send().
+
+        # Contract: deny-destroy:Ephemeral:MUST:2
 
         Contract: deny-destroy.md — Session MUST be destroyed even on error
         Replaces: test_completion.py::TestSessionLifecycle::test_session_destroyed_on_error
@@ -928,9 +793,9 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -941,13 +806,14 @@ class TestProductionPathWithMockClient:
             await provider.complete(request)
 
         # Session should still be disconnected despite error
-        assert mock_client.session_instance is not None
+        assert mock_client.session_instance is not None  # narrowed for pyright
         assert mock_client.session_instance.disconnected is True
 
     @pytest.mark.asyncio
     async def test_text_content_accumulated_correctly(self) -> None:
         """Multiple text deltas are accumulated into single response.
 
+        Contract: streaming-contract:Response:MUST:1
         Contract: streaming-contract.md — Text content MUST be accumulated
         Replaces: test_completion.py::TestResponseConstruction::test_text_content_accumulated
         """
@@ -963,9 +829,9 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=events)
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -977,7 +843,6 @@ class TestProductionPathWithMockClient:
         # Should have accumulated text
         from amplifier_core.message_models import TextBlock
 
-        assert len(response.content) > 0
         first_block = response.content[0]
         assert isinstance(first_block, TextBlock)
         assert first_block.text == "Hello World!"
@@ -996,9 +861,9 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=[])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -1007,20 +872,17 @@ class TestProductionPathWithMockClient:
 
         response = await provider.complete(request)
 
-        # Should return valid response with empty content
-        assert response is not None
-        # Content may be empty or contain empty text block
-        if response.content:
-            from amplifier_core.message_models import TextBlock
-
-            first_block = response.content[0]
-            if isinstance(first_block, TextBlock):
-                assert first_block.text == ""
+        # Empty events MUST produce empty content list
+        # Contract: streaming-contract:StreamingResponse:MUST:4 — content_blocks None when empty
+        assert response.content == [], (
+            f"Expected empty content list for no-event response, got {response.content}"
+        )
 
     @pytest.mark.asyncio
     async def test_error_during_send_translated(self) -> None:
         """SDK errors during send() are translated to kernel errors.
 
+        Contract: sdk-boundary:Translation:MUST:2
         Contract: error-hierarchy.md — SDK errors MUST be translated
         Replaces: test_completion.py::TestErrorHandling::test_sdk_error_translated
         """
@@ -1035,9 +897,9 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -1055,7 +917,7 @@ class TestProductionPathWithMockClient:
     async def test_original_exception_chained(self) -> None:
         """Original SDK exception is preserved via __cause__.
 
-        Contract: error-hierarchy.md — Original exception MUST be chained
+        Contract: error-hierarchy:Translation:MUST:3
         Replaces: test_completion.py::TestErrorHandling::test_error_preserves_original
         """
         from amplifier_core.llm_errors import LLMError
@@ -1070,9 +932,9 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -1106,9 +968,9 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -1200,9 +1062,9 @@ class TestRuntimeConfigOverride:
         )
 
         # Request WITHOUT model specified — should use runtime default
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = None  # No model in request
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -1234,9 +1096,9 @@ class TestRuntimeConfigOverride:
         )
 
         # Request WITH explicit model
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = request_model  # Explicit model in request
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -1252,6 +1114,7 @@ class TestRuntimeConfigOverride:
         """Multiple providers with different configs don't conflict.
 
         Contract: behaviors:ModelSelection:MUST:2
+        Contract: behaviors:Models:MUST:2
         load_models_config() uses @lru_cache — MUST NOT mutate cached config.
         """
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
@@ -1326,9 +1189,9 @@ class TestCancelledErrorTranslation:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None
@@ -1372,14 +1235,14 @@ class TestCancelledErrorTranslation:
                 nonlocal call_count
                 call_count += 1
                 raise asyncio.CancelledError("cancelled")
-                yield  # noqa: unreachable
+                yield  # noqa: F821
 
         mock_client = CountingCancelMock(events=[])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock()
+        request = MagicMock(spec=ChatRequest)
         request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
+        request.messages = [MagicMock(spec=Message, role="user", content="test")]
         request.tools = None
         request.max_tokens = None
         request.temperature = None

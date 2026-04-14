@@ -48,6 +48,7 @@ class TestFourWayGate:
 
     def test_code_events_match_config(self) -> None:
         """Config domain_type values must be valid DomainEventType members."""
+        # Contract: event-vocabulary:Bridge:MUST:2
         code_events = self._get_code_events()
         config_events = self._get_config_events()
         invalid = config_events - code_events
@@ -57,6 +58,7 @@ class TestFourWayGate:
 
     def test_code_events_documented_in_contract(self) -> None:
         """All DomainEventType members must appear in contract."""
+        # Contract: event-vocabulary:Events:MUST:1
         code_events = self._get_code_events()
         contract_events = self._get_contract_events()
         undocumented = code_events - contract_events
@@ -67,6 +69,7 @@ class TestFourWayGate:
 
     def test_contract_events_exist_in_code(self) -> None:
         """Contract must not document non-existent events."""
+        # Contract: event-vocabulary:Events:MUST:1
         code_events = self._get_code_events()
         contract_events = self._get_contract_events()
         phantom = contract_events - code_events

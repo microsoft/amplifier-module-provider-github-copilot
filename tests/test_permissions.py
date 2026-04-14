@@ -38,7 +38,10 @@ class TestEnsureExecutableErrors:
                 "amplifier_module_provider_github_copilot._platform.get_platform_info",
                 return_value=unix_info,
             ),
-            patch.object(Path, "chmod", side_effect=PermissionError("permission denied")),
+            patch(
+                "amplifier_module_provider_github_copilot._permissions.Path.chmod",
+                side_effect=PermissionError("permission denied"),
+            ),
         ):
             result = ensure_executable(binary)
 
@@ -64,7 +67,10 @@ class TestEnsureExecutableErrors:
                 "amplifier_module_provider_github_copilot._platform.get_platform_info",
                 return_value=unix_info,
             ),
-            patch.object(Path, "chmod", side_effect=OSError("read-only filesystem")),
+            patch(
+                "amplifier_module_provider_github_copilot._permissions.Path.chmod",
+                side_effect=OSError("read-only filesystem"),
+            ),
         ):
             result = ensure_executable(binary)
 
@@ -93,7 +99,10 @@ class TestEnsureExecutableErrors:
                 "amplifier_module_provider_github_copilot._platform.get_platform_info",
                 return_value=unix_info,
             ),
-            patch.object(Path, "chmod", side_effect=OSError("generic OS error")),
+            patch(
+                "amplifier_module_provider_github_copilot._permissions.Path.chmod",
+                side_effect=OSError("generic OS error"),
+            ),
         ):
             result = ensure_executable(binary)
 
@@ -117,7 +126,9 @@ class TestEnsureExecutableErrors:
         unix_info = self._unix_platform_info()
 
         # Mock stat to return a mode with S_IXUSR set (already executable)
-        mock_stat_result = MagicMock()
+        import os
+
+        mock_stat_result = MagicMock(spec=os.stat_result)
         mock_stat_result.st_mode = 0o755  # Has execute bits
 
         chmod_mock = MagicMock()
@@ -127,9 +138,18 @@ class TestEnsureExecutableErrors:
                 "amplifier_module_provider_github_copilot._platform.get_platform_info",
                 return_value=unix_info,
             ),
-            patch.object(Path, "is_file", return_value=True),
-            patch.object(Path, "stat", return_value=mock_stat_result),
-            patch.object(Path, "chmod", chmod_mock),
+            patch(
+                "amplifier_module_provider_github_copilot._permissions.Path.is_file",
+                return_value=True,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot._permissions.Path.stat",
+                return_value=mock_stat_result,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot._permissions.Path.chmod",
+                chmod_mock,
+            ),
         ):
             result = ensure_executable(binary)
 

@@ -18,7 +18,7 @@ class TestProviderCloseWiring:
     async def test_close_delegates_to_client_close(self):
         """provider.close() MUST call client.close().
 
-        Contract: provider-protocol:close:MUST:1
+        Contract: provider-protocol:mount:MUST:2
         """
         provider = GitHubCopilotProvider()
         # Mock the client
@@ -33,7 +33,7 @@ class TestProviderCloseWiring:
     async def test_close_safe_when_client_not_initialized(self):
         """provider.close() MUST be safe when _client is None.
 
-        Contract: provider-protocol:close:MUST:2 (defensive)
+        Contract: provider-protocol:mount:MUST:2 (defensive)
         """
         provider = GitHubCopilotProvider()
         provider._client = None  # type: ignore[assignment,reportPrivateUsage]  # Testing internal state
@@ -45,7 +45,7 @@ class TestProviderCloseWiring:
     async def test_close_safe_when_client_missing_attribute(self):
         """provider.close() MUST be safe when _client attribute missing.
 
-        Contract: provider-protocol:close:MUST:2 (defensive)
+        Contract: provider-protocol:mount:MUST:2 (defensive)
         """
         provider = GitHubCopilotProvider()
         # Delete _client attribute to simulate uninitialized state
@@ -114,7 +114,7 @@ class TestCancelEmitTasks:
     async def test_close_delegates_to_cancel_emit_tasks(self) -> None:
         """close() calls cancel_emit_tasks() to clean up streaming tasks.
 
-        Contract: provider-protocol:close:MUST:1
+        Contract: provider-protocol:mount:MUST:2
         Contract: streaming-contract:ProgressiveStreaming:SHOULD:3
         """
         from unittest.mock import patch

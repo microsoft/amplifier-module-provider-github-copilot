@@ -32,7 +32,6 @@ class TestErrorTranslationLogging:
         """AC-1: logger imported in error_translation.py."""
         from amplifier_module_provider_github_copilot import error_translation
 
-        assert hasattr(error_translation, "logger")
         assert isinstance(error_translation.logger, logging.Logger)
 
     def test_debug_log_emitted_for_translation(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -363,14 +362,15 @@ class TestObservabilityConfigLoading:
     def test_observability_config_has_event_names(self) -> None:
         """Loaded config has event_names."""
         from amplifier_module_provider_github_copilot.observability import (
+            EventNames,
             load_observability_config,
         )
 
         config = load_observability_config()
-        assert config.event_names is not None
-        # Check key event name attributes exist
-        assert hasattr(config.event_names, "llm_request")
-        assert hasattr(config.event_names, "llm_response")
+        # Contract: observability:Events:MUST:2,3
+        assert isinstance(config.event_names, EventNames)
+        assert config.event_names.llm_request == "llm:request"
+        assert config.event_names.llm_response == "llm:response"
 
     def test_observability_config_has_status_values(self) -> None:
         """Loaded config has status values."""
@@ -379,9 +379,9 @@ class TestObservabilityConfigLoading:
         )
 
         config = load_observability_config()
-        assert config.status is not None
-        assert hasattr(config.status, "ok")
-        assert hasattr(config.status, "error")
+        # Contract: observability:Events:MUST:2,3 (status used in emitted events)
+        assert config.status.ok == "ok"
+        assert config.status.error == "error"
 
 
 class TestLlmLifecycleContext:
@@ -421,5 +421,4 @@ class TestLlmLifecycleContext:
 
         async with llm_lifecycle(coordinator=None, model="gpt-4o", config=None) as ctx:
             # Config should be loaded from defaults
-            assert ctx.config is not None
             assert ctx.config.provider_name == "github-copilot"

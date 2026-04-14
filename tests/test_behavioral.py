@@ -15,7 +15,16 @@ The amplifier-core pytest plugin auto-detects our module from directory name
 
 from __future__ import annotations
 
+import pytest
 from amplifier_core.validation.behavioral import ProviderBehaviorTests
+
+from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+
+@pytest.fixture
+def provider() -> GitHubCopilotProvider:
+    """Lightweight provider instance for extended behavioral assertions."""
+    return GitHubCopilotProvider(config=None, coordinator=None)
 
 
 class TestGitHubCopilotBehavior(ProviderBehaviorTests):
@@ -30,3 +39,31 @@ class TestGitHubCopilotBehavior(ProviderBehaviorTests):
     """
 
     pass
+
+
+class TestGitHubCopilotBehaviorExtended:
+    """Extended behavioral assertions beyond the inherited base class.
+
+    The base class only checks presence of the name attribute.
+    These tests assert the SPECIFIC contract values.
+    """
+
+    def test_provider_name_is_exact_string(self, provider: GitHubCopilotProvider) -> None:
+        """provider.name MUST equal the exact string "github-copilot".
+
+        # Contract: provider-protocol:name:MUST:1
+        """
+        assert provider.name == "github-copilot"
+
+    def test_parse_tool_calls_is_synchronous(self, provider: GitHubCopilotProvider) -> None:
+        """parse_tool_calls must be a plain function — the kernel never awaits it.
+
+        Contract: provider-protocol:parse_tool_calls:MUST:5
+
+        Complements the deeper contract-protocol test with a behavioral smoke-check:
+        the method obtained from a live provider instance must not be a coroutine
+        function regardless of how it is accessed (instance vs class vs staticmethod).
+        """
+        import inspect
+
+        assert not inspect.iscoroutinefunction(provider.parse_tool_calls)

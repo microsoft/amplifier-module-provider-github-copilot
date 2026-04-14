@@ -36,7 +36,7 @@ class TestCompletionGuard:
             )
         )
 
-        assert accumulator.is_complete
+        assert accumulator.is_complete is True
 
         # Late CONTENT_DELTA should be ignored
         accumulator.add(
@@ -72,7 +72,7 @@ class TestCompletionGuard:
             )
         )
 
-        assert accumulator.is_complete
+        assert accumulator.is_complete is True
 
         # Late CONTENT_DELTA should be ignored
         accumulator.add(
@@ -108,7 +108,7 @@ class TestCompletionGuard:
             )
         )
 
-        assert accumulator.is_complete
+        assert accumulator.is_complete is True
         assert len(accumulator.tool_calls) == 1
 
         # Late TOOL_CALL should be ignored
@@ -173,7 +173,7 @@ class TestCompletionGuard:
         assert len(accumulator.tool_calls) == 1
         assert accumulator.usage == {"input_tokens": 10, "output_tokens": 20}
         assert accumulator.finish_reason == "stop"
-        assert accumulator.is_complete
+        assert accumulator.is_complete is True
 
     def test_thinking_content_after_completion_is_ignored(self):
         """Thinking CONTENT_DELTA after TURN_COMPLETE MUST be ignored.
@@ -240,7 +240,7 @@ class TestCompletionGuard:
             )
         )
 
-        assert accumulator.is_complete
+        assert accumulator.is_complete is True
 
         # Usage arrives AFTER completion (SDK actual behavior)
         accumulator.add(
@@ -251,7 +251,7 @@ class TestCompletionGuard:
         )
 
         # Usage MUST be captured even after completion
-        assert accumulator.usage is not None
+        assert isinstance(accumulator.usage, dict)
         assert accumulator.usage["input_tokens"] == 100
         assert accumulator.usage["output_tokens"] == 50
 
@@ -272,7 +272,7 @@ class TestCompletionGuard:
             )
         )
 
-        assert accumulator.is_complete
+        assert accumulator.is_complete is True
 
         # Usage arrives AFTER error
         accumulator.add(
@@ -283,6 +283,6 @@ class TestCompletionGuard:
         )
 
         # Usage MUST be captured even after error
-        assert accumulator.usage is not None
+        assert isinstance(accumulator.usage, dict)
         assert accumulator.usage["input_tokens"] == 50
         assert accumulator.usage["output_tokens"] == 0

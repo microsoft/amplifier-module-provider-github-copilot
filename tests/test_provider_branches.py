@@ -189,7 +189,6 @@ class TestListModelsCacheFallback:
         ):
             models = await provider.list_models()
 
-        assert models is not None
         assert len(models) == 1
 
     @pytest.mark.asyncio
@@ -316,7 +315,11 @@ class TestExhaustedFakeToolCorrections:
 
         # Should complete (not raise) — exhausted corrections still returns response
         response = await provider.complete(request)
-        assert response is not None
+        # Contract: provider-protocol:complete:MUST:6
+        # (detects fake tools, retries, exhaustion fallback)
+        assert response.text == _FAKE_TOOL_TEXT
+        assert len(response.content) == 1
+        assert response.content[0].text == _FAKE_TOOL_TEXT
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +369,7 @@ class TestEmitContentAsyncPrimitive:
 
         coordinator.hooks.emit.assert_called_once()
         content_payload = coordinator.hooks.emit.call_args[0][1]["content"]
+        # Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
         assert content_payload == {"value": 42}
 
 
@@ -493,6 +497,6 @@ class TestUsageInjectionFromUsageHolder:
             response = await provider.complete(request)
 
         # Usage was injected from usage_holder into accumulator at lines 751-758
-        assert response.usage is not None
+        assert response.usage is not None  # narrowed for pyright
         assert response.usage.input_tokens == 10
         assert response.usage.output_tokens == 20

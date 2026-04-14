@@ -514,8 +514,11 @@ class TestEventOrdering:
         request_idx = next((i for i, e in enumerate(emitted_events) if e == "llm:request"), None)
         response_idx = next((i for i, e in enumerate(emitted_events) if e == "llm:response"), None)
 
-        assert request_idx is not None, "llm:request event not found"
-        assert response_idx is not None, "llm:response event not found"
+        # Contract: observability:Events:MUST:2,3
+        assert "llm:request" in emitted_events, "llm:request event not found"
+        assert "llm:response" in emitted_events, "llm:response event not found"
+        assert request_idx is not None  # narrowed for pyright
+        assert response_idx is not None  # narrowed for pyright
         assert request_idx < response_idx, (
             f"llm:request ({request_idx}) must precede llm:response ({response_idx})"
         )

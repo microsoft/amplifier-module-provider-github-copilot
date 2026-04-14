@@ -16,14 +16,11 @@ Session lifecycle now handled by CopilotClientWrapper.session() context manager.
 class TestDenyAllConstant:
     """Test DENY_ALL constant (now in sdk_adapter/client.py)."""
 
-    def test_deny_all_exists(self) -> None:
-        """DENY_ALL constant exists in client.py."""
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import DENY_ALL
-
-        assert DENY_ALL is not None
-
     def test_deny_all_has_required_keys(self) -> None:
-        """DENY_ALL constant has permissionDecision, reason, and suppressOutput."""
+        """DENY_ALL constant has permissionDecision, reason, and suppressOutput.
+
+        Contract: deny-destroy:DenyHook:MUST:2
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import DENY_ALL
 
         assert DENY_ALL["permissionDecision"] == "deny"

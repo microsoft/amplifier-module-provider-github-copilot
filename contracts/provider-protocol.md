@@ -50,6 +50,7 @@ async def mount(
 | `provider-protocol:mount:MUST:1` | Accepts ModuleCoordinator type |
 | `provider-protocol:mount:MUST:2` | Returns cleanup callable |
 | `provider-protocol:mount:MUST:3` | Registers provider on coordinator |
+| `provider-protocol:mount:MUST:5` | Uses process-level singleton for SDK client |
 
 ---
 
@@ -185,6 +186,28 @@ def parse_tool_calls(self, response: ChatResponse) -> list[ToolCall]: ...
 - **MUST** return empty list if no tool calls
 - **MUST NOT** execute tools (orchestrator responsibility)
 - **MUST** preserve tool call IDs for result correlation
+- **MUST** be synchronous — callers MUST NOT await the return value
+
+**Synchronous Contract:**
+
+`parse_tool_calls` is defined as a plain function (not a coroutine) at every
+layer of the Amplifier stack. This is not a convention — it is a hard requirement
+imposed by the kernel bridges that call this method without `await`:
+
+- **Python Protocol** (`amplifier_core/interfaces.py`, class `Provider(Protocol)`):
+  `def parse_tool_calls(self, response: ChatResponse) -> list[ToolCall]`
+- **Rust trait** (`amplifier-core/crates/amplifier-core/src/traits.rs:188`):
+  `fn parse_tool_calls(&self, response: &ChatResponse) -> Vec<ToolCall>`
+- **WASM bridge** (`amplifier-core/crates/amplifier-core/src/bridges/wasm_provider.rs:255`):
+  inline comment — *"Call WASM synchronously. parse_tool_calls is not async in the trait"*
+- **gRPC bridge** (`amplifier-core/crates/amplifier-core/src/bridges/grpc_provider.rs:174`):
+  `fn parse_tool_calls(&self, response: &ChatResponse) -> Vec<ToolCall>`
+
+**Consequence of violation:** An `async def` implementation returns a coroutine
+object. Python coroutines are truthy — the kernel's tool-dispatch loop would
+interpret every response as having tool calls regardless of actual content. This
+failure is silent: no exception is raised, no type error, no warning. The kernel
+enters an infinite dispatch loop on ordinary text responses.
 
 **ToolCall Structure:**
 ```python
@@ -202,6 +225,7 @@ class ToolCall:
 | `provider-protocol:parse_tool_calls:MUST:2` | Returns empty list when none |
 | `provider-protocol:parse_tool_calls:MUST:3` | Preserves tool call IDs |
 | `provider-protocol:parse_tool_calls:MUST:4` | Uses arguments, not input |
+| `provider-protocol:parse_tool_calls:MUST:5` | Is synchronous — callers must not await |
 
 ---
 

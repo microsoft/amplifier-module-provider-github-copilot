@@ -15,6 +15,7 @@ These tests verify:
 
 from __future__ import annotations
 
+import importlib.machinery
 import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -230,12 +231,15 @@ class TestSdkBinaryDiscovery:
             get_sdk_binary_path,
         )
 
-        mock_spec = MagicMock()
+        mock_spec = MagicMock(spec=importlib.machinery.ModuleSpec)
         mock_spec.origin = "/fake/copilot/__init__.py"
 
         with (
             patch("importlib.util.find_spec", return_value=mock_spec),
-            patch.object(Path, "is_file", return_value=False),
+            patch(
+                "amplifier_module_provider_github_copilot._platform.Path.is_file",
+                return_value=False,
+            ),
         ):
             result = get_sdk_binary_path()
 
@@ -260,13 +264,13 @@ class TestSdkBinaryDiscovery:
         binary = bin_dir / get_cli_binary_name()
         binary.touch()
 
-        mock_spec = MagicMock()
+        mock_spec = MagicMock(spec=importlib.machinery.ModuleSpec)
         mock_spec.origin = str(pkg_dir / "__init__.py")
 
         with patch("importlib.util.find_spec", return_value=mock_spec):
             result = get_sdk_binary_path()
 
-        assert result is not None
+        assert isinstance(result, Path)
         assert result.name == get_cli_binary_name()
 
     def test_invalid_origin_returns_none(self) -> None:
@@ -340,7 +344,6 @@ class TestPathFallback:
         with patch("shutil.which", return_value="/usr/local/bin/copilot"):
             result = find_cli_in_path()
 
-        assert result is not None
         assert result == Path("/usr/local/bin/copilot")
 
     def test_alternate_binary_found_when_primary_missing(self) -> None:
@@ -378,7 +381,6 @@ class TestPathFallback:
         ):
             result = find_cli_in_path()
 
-        assert result is not None
         assert "copilot.exe" in str(result)
 
 
@@ -501,9 +503,10 @@ class TestPermissionRepair:
 
             assert result is True
 
-    @pytest.mark.skipif(
+    @pytest.mark.xfail(
         __import__("sys").platform == "win32",
         reason="Unix permission tests require POSIX filesystem",
+        strict=False,
     )
     def test_already_executable_is_idempotent(self, tmp_path: Path) -> None:
         """Returns True without chmod if already executable.
@@ -538,9 +541,10 @@ class TestPermissionRepair:
             # Mode should be unchanged
             assert binary.stat().st_mode & stat.S_IXUSR
 
-    @pytest.mark.skipif(
+    @pytest.mark.xfail(
         __import__("sys").platform == "win32",
         reason="Unix permission tests require POSIX filesystem",
+        strict=False,
     )
     def test_adds_execute_permission(self, tmp_path: Path) -> None:
         """Adds user+group execute permission.

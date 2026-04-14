@@ -116,9 +116,12 @@ class TestContextExtractionFailure:
 
         exc = TestError("Some error without tool pattern")
 
-        # This should NOT raise
+        # Contract: error-hierarchy:Translation:MUST:1 (never raises)
+        # Contract: error-hierarchy:Kernel:MUST:1 (kernel types only)
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
         result = translate_sdk_error(exc, config)
-        assert result is not None
+        assert isinstance(result, ProviderUnavailableError)
         assert "Some error without tool pattern" in str(result)
 
     def test_invalid_regex_does_not_raise(self) -> None:
@@ -139,9 +142,13 @@ class TestContextExtractionFailure:
 
         exc = TestError("Some error")
 
-        # Should not raise despite invalid regex
+        # Contract: error-hierarchy:Translation:MUST:1 (never raises)
+        # Contract: error-hierarchy:Kernel:MUST:1 (kernel types only)
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
         result = translate_sdk_error(exc, config)
-        assert result is not None
+        assert isinstance(result, ProviderUnavailableError)
+        assert "Some error" in str(result)
 
     def test_partial_extraction_success(self) -> None:
         """If one pattern fails but another succeeds, successful one is used."""
@@ -159,10 +166,15 @@ class TestContextExtractionFailure:
         config = ErrorConfig(mappings=[mapping])
 
         exc = Exception("tool 'apply_patch' error")
-        result = translate_sdk_error(exc, config)
 
-        # Translation succeeds
-        assert result is not None
+        # Contract: error-hierarchy:Translation:MUST:2 (uses config patterns)
+        # Contract: error-hierarchy:Kernel:MUST:1 (kernel types only)
+        from amplifier_core.llm_errors import InvalidToolCallError
+
+        result = translate_sdk_error(exc, config)
+        assert isinstance(result, InvalidToolCallError)
+        assert "tool_name=apply_patch" in str(result)
+        assert result.retryable is False
 
 
 class TestContextExtractionLogging:
@@ -237,10 +249,15 @@ class TestEmptyToolArgumentsWarning:
 
         exc = Exception("Tool call with empty arguments {}")
 
+        # Contract: error-hierarchy:Translation:MUST:1 (never raises)
+        # Contract: error-hierarchy:Kernel:MUST:1 (kernel types only)
+        from amplifier_core.llm_errors import InvalidToolCallError
+
         with caplog.at_level(logging.WARNING):
             result = translate_sdk_error(exc, config)
 
-        assert result is not None
+        assert isinstance(result, InvalidToolCallError)
+        assert result.retryable is False
 
 
 class TestConfigLoading:

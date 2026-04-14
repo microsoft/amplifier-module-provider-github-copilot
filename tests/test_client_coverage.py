@@ -49,6 +49,8 @@ class TestLoadErrorConfigOnceFallback:
         """When load_error_config() succeeds, returns its result.
 
         Happy path — verifies the try branch (line 122).
+
+        # Contract: error-hierarchy:config:MUST:2
         """
         from amplifier_module_provider_github_copilot.error_translation import ErrorConfig
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
@@ -90,7 +92,7 @@ class TestDoubleCheckInsideLock:
         # then returns a mock client on the second call (inside-lock double-check).
         # This mimics another coroutine having initialized between the two checks.
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=object)  # Minimal spec — SDK client unavailable in test mode
 
         class RaceSimulatingWrapper(CopilotClientWrapper):
             _call_count: int = 0
@@ -155,7 +157,7 @@ class TestIsHealthyWhenStopped:
     async def test_close_sets_stopped_flag(self) -> None:
         """close() sets _stopped=True, making is_healthy() return False.
 
-        Contract: sdk-boundary:Close:MUST:1
+        Contract: sdk-boundary:Lifecycle:MUST:1
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
@@ -181,6 +183,8 @@ class TestGetErrorConfigLazyInit:
         """_get_error_config() creates error config on first call.
 
         Lines 123-126 (happy path) in sdk_adapter/client.py
+
+        # Contract: error-hierarchy:config:MUST:2
         """
         from amplifier_module_provider_github_copilot.error_translation import ErrorConfig
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
@@ -238,7 +242,7 @@ class TestDenyPermissionRequestHappyPath:
                 self.kind = kind
                 self.message = message
 
-        mock_request = MagicMock()
+        mock_request = MagicMock(spec=object)  # Minimal spec — permission request arg is unused
 
         with patch(
             "amplifier_module_provider_github_copilot.sdk_adapter._imports.PermissionRequestResult",

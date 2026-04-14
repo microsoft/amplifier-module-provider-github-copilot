@@ -16,6 +16,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+# Stubs for spec-constrained mocks (SDK types are not importable at test time)
+class _StubCopilotSession:
+    async def disconnect(self) -> None: ...
+    async def send(self, *args: Any, **kwargs: Any) -> None: ...
+    def on(self, *args: Any, **kwargs: Any) -> None: ...
+
+
+class _StubCopilotClient:
+    async def create_session(self, *args: Any, **kwargs: Any) -> _StubCopilotSession: ...
+
+
 # Mock SubprocessConfig that accepts github_token
 class MockSubprocessConfig:
     """Mock SubprocessConfig that accepts github_token."""
@@ -39,11 +50,11 @@ class TestConcurrentSessions:
         create_session_count = 0
         client_start_count = 0
 
-        mock_session = MagicMock()
-        mock_session.disconnect = AsyncMock()
+        mock_session = MagicMock(spec=_StubCopilotSession)
+        mock_session.disconnect = AsyncMock(spec=_StubCopilotSession.disconnect)
         mock_session.session_id = "test-session"
 
-        mock_client_instance = AsyncMock()
+        mock_client_instance = MagicMock(spec=_StubCopilotClient)
 
         async def mock_start() -> None:
             nonlocal client_start_count
@@ -64,7 +75,7 @@ class TestConcurrentSessions:
         with (
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                MagicMock(return_value=mock_client_instance),
+                MagicMock(spec=_StubCopilotClient, return_value=mock_client_instance),
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
@@ -107,10 +118,10 @@ class TestConcurrentSessions:
 
         init_count = 0
 
-        mock_session = MagicMock()
-        mock_session.disconnect = AsyncMock()
+        mock_session = MagicMock(spec=_StubCopilotSession)
+        mock_session.disconnect = AsyncMock(spec=_StubCopilotSession.disconnect)
 
-        mock_client_instance = AsyncMock()
+        mock_client_instance = MagicMock(spec=_StubCopilotClient)
 
         async def mock_start() -> None:
             nonlocal init_count
@@ -119,13 +130,15 @@ class TestConcurrentSessions:
             await asyncio.sleep(0.05)
 
         mock_client_instance.start = mock_start
-        mock_client_instance.create_session = AsyncMock(return_value=mock_session)
+        mock_client_instance.create_session = AsyncMock(
+            spec=_StubCopilotClient.create_session, return_value=mock_session
+        )
 
         # Patch CopilotClient and SubprocessConfig in _imports.py
         with (
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                MagicMock(return_value=mock_client_instance),
+                MagicMock(spec=_StubCopilotClient, return_value=mock_client_instance),
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",

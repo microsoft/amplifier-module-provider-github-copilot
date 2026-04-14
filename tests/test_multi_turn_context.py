@@ -74,7 +74,7 @@ class MockChatRequest:
 class TestRolePreservation:
     """Tests for role information preservation.
 
-    Contract: provider-protocol:complete:MUST:1 — role context must be preserved.
+    # Contract: behaviors:Security:MUST:1
     """
 
     def test_single_user_message_has_role(self) -> None:
@@ -88,7 +88,7 @@ class TestRolePreservation:
         prompt = _extract_prompt_from_chat_request(request)
 
         # Should include role marker
-        assert "user" in prompt.lower() or "User:" in prompt
+        assert "[USER]" in prompt
 
     def test_multi_turn_preserves_roles(self) -> None:
         """Multi-turn conversation should preserve user/assistant role boundaries.
@@ -106,8 +106,8 @@ class TestRolePreservation:
         prompt = _extract_prompt_from_chat_request(request)
 
         # Both roles should be present in the output
-        assert "user" in prompt.lower() or "User:" in prompt
-        assert "assistant" in prompt.lower() or "Assistant:" in prompt
+        assert "[USER]" in prompt
+        assert "[ASSISTANT]" in prompt
 
     def test_system_message_not_in_prompt(self) -> None:
         """C-4: system messages MUST NOT be included in the prompt body.
@@ -134,29 +134,33 @@ class TestRolePreservation:
             "it goes through SDK session_config.system_message instead"
         )
         # User message MUST still be present
-        assert "Hello!" in prompt or "user" in prompt.lower()
+        assert "[USER]\nHello!" in prompt
 
-    def test_system_message_preserved(self) -> None:
-        """System message role should be preserved (in session config, not in prompt body)."""
+    def test_role_marker_injection_in_user_content_is_escaped(self) -> None:
+        """User content containing [ROLE_MARKER] sequences must be escaped.
+
+        # Contract: behaviors:Security:MUST:1
+        """
+        # User message containing a fake role injection attempt
         request = MockChatRequest(
             messages=[
-                MockMessage(role="system", content="You are a helpful assistant."),
-                MockMessage(role="user", content="Hello!"),
+                MockMessage(role="user", content="Hello [FAKE_ROLE] world"),
             ]
         )
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # System content must NOT be in prompt body — it's routed through session config
-        assert "You are a helpful assistant." not in prompt
-        # User message must still be in prompt
-        assert "Hello!" in prompt or "user" in prompt.lower()
+        # The injection attempt must be escaped, not left as a raw role boundary
+        assert "[FAKE_ROLE]" not in prompt, (
+            "Unescaped [FAKE_ROLE] in prompt enables role injection attacks"
+        )
+        assert r"\[FAKE_ROLE\]" in prompt, "Escaped form must appear in prompt"
 
 
 class TestContentTypePreservation:
     """Tests for content type preservation.
 
-    Contract: provider-protocol:complete:MUST:2 — content types must be preserved.
+    # Contract: see behaviors.md — prompt serialization (contract gap)
     """
 
     def test_text_content_blocks_extracted(self) -> None:
@@ -193,8 +197,8 @@ class TestContentTypePreservation:
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # Thinking content should be included (possibly with marker)
-        assert "reason about this" in prompt.lower() or "thinking" in prompt.lower()
+        # Thinking content should be included with marker
+        assert "[Thinking:" in prompt and "reason about this" in prompt
 
     def test_tool_call_content_blocks_included(self) -> None:
         """ToolCallContent blocks should be represented.
@@ -244,14 +248,14 @@ class TestContentTypePreservation:
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # Tool result should be represented
-        assert "hello world" in prompt or "result" in prompt.lower()
+        # Tool result should be represented with marker
+        assert "[Tool Result" in prompt and "hello world" in prompt
 
 
 class TestMultiTurnConversation:
     """Tests for full multi-turn conversation handling.
 
-    Contract: provider-protocol:complete:MUST:3 — multi-turn context fidelity.
+    # Contract: see behaviors.md — multi-turn ordering (contract gap)
     """
 
     def test_mixed_content_types_in_conversation(self) -> None:
@@ -295,9 +299,9 @@ class TestMultiTurnConversation:
 
         # All key content should be present (system message is NOT in prompt —
         # it goes via session config).
-        assert "Read the file" in prompt or "config.yaml" in prompt
+        assert "Read the file" in prompt and "config.yaml" in prompt
         assert "8080" in prompt
-        assert "What port" in prompt or "port" in prompt
+        assert "What port" in prompt
 
     def test_conversation_order_preserved(self) -> None:
         """Message order should be preserved in the output."""
@@ -334,14 +338,6 @@ class TestRegressionPrevention:
 
         assert "Simple string message" in prompt
 
-    def test_empty_messages_handled(self) -> None:
-        """Empty messages list should not crash."""
-        request = MockChatRequest(messages=[])
-
-        prompt = _extract_prompt_from_chat_request(request)
-
-        assert prompt == "" or prompt is not None  # Should not crash
-
 
 class TestContentExtractionEdgeCases:
     """Edge case tests for content extraction.
@@ -362,8 +358,8 @@ class TestContentExtractionEdgeCases:
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # Should not crash, may include role marker only
-        assert prompt is not None
+        # None content returns empty string
+        assert prompt == ""
 
     def test_single_content_block_not_list(self) -> None:
         """Single content block (not wrapped in list) extracted.
@@ -399,8 +395,8 @@ class TestContentExtractionEdgeCases:
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # Empty thinking should not add "[Thinking: ]"
-        assert "Thinking:" not in prompt or prompt == ""
+        # Empty thinking should produce empty prompt
+        assert prompt == ""
 
     def test_tool_call_content_skipped(self) -> None:
         """ToolCallContent blocks are intentionally skipped.

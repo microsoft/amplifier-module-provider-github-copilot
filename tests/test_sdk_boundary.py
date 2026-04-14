@@ -7,6 +7,7 @@ Contract: contracts/sdk-boundary.md, contracts/deny-destroy.md
 from __future__ import annotations
 
 import sys
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,12 +21,28 @@ from amplifier_module_provider_github_copilot.sdk_adapter.client import (
 from tests.fixtures.config_capture import ConfigCapturingMock
 
 
+# Stub classes for MagicMock spec= (SDK types not importable at runtime)
+class _StubCopilotSession:
+    """Stub matching CopilotSession interface for spec=."""
+
+    async def disconnect(self) -> None: ...
+
+
+class _StubCopilotClient:
+    """Stub matching CopilotClient interface for spec=."""
+
+    async def create_session(self, **kwargs: Any) -> _StubCopilotSession: ...
+
+
 class TestSDKImportError:
     """AC-2: SDK ImportError raises ProviderUnavailableError."""
 
     @pytest.mark.asyncio
     async def test_sdk_import_error_raises_provider_unavailable(self) -> None:
-        """Missing SDK raises ProviderUnavailableError or other LLMError."""
+        """Missing SDK raises ProviderUnavailableError or other LLMError.
+
+        Contract: sdk-boundary:Membrane:MUST:5
+        """
         # Remove copilot from sys.modules if present to force ImportError
         copilot_module = sys.modules.pop("copilot", None)
         try:
@@ -52,24 +69,27 @@ class TestDenyHookOnWrapper:
 
     @pytest.mark.asyncio
     async def test_deny_hook_registered_on_wrapper_session(self) -> None:
-        """CopilotClientWrapper.session() passes deny hook via config."""
-        from typing import Any
+        """CopilotClientWrapper.session() passes deny hook via config.
 
+        Contract: sdk-boundary:Config:MUST:5
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
 
         captured_config: dict[str, Any] = {}
 
-        mock_session = MagicMock()
-        mock_session.disconnect = AsyncMock()
+        mock_session = MagicMock(spec=_StubCopilotSession)
+        mock_session.disconnect = AsyncMock(spec=_StubCopilotSession.disconnect)
 
         async def capture_config(**config: Any) -> MagicMock:
             captured_config.update(config)
             return mock_session
 
-        mock_client = AsyncMock()
-        mock_client.create_session = AsyncMock(side_effect=capture_config)
+        mock_client = MagicMock(spec=_StubCopilotClient)
+        mock_client.create_session = AsyncMock(
+            spec=_StubCopilotClient.create_session, side_effect=capture_config
+        )
 
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
         async with wrapper.session():

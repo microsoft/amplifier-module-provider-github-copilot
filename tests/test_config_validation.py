@@ -74,7 +74,10 @@ class TestConfigLoaderMissingKeys:
     """
 
     def test_missing_provider_section_raises_configuration_error(self) -> None:
-        """Missing PROVIDER definition raises ConfigurationError."""
+        """Missing PROVIDER definition raises ConfigurationError.
+
+        # Contract: behaviors:ConfigLoading:MUST:2
+        """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_models_config,
         )
@@ -88,7 +91,10 @@ class TestConfigLoaderMissingKeys:
         load_models_config.cache_clear()
 
     def test_missing_defaults_model_raises_configuration_error(self) -> None:
-        """Missing PROVIDER[defaults][model] raises ConfigurationError."""
+        """Missing PROVIDER[defaults][model] raises ConfigurationError.
+
+        # Contract: behaviors:ConfigLoading:MUST:2
+        """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_models_config,
         )
@@ -107,7 +113,10 @@ class TestConfigLoaderMissingKeys:
         load_models_config.cache_clear()
 
     def test_missing_defaults_timeout_raises_configuration_error(self) -> None:
-        """Missing PROVIDER[defaults][timeout] raises ConfigurationError."""
+        """Missing PROVIDER[defaults][timeout] raises ConfigurationError.
+
+        # Contract: behaviors:ConfigLoading:MUST:2
+        """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_models_config,
         )
@@ -134,41 +143,67 @@ class TestPythonConfigStructure:
     """
 
     def test_models_list_is_populated(self) -> None:
-        """config/_models.py MODELS list is not empty."""
+        """config/_models.py MODELS list is not empty.
+
+        # Contract: behaviors:ConfigLoading:MUST:3
+        """
         from amplifier_module_provider_github_copilot.config import _models as models
 
         assert len(models.MODELS) > 0, "MODELS list must have at least one model"
 
     def test_each_model_has_required_fields(self) -> None:
-        """Each model in MODELS has required fields."""
+        """Each model in MODELS has required fields.
+
+        # Contract: provider-protocol:list_models:MUST:2
+        """
         from amplifier_module_provider_github_copilot.config import _models as models
 
-        required_fields = ["id", "display_name", "context_window", "max_output_tokens"]
-        for model in models.MODELS:
-            for field in required_fields:
-                assert field in model, (
-                    f"Model {model.get('id', '?')} missing required field '{field}'"
-                )
+        # Assert exact values for known models
+        opus = next(m for m in models.MODELS if m["id"] == "claude-opus-4.5")
+        assert opus["id"] == "claude-opus-4.5"
+        assert opus["display_name"] == "Claude Opus 4.5"
+        assert opus["context_window"] == 200000
+        assert opus["max_output_tokens"] == 32000
+
+        gpt4 = next(m for m in models.MODELS if m["id"] == "gpt-4")
+        assert gpt4["id"] == "gpt-4"
+        assert gpt4["display_name"] == "GPT-4"
+        assert gpt4["context_window"] == 128000
+        assert gpt4["max_output_tokens"] == 4096
+
+        gpt4o = next(m for m in models.MODELS if m["id"] == "gpt-4o")
+        assert gpt4o["id"] == "gpt-4o"
+        assert gpt4o["display_name"] == "GPT-4o"
+        assert gpt4o["context_window"] == 128000
+        assert gpt4o["max_output_tokens"] == 4096
 
     def test_provider_has_required_fields(self) -> None:
-        """config/_models.py PROVIDER has required top-level and nested fields."""
+        """config/_models.py PROVIDER has required top-level and nested fields.
+
+        # Contract: provider-protocol:name:MUST:1
+        """
         from amplifier_module_provider_github_copilot.config import _models as models
 
-        assert "id" in models.PROVIDER, "PROVIDER missing 'id'"
-        assert "display_name" in models.PROVIDER, "PROVIDER missing 'display_name'"
-        assert "defaults" in models.PROVIDER, "PROVIDER missing 'defaults'"
-        assert "model" in models.PROVIDER["defaults"], "PROVIDER[defaults] missing 'model'"
-        assert "timeout" in models.PROVIDER["defaults"], "PROVIDER[defaults] missing 'timeout'"
+        assert models.PROVIDER["id"] == "github-copilot"
+        assert models.PROVIDER["display_name"] == "GitHub Copilot SDK"
+        assert models.PROVIDER["defaults"]["model"] == "claude-opus-4.5"
+        assert models.PROVIDER["defaults"]["timeout"] == 3600
 
     def test_fallbacks_has_required_keys(self) -> None:
-        """config/_models.py FALLBACKS has required keys."""
+        """config/_models.py FALLBACKS has required keys.
+
+        # Contract: provider-protocol:get_info:MUST:1
+        """
         from amplifier_module_provider_github_copilot.config import _models as models
 
-        assert "context_window" in models.FALLBACKS, "FALLBACKS missing 'context_window'"
-        assert "max_output_tokens" in models.FALLBACKS, "FALLBACKS missing 'max_output_tokens'"
+        assert models.FALLBACKS["context_window"] == 128000
+        assert models.FALLBACKS["max_output_tokens"] == 16384
 
     def test_load_models_config_returns_valid_config(self) -> None:
-        """load_models_config() returns valid ProviderConfig from Python module."""
+        """load_models_config() returns valid ProviderConfig from Python module.
+
+        # Contract: provider-protocol:get_info:MUST:2
+        """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_models_config,
         )

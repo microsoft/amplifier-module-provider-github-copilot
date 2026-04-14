@@ -22,6 +22,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+# Import for MagicMock spec= parameter (runtime import required)
+from copilot import CopilotClient
+
 
 class MockSDKSession:
     """Test double for SDK session with unique ID tracking."""
@@ -66,7 +69,7 @@ class TestSessionsAreDistinct:
         )
 
         # Create mock SDK client that produces sessions with unique IDs
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=CopilotClient)
         session_ids: list[str] = []
 
         async def create_session_mock(**kwargs: Any) -> MockSDKSession:
@@ -92,7 +95,7 @@ class TestSessionsAreDistinct:
 
     @pytest.mark.asyncio
     async def test_session_ids_are_not_reused_across_many_sessions(self) -> None:
-        """deny-destroy:Ephemeral:MUST:3 — Session IDs never reuse.
+        """Contract: deny-destroy:Ephemeral:MUST:3 — Session IDs never reuse.
 
         Even across many sessions, no ID should repeat.
         """
@@ -100,7 +103,7 @@ class TestSessionsAreDistinct:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=CopilotClient)
         session_ids: list[str] = []
 
         async def create_session_mock(**kwargs: Any) -> MockSDKSession:
@@ -138,7 +141,7 @@ class TestSessionStateIsolation:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=CopilotClient)
         created_sessions: list[MockSDKSession] = []
 
         async def create_session_mock(**kwargs: Any) -> MockSDKSession:
@@ -150,17 +153,39 @@ class TestSessionStateIsolation:
 
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
 
-        # Session 1: Check that underlying sessions are different
+        # Session 1: Set state on first session
         async with wrapper.session(model="gpt-4") as session1:
-            # SessionHandle wraps the mock session
             _ = session1.session_id  # Access to ensure it exists
 
-        # Session 2: Should be a different session
+        # Set state on the underlying session AFTER it's created
+        created_sessions[0].set_state("secret_key", "secret_value")
+
+        # Session 2: Create a second session
         async with wrapper.session(model="gpt-4") as session2:
             _ = session2.session_id  # Access to ensure it exists
 
         # Two separate underlying sessions were created
         assert len(created_sessions) == 2, "Should create separate sessions"
+
+        # Sessions are distinct objects
+        assert created_sessions[0] is not created_sessions[1], "Sessions must be distinct objects"
+        assert id(created_sessions[0]) != id(created_sessions[1]), (
+            "Sessions must have different identities"
+        )
+
+        # Sessions have distinct IDs
+        assert created_sessions[0].session_id != created_sessions[1].session_id, (
+            f"Sessions must have distinct IDs: {created_sessions[0].session_id} vs "
+            f"{created_sessions[1].session_id}"
+        )
+
+        # State set on session 0 is NOT visible in session 1
+        assert created_sessions[0].get_state("secret_key") == "secret_value", (
+            "Session 0 should have the state we set"
+        )
+        assert created_sessions[1].get_state("secret_key") is None, (
+            "Session 1 must not see state from session 0 — isolation violated"
+        )
 
 
 class TestSessionDestruction:
@@ -176,7 +201,7 @@ class TestSessionDestruction:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=CopilotClient)
         created_sessions: list[MockSDKSession] = []
 
         async def create_session_mock(**kwargs: Any) -> MockSDKSession:
@@ -190,7 +215,8 @@ class TestSessionDestruction:
 
         async with wrapper.session(model="gpt-4") as session:
             # Session is wrapped in SessionHandle
-            assert session.session_id  # Has a session_id
+            assert isinstance(session.session_id, str), "session_id must be a string"
+            assert len(session.session_id) > 0, "session_id must be non-empty"
 
         # After exiting context, the underlying session should be disconnected
         assert len(created_sessions) == 1
@@ -206,7 +232,7 @@ class TestSessionDestruction:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=CopilotClient)
         created_sessions: list[MockSDKSession] = []
 
         async def create_session_mock(**kwargs: Any) -> MockSDKSession:
@@ -246,7 +272,7 @@ class TestNoSessionAccumulation:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=CopilotClient)
 
         async def create_session_mock(**kwargs: Any) -> MockSDKSession:
             return MockSDKSession()
@@ -291,7 +317,7 @@ class TestConcurrentSessionIsolation:
             CopilotClientWrapper,
         )
 
-        mock_client = MagicMock()
+        mock_client = MagicMock(spec=CopilotClient)
         created_sessions: list[MockSDKSession] = []
         session_lock = asyncio.Lock()
 

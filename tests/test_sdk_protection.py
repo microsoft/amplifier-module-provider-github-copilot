@@ -6,6 +6,8 @@ Contract: sdk-protection:Session:MUST:3,4
 
 from __future__ import annotations
 
+import pytest
+
 
 class TestSdkProtectionConfigLoading:
     """Test loading of SDK protection config from YAML."""
@@ -20,53 +22,11 @@ class TestSdkProtectionConfigLoading:
         config = load_sdk_protection_config()
 
         assert isinstance(config, SdkProtectionConfig)
-        assert hasattr(config, "tool_capture")
-        assert hasattr(config, "session")
-
-    def test_tool_capture_config_has_expected_fields(self) -> None:
-        """ToolCaptureConfig has first_turn_only, deduplicate, log_capture_events.
-
-        Contract: sdk-protection:ToolCapture:MUST:1,2
-        """
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_sdk_protection_config,
-        )
-
-        config = load_sdk_protection_config()
-
-        assert hasattr(config.tool_capture, "first_turn_only")
-        assert hasattr(config.tool_capture, "deduplicate")
-        assert hasattr(config.tool_capture, "log_capture_events")
-
-        # Verify types
-        assert isinstance(config.tool_capture.first_turn_only, bool)
-        assert isinstance(config.tool_capture.deduplicate, bool)
-        assert isinstance(config.tool_capture.log_capture_events, bool)
-
-    def test_session_config_has_expected_fields(self) -> None:
-        """SessionConfig has explicit_abort, abort_timeout_seconds, idle_timeout_seconds.
-
-        Contract: sdk-protection:Session:MUST:3,4
-        """
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_sdk_protection_config,
-        )
-
-        config = load_sdk_protection_config()
-
-        assert hasattr(config.session, "explicit_abort")
-        assert hasattr(config.session, "abort_timeout_seconds")
-        assert hasattr(config.session, "idle_timeout_seconds")
-
-        # Verify types
-        assert isinstance(config.session.explicit_abort, bool)
-        assert isinstance(config.session.abort_timeout_seconds, float)
-        assert isinstance(config.session.idle_timeout_seconds, float)
 
     def test_yaml_config_has_expected_defaults(self) -> None:
-        """YAML config has expected default values.
+        """Config has expected default values.
 
-        Three-Medium: YAML is authoritative source, no Python fallbacks.
+        Python dataclass is authoritative source (config/_sdk_protection.py).
         """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_sdk_protection_config,
@@ -88,22 +48,6 @@ class TestSdkProtectionConfigLoading:
 class TestSdkProtectionConfigValues:
     """Test that loaded config has correct values."""
 
-    def test_tool_capture_defaults_match_contract(self) -> None:
-        """Tool capture values match contracts/sdk-protection.md.
-
-        Contract: sdk-protection:ToolCapture:MUST:1 (first_turn_only)
-        Contract: sdk-protection:ToolCapture:MUST:2 (deduplicate)
-        """
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_sdk_protection_config,
-        )
-
-        config = load_sdk_protection_config()
-
-        # Per contract, these should be true by default
-        assert config.tool_capture.first_turn_only is True
-        assert config.tool_capture.deduplicate is True
-
     def test_session_abort_timeout_is_reasonable(self) -> None:
         """Abort timeout is reasonable (not too short, not too long).
 
@@ -115,8 +59,7 @@ class TestSdkProtectionConfigValues:
 
         config = load_sdk_protection_config()
 
-        # 1-60 seconds is reasonable for abort timeout
-        assert 1.0 <= config.session.abort_timeout_seconds <= 60.0
+        assert config.session.abort_timeout_seconds == 5.0
 
     def test_idle_timeout_is_reasonable(self) -> None:
         """Idle timeout is reasonable for abort/cleanup operations.
@@ -133,8 +76,7 @@ class TestSdkProtectionConfigValues:
 
         config = load_sdk_protection_config()
 
-        # 10-300 seconds is reasonable for idle safety timeout
-        assert 10.0 <= config.session.idle_timeout_seconds <= 300.0
+        assert config.session.idle_timeout_seconds == 30.0
 
 
 class TestSdkProtectionPythonModule:
@@ -150,7 +92,7 @@ class TestSdkProtectionPythonModule:
             SdkProtectionConfig,
         )
 
-        assert SdkProtectionConfig is not None
+        assert callable(SdkProtectionConfig)
 
     def test_sdk_protection_config_instantiates_with_no_args(self) -> None:
         """SdkProtectionConfig() instantiates with hardcoded defaults (no I/O)."""
@@ -160,56 +102,14 @@ class TestSdkProtectionPythonModule:
 
         config = SdkProtectionConfig()
 
-        assert hasattr(config, "tool_capture")
-        assert hasattr(config, "session")
-        assert hasattr(config, "sdk")
-        assert hasattr(config, "singleton")
-
-    def test_sdk_protection_module_has_all_dataclasses(self) -> None:
-        """All expected dataclasses are exported from the module."""
-        import amplifier_module_provider_github_copilot.config._sdk_protection as mod
-
-        assert hasattr(mod, "ToolCaptureConfig")
-        assert hasattr(mod, "SessionProtectionConfig")
-        assert hasattr(mod, "SingletonConfig")
-        assert hasattr(mod, "SdkConfig")
-        assert hasattr(mod, "SdkProtectionConfig")
+        assert config.tool_capture.first_turn_only is True
+        assert config.session.abort_timeout_seconds == 5.0
+        assert config.sdk.log_level == "info"
+        assert config.singleton.lock_timeout_seconds == 30.0
 
 
 class TestSdkConfigLoading:
     """Test SDK subprocess configuration loading."""
-
-    def test_sdk_protection_config_has_sdk_field(self) -> None:
-        """SdkProtectionConfig includes sdk configuration."""
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_sdk_protection_config,
-        )
-
-        config = load_sdk_protection_config()
-
-        assert hasattr(config, "sdk")
-
-    def test_sdk_config_has_log_level_field(self) -> None:
-        """SdkConfig has log_level field."""
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_sdk_protection_config,
-        )
-
-        config = load_sdk_protection_config()
-
-        assert hasattr(config.sdk, "log_level")
-        assert isinstance(config.sdk.log_level, str)
-
-    def test_sdk_config_has_log_level_env_var_field(self) -> None:
-        """SdkConfig has log_level_env_var field."""
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_sdk_protection_config,
-        )
-
-        config = load_sdk_protection_config()
-
-        assert hasattr(config.sdk, "log_level_env_var")
-        assert isinstance(config.sdk.log_level_env_var, str)
 
     def test_sdk_config_default_log_level_is_info(self) -> None:
         """Default log level is 'info' (safe default)."""
@@ -252,35 +152,29 @@ class TestSDKConfigValidation:
         config = load_sdk_protection_config()
         assert config.sdk.log_level in {"none", "error", "warning", "info", "debug", "all"}
 
-    def test_validation_rejects_invalid_log_level_directly(self) -> None:
-        """Validation rejects log_level not in allowlist.
+    def test_validation_rejects_invalid_log_level_directly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """SDK log level validator falls back to default for invalid env values.
 
         Contract: sdk-protection:Subprocess:MUST:7
-        Contract: behaviors:ConfigLoading:MUST:3
-
-        This test directly verifies the error message format that would be
-        raised when log_level validation fails.
         """
-        from amplifier_module_provider_github_copilot.config_loader import (
-            ConfigurationError,
+        import logging
+        import os
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            _resolve_sdk_log_level,  # pyright: ignore[reportPrivateUsage]
         )
 
-        # The validation code raises ConfigurationError with specific message format
-        # Testing error message construction directly
-        invalid_level = "invalid_level"
-        valid_levels = ["none", "error", "warning", "info", "debug", "all"]
+        with (
+            patch.dict(os.environ, {"COPILOT_SDK_LOG_LEVEL": "invalid_level"}, clear=False),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = _resolve_sdk_log_level()
 
-        # Verify the condition that triggers validation error
-        assert invalid_level not in valid_levels
-
-        # Verify error message format matches what config_loader produces
-        error_msg = (
-            f"Config validation failed: sdk.log_level '{invalid_level}' is not valid. "
-            f"Must be one of: {', '.join(valid_levels)}"
-        )
-        err = ConfigurationError(error_msg)
-        assert "sdk.log_level" in str(err)
-        assert invalid_level in str(err)
+        assert result == "info"
+        assert any("Invalid SDK log level" in r.getMessage() for r in caplog.records)
 
     def test_validation_accepts_all_valid_log_levels(self) -> None:
         """All defined log levels are accepted by validation.
@@ -293,11 +187,8 @@ class TestSDKConfigValidation:
 
         config = load_sdk_protection_config()
 
-        # Verify config has valid_log_levels defined
-        assert hasattr(config.sdk, "valid_log_levels")
-        assert len(config.sdk.valid_log_levels) > 0
-
-        # Current log_level must be in the valid set
+        expected_levels = {"none", "error", "warning", "info", "debug", "all"}
+        assert set(config.sdk.valid_log_levels) == expected_levels
         assert config.sdk.log_level in config.sdk.valid_log_levels
 
     def test_bool_fields_are_actual_booleans(self) -> None:

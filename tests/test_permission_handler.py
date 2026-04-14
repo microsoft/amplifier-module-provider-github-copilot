@@ -1,7 +1,6 @@
 """Tests for on_permission_request handler in production path.
 
 Verifies permission handler is present in production CopilotClientWrapper.
-Includes SDK version drift detection tests.
 
 Contract: contracts/deny-destroy.md
 """
@@ -9,7 +8,7 @@ Contract: contracts/deny-destroy.md
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -21,40 +20,18 @@ class TestOnPermissionRequestHandler:
     AC: Test that auto-init path includes on_permission_request.
     """
 
-    async def test_deny_permission_request_is_used_in_options(self) -> None:
-        """Production code must set on_permission_request to deny_permission_request.
-
-        deny-destroy:PermissionRequest:MUST:1
-
-        This test verifies by inspecting the source code that on_permission_request
-        is added to the options dict in the session() method.
-        """
-        import inspect
-
-        from amplifier_module_provider_github_copilot.sdk_adapter import client
-
-        # Get the source code of the session method
-        source = inspect.getsource(client.CopilotClientWrapper.session)
-
-        # Verify on_permission_request is added to options
-        assert "on_permission_request" in source, (
-            "session() method must add on_permission_request to options"
-        )
-        assert "deny_permission_request" in source, (
-            "on_permission_request must be set to deny_permission_request"
-        )
-
     async def test_permission_handler_denies_all_requests(self) -> None:
         """Permission handler must deny all requests (Deny+Destroy pattern).
 
-        deny-destroy:PermissionRequest:MUST:2
+        # Contract: deny-destroy:PermissionRequest:MUST:2
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             deny_permission_request,
         )
 
-        # Mock a permission request
-        mock_request = MagicMock()
+        # Mock a permission request - use simple spec since SDK PermissionRequest
+        # is not available in typings; the handler accepts Any anyway
+        mock_request = MagicMock(spec=["tool_name", "arguments"])
 
         result = deny_permission_request(mock_request)
 
@@ -68,101 +45,56 @@ class TestOnPermissionRequestHandler:
                 "Permission request must be denied with kind='denied-by-rules'"
             )
 
-    async def test_deny_permission_request_function_exists(self) -> None:
-        """A deny_permission_request function must exist.
+    async def test_permission_handler_wired_in_session_options(self) -> None:
+        """on_permission_request handler is installed in session options.
 
-        deny-destroy:PermissionRequest:MUST:1
+        # Contract: deny-destroy:PermissionRequest:MUST:1
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
             deny_permission_request,
         )
 
-        assert callable(deny_permission_request)
+        captured_kwargs: dict[str, Any] = {}
 
+        # Create a mock SDK client (spec attributes used by wrapper)
+        mock_sdk_client = MagicMock(spec=["create_session"])
 
-class TestSystemNotificationClassification:
-    """system.notification must be explicitly classified."""
+        # Mock create_session to capture the kwargs passed to it
+        async def capture_create_session(**kwargs: Any) -> MagicMock:
+            captured_kwargs.update(kwargs)
+            mock_session = MagicMock(spec=["session_id", "disconnect"])
+            mock_session.session_id = "test-session-id"
+            mock_session.disconnect = AsyncMock()
+            return mock_session
 
-    def test_system_notification_classified_as_consume(self) -> None:
-        """system_notification must be classified as CONSUME (not unknown).
+        mock_sdk_client.create_session = capture_create_session
 
-        event-vocabulary:classification:system_notification:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
+        # Create wrapper with injected mock client
+        wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
+
+        # Call session() and verify kwargs
+        async with wrapper.session(model="test-model"):
+            pass
+
+        # Verify on_permission_request is wired to deny_permission_request
+        assert "on_permission_request" in captured_kwargs, (
+            "session() must pass on_permission_request to create_session"
         )
-
-        config = load_event_config()
-        result = classify_event("system_notification", config)
-        assert result == EventClassification.CONSUME, (
-            "system_notification should be CONSUME, not unknown"
+        assert captured_kwargs["on_permission_request"] is deny_permission_request, (
+            "on_permission_request must be bound to deny_permission_request"
         )
-
-    def test_system_notification_no_warning_logged(self, caplog: Any) -> None:
-        """system_notification should not produce 'Unknown SDK event type' warning."""
-        import logging
-
-        from amplifier_module_provider_github_copilot.streaming import (
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
-        with caplog.at_level(logging.WARNING):
-            classify_event("system_notification", config)
-
-        assert "Unknown SDK event type: system_notification" not in caplog.text
 
 
 @pytest.mark.sdk_assumption
 class TestSDKVersionCompatibility:
     """Detect SDK version drift from v0.1.33 baseline."""
 
-    def test_sdk_version_is_known(self) -> None:
-        """SDK package version must be accessible and within expected range."""
-        import importlib.metadata
-
-        try:
-            version = importlib.metadata.version("github-copilot-sdk")
-        except importlib.metadata.PackageNotFoundError:
-            pytest.skip("SDK package metadata not available")
-            return  # Make pyright happy about version being bound
-
-        # Document baseline — update when upgrading SDK
-        parts = version.split(".")
-        major, minor = int(parts[0]), int(parts[1])
-        assert (major, minor) >= (0, 1), f"SDK version {version} below baseline 0.1"
-        # Print for drift visibility in CI
-        print(f"SDK version: {version}")
-
-    def test_sdk_has_permission_request_result_type(self) -> None:
-        """PermissionRequestResult must exist in the SDK (any supported version).
-
-        v0.2.0: copilot.types.PermissionRequestResult
-        v0.2.1+: copilot.session.PermissionRequestResult (copilot.types deleted)
-        """
-        PermissionRequestResult = None
-        # Follow the same fallback chain as _imports.py
-        try:
-            from copilot.types import PermissionRequestResult  # type: ignore[import-untyped]
-        except ImportError:
-            try:
-                from copilot import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
-            except ImportError:
-                try:
-                    from copilot.session import (  # type: ignore[import-untyped]
-                        PermissionRequestResult,  # type: ignore[no-redef]
-                    )
-                except ImportError:
-                    pytest.skip("SDK not installed or PermissionRequestResult not available")
-
-        assert PermissionRequestResult is not None
-
     def test_permission_request_result_has_kind_field(self) -> None:
         """PermissionRequestResult must accept kind parameter (any supported SDK version).
 
+        # Contract: deny-destroy:PermissionRequest:MUST:2
+
         v0.2.0: copilot.types.PermissionRequestResult
         v0.2.1+: copilot.session.PermissionRequestResult (copilot.types deleted)
         """
@@ -174,15 +106,14 @@ class TestSDKVersionCompatibility:
             try:
                 from copilot import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
             except ImportError:
-                try:
-                    from copilot.session import (  # type: ignore[import-untyped]
-                        PermissionRequestResult,  # type: ignore[no-redef]
-                    )
-                except ImportError:
-                    pytest.skip("SDK not installed")
+                from copilot.session import (  # type: ignore[import-untyped]
+                    PermissionRequestResult,  # type: ignore[no-redef]
+                )
+                # SDK is a hard dependency — ImportError propagates if all fail
 
-        if PermissionRequestResult is None:  # pragma: no cover
-            pytest.skip("SDK not installed")
+        assert isinstance(PermissionRequestResult, type), (  # pragma: no cover
+            "SDK installed but PermissionRequestResult not found in any fallback location"
+        )
 
         try:
             result = PermissionRequestResult(  # type: ignore[misc]

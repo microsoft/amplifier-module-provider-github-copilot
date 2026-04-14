@@ -9,7 +9,7 @@ translated to kernel error types via translate_sdk_error().
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -26,13 +26,33 @@ from amplifier_module_provider_github_copilot.provider import (
     CompletionRequest,
     GitHubCopilotProvider,
 )
+from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+    CopilotClientWrapper,
+)
+from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionHandle
+
+
+# Stub classes for MagicMock spec= (SDK types not importable at runtime)
+class _StubSDKEvent:
+    """Stub matching SDK event structure for spec=."""
+
+    type: str
+    payload: Any
+
+
+class _StubSDKSession:
+    """Stub matching raw SDK session interface for spec=."""
+
+    def on(self, handler: Callable[[Any], None]) -> Callable[[], None]: ...
+    async def send(self, prompt: str, *, attachments: list[Any] | None = None) -> None: ...
+    async def disconnect(self) -> None: ...
 
 
 @pytest.fixture
 def provider_with_mock_client() -> tuple[GitHubCopilotProvider, MagicMock]:
     """Create provider with a mocked _client attribute."""
     provider = GitHubCopilotProvider()
-    mock_client = MagicMock()
+    mock_client = MagicMock(spec=CopilotClientWrapper)
     provider._client = mock_client  # type: ignore[reportPrivateUsage]  # Testing internal state
     return provider, mock_client
 
@@ -56,17 +76,17 @@ def create_mock_session_ctx(
         tools: list[dict[str, Any]] | None = None,
         system_message: str | None = None,
     ) -> AsyncIterator[MagicMock]:
-        mock_session = MagicMock()
-        mock_session.disconnect = AsyncMock()
+        mock_session = MagicMock(spec=SessionHandle)
+        mock_session.disconnect = AsyncMock(spec=_StubSDKSession.disconnect)
 
         # Store handlers registered via on()
         handlers: list[Any] = []
 
-        def mock_on(handler: Any) -> MagicMock:
+        def mock_on(handler: Any) -> Callable[[], None]:
             handlers.append(handler)
-            return MagicMock()  # unsubscribe function
+            return lambda: None  # unsubscribe function
 
-        mock_session.on = MagicMock(side_effect=mock_on)
+        mock_session.on = MagicMock(spec=SessionHandle.on, side_effect=mock_on)
 
         # send() raises error or delivers events
         async def mock_send(prompt: str, attachments: list[Any] | None = None) -> str:
@@ -74,21 +94,21 @@ def create_mock_session_ctx(
                 raise error_to_raise
             # Deliver events via handler callback
             for event_data in events or []:
-                event = MagicMock()
+                event = MagicMock(spec=_StubSDKEvent)
                 for k, v in event_data.items():
                     setattr(event, k, v)
                 event.__dict__.update(event_data)
                 for handler in handlers:
                     handler(event)
             # Signal completion
-            idle_event = MagicMock()
+            idle_event = MagicMock(spec=_StubSDKEvent)
             idle_event.type = "SESSION_IDLE"
             idle_event.__dict__["type"] = "SESSION_IDLE"
             for handler in handlers:
                 handler(idle_event)
             return "message-id"
 
-        mock_session.send = AsyncMock(side_effect=mock_send)
+        mock_session.send = AsyncMock(spec=SessionHandle.send, side_effect=mock_send)
         yield mock_session
 
     return session_ctx
@@ -218,6 +238,7 @@ class TestF078ContextWindowFromYaml:
     def test_yaml_config_budget_calculation_succeeds(self) -> None:
         """Budget calculation should work with YAML config values.
 
+        Contract: provider-protocol:get_info:MUST:2
         Budget calculation uses YAML values
         Three-Medium: YAML is authoritative.
         """

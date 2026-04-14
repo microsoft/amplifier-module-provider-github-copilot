@@ -21,7 +21,6 @@ class TestConfigFieldConformance:
         provider = GitHubCopilotProvider()
         info = provider.get_info()
 
-        assert hasattr(info, "config_fields"), "ProviderInfo must have config_fields"
         assert isinstance(info.config_fields, list), "config_fields must be a list"
         assert len(info.config_fields) > 0, "config_fields must not be empty"
 
@@ -36,7 +35,10 @@ class TestConfigFieldConformance:
         )
 
     def test_github_token_field_is_secret(self) -> None:
-        """Contract: ConfigField for token must use field_type='secret'."""
+        """Contract: ConfigField for token must use field_type='secret'.
+
+        Contract: provider-protocol:get_info:MUST:3
+        """
         provider = GitHubCopilotProvider()
         info = provider.get_info()
 
@@ -49,20 +51,25 @@ class TestConfigFieldConformance:
         )
 
     def test_github_token_field_has_env_var(self) -> None:
-        """Contract: GitHub token field must specify env_var."""
+        """Contract: GitHub token field must specify env_var.
+
+        Contract: provider-protocol:get_info:MUST:3
+        """
         provider = GitHubCopilotProvider()
         info = provider.get_info()
 
         token_fields = [f for f in info.config_fields if f.id == "github_token"]
         token_field = token_fields[0]
 
-        assert token_field.env_var is not None, "github_token must have env_var"
-        assert "TOKEN" in token_field.env_var.upper(), (
-            f"env_var should contain 'TOKEN', got '{token_field.env_var}'"
+        assert token_field.env_var == "GITHUB_TOKEN", (
+            f"env_var must be 'GITHUB_TOKEN', got '{token_field.env_var}'"
         )
 
     def test_all_config_fields_are_valid(self) -> None:
-        """All config_fields must be valid ConfigField instances."""
+        """All config_fields must be valid ConfigField instances.
+
+        Contract: provider-protocol:get_info:MUST:1
+        """
         provider = GitHubCopilotProvider()
         info = provider.get_info()
 
@@ -70,7 +77,18 @@ class TestConfigFieldConformance:
             assert isinstance(field, ConfigField), (
                 f"config_field must be ConfigField instance, got {type(field)}"
             )
-            # Required attributes
-            assert field.id, "ConfigField must have id"
-            assert field.display_name, "ConfigField must have display_name"
-            assert field.prompt, "ConfigField must have prompt"
+
+    def test_github_token_field_display_and_prompt(self) -> None:
+        """github_token ConfigField has exact display_name and prompt.
+
+        Contract: provider-protocol:get_info:MUST:3
+        """
+        provider = GitHubCopilotProvider()
+        info = provider.get_info()
+
+        token_fields = [f for f in info.config_fields if f.id == "github_token"]
+        assert len(token_fields) == 1, "Must have exactly one github_token field"
+        token_field = token_fields[0]
+
+        assert token_field.display_name == "GitHub Token"
+        assert token_field.prompt == "Enter your GitHub token (or Copilot agent token)"

@@ -30,6 +30,7 @@ class TestDefensiveEventConfigLoading:
 
         Regression guard: ensure defensive changes don't break valid configs.
         """
+        # Contract: event-vocabulary:Bridge:MUST:2
         # Create a valid config file
         config_data = {
             "event_classifications": {
@@ -70,6 +71,7 @@ class TestDefensiveEventConfigLoading:
 
         Missing sdk_type must not cause KeyError
         """
+        # Contract: behaviors:ConfigLoading:MUST:2
         config_data = {
             "event_classifications": {
                 "bridge": [
@@ -98,6 +100,7 @@ class TestDefensiveEventConfigLoading:
 
         Missing domain_type must not cause KeyError
         """
+        # Contract: behaviors:ConfigLoading:MUST:2
         config_data = {
             "event_classifications": {
                 "bridge": [
@@ -128,6 +131,7 @@ class TestDefensiveEventConfigLoading:
 
         Unknown enum value must not cause cryptic KeyError
         """
+        # Contract: behaviors:ConfigLoading:MUST:3
         config_data = {
             "event_classifications": {
                 "bridge": [
@@ -146,10 +150,13 @@ class TestDefensiveEventConfigLoading:
                 load_event_config(config_path)
 
             error_msg = str(exc_info.value)
-            # Should mention the unknown type
-            assert "NONEXISTENT_TYPE" in error_msg
-            # Should list valid types
-            assert "CONTENT_DELTA" in error_msg or "Valid types" in error_msg
+            # Should mention the unknown type and list valid types
+            assert error_msg == (
+                "Invalid event config in events.yaml: Bridge mapping 0 "
+                "(sdk_type=assistant.message_delta) has unknown domain_type "
+                "'NONEXISTENT_TYPE'. Valid types: ['CONTENT_DELTA', 'TOOL_CALL', "
+                "'USAGE_UPDATE', 'TURN_COMPLETE', 'SESSION_IDLE', 'ERROR']"
+            )
         finally:
             config_path.unlink()
 
@@ -158,6 +165,7 @@ class TestDefensiveEventConfigLoading:
 
         Debugging aid: know which entry failed
         """
+        # Contract: behaviors:ConfigLoading:MUST:2
         config_data = {
             "event_classifications": {
                 "bridge": [
@@ -202,10 +210,7 @@ class TestDefensiveEventConfigLoading:
             config_path.unlink()
 
     def test_missing_file_returns_default(self):
-        """Missing config file returns default EventConfig.
-
-        Contract: AC-1 - Graceful fallback on missing file.
-        """
+        """Missing config file returns default EventConfig."""
         config = load_event_config("/nonexistent/path/events.yaml")
         assert isinstance(config, EventConfig)
         assert config.bridge_mappings == {}

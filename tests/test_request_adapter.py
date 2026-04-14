@@ -46,7 +46,7 @@ class TestConvertChatRequest:
         result = convert_chat_request(request)
 
         assert result.model == "gpt-4o"
-        assert "user: Hello" in result.prompt or "Hello" in result.prompt
+        assert result.prompt == "[USER]\nHello"
         assert result.tools == []
 
     def test_uses_default_model_when_not_specified(self) -> None:
@@ -106,8 +106,8 @@ class TestExtractPromptFromChatRequest:
         prompt = extract_prompt_from_chat_request(request)
 
         # Prompt should contain role markers
-        assert "user" in prompt.lower() or "Hello" in prompt
-        assert "assistant" in prompt.lower() or "Hi there" in prompt
+        assert "[USER]\nHello" in prompt
+        assert "[ASSISTANT]\nHi there" in prompt
 
     def test_handles_empty_messages(self) -> None:
         """Empty messages list returns empty prompt."""
@@ -119,7 +119,30 @@ class TestExtractPromptFromChatRequest:
 
         prompt = extract_prompt_from_chat_request(request)
 
-        assert prompt == "" or prompt is not None  # Should not crash
+        assert prompt == ""
+
+    def test_system_message_content_absent_from_prompt(self) -> None:
+        """System message content must NOT appear in the text prompt.
+
+        # Contract: sdk-boundary:Config:MUST:2
+        System content is passed separately via system_message; including it
+        in the prompt body would duplicate it and violate the SDK contract.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            extract_prompt_from_chat_request,
+        )
+
+        request = MockChatRequest(
+            messages=[
+                MockMessage(role="system", content="You are a specialized assistant."),
+                MockMessage(role="user", content="Hello"),
+            ]
+        )
+        prompt = extract_prompt_from_chat_request(request)
+        assert "You are a specialized assistant." not in prompt, (
+            "System message content must not appear in the text prompt body"
+        )
+        assert "[USER]\nHello" in prompt, "Non-system messages must still be included in the prompt"
 
 
 class TestExtractSystemMessage:

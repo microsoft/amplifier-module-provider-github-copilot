@@ -242,6 +242,8 @@ if sdk_data["log_level"] not in valid_levels:
 | `behaviors:ConfigLoading:MUST:1` | Load from package directory |
 | `behaviors:ConfigLoading:MUST:2` | Fail-fast on missing keys |
 | `behaviors:ConfigLoading:MUST:3` | Fail-fast on invalid values |
+| `behaviors:ConfigLoading:MUST_NOT:5` | MUST NOT duplicate policy values in Python code |
+| `behaviors:ConfigLoading:MUST:6` | MUST NOT use Python type coercion that masks invalid values |
 
 ---
 
@@ -366,6 +368,7 @@ When the SDK is unavailable AND the disk cache is empty/invalid, the provider MU
 | Anchor | Clause |
 |--------|--------|
 | `behaviors:Streaming:MUST:1` | Warns on slow TTFT |
+| `behaviors:Streaming:MUST:4` | MUST NOT block on queue full (drop oldest) |
 
 ### Models
 

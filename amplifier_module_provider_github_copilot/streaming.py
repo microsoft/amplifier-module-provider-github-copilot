@@ -653,12 +653,26 @@ def _extract_event_data(sdk_event: dict[str, Any]) -> dict[str, Any]:
 
     Handles nested 'data' objects (SessionEventData shape).
     Flattens data attributes into the result dict for accumulator consumption.
+
+    The 'data' key is always consumed — it never appears in the returned dict.
+    This guarantees no nested SDK objects under the 'data' key and no residual
+    'data' sub-key in DomainEvent.data.  Non-'data' envelope fields are passed
+    through verbatim.  Contract: event-vocabulary:Bridge:MUST:3
+
+    data=None is omitted rather than forwarded so that DomainEvent.data never
+    gains a spurious {"data": None} entry for events such as session.idle.
+
+    If 'data' holds an unexpected type (neither dict, object, nor None), a
+    warning is logged and the field is omitted to prevent silent corruption.
     """
     result: dict[str, Any] = {}
     for k, v in sdk_event.items():
         if k == "type":
             continue
-        if k == "data" and v is not None:
+        if k == "data":
+            # Always consume 'data' — never propagate the key into the result.
+            if v is None:
+                continue  # data=None: omit entirely
             # Flatten nested data object (SessionEventData or dict)
             if isinstance(v, dict):
                 nested_dict = cast(dict[str, Any], v)
@@ -666,13 +680,22 @@ def _extract_event_data(sdk_event: dict[str, Any]) -> dict[str, Any]:
                     if dv is not None:
                         result[dk] = dv
             elif hasattr(v, "__dict__"):
-                # SessionEventData object - delegate to unified extraction.
+                # SessionEventData object — delegate to unified extraction.
                 # extract_event_fields handles delta_content→text, tool_call_id→id,
-                # tool_name→name, and reasoning_text normalization in one place.
+                # tool_name→name, and reasoning_text normalisation in one place.
+                # Exclude "data" and "type" to prevent any nested data-key leakage
+                # in the promoted result if the SDK object grows a .data attribute.
                 extracted = extract_event_fields(v)
                 for ek, ev in extracted.items():
-                    if ek != "type" and ev is not None:
+                    if ek not in ("type", "data") and ev is not None:
                         result[ek] = ev
+            else:
+                # Unexpected data shape (e.g. primitive string/int) — omit and warn.
+                # This indicates SDK version-skew; the field cannot be safely promoted.
+                logger.warning(
+                    "_extract_event_data: unexpected 'data' type %s — omitting field",
+                    type(v).__name__,
+                )
         else:
             result[k] = v
     return result

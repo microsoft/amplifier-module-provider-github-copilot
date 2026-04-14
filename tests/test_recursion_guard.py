@@ -29,7 +29,7 @@ class TestRecursionGuard:
         result = extract_response_content(nested)
 
         # Should return empty string (no content found) after hitting depth limit
-        assert isinstance(result, str)
+        assert result == ""
 
     def test_circular_data_reference_terminates(self):
         """Circular .data reference MUST terminate safely.
@@ -47,7 +47,7 @@ class TestRecursionGuard:
         result = extract_response_content(obj)
 
         # Should return empty string after hitting depth limit
-        assert isinstance(result, str)
+        assert result == ""
 
     def test_normal_data_extraction_still_works(self):
         """Normal response extraction is unaffected (regression test).
@@ -141,4 +141,4 @@ class TestRecursionGuard:
         result = extract_response_content(mock_obj)
 
         # Should return empty string after hitting depth limit
-        assert isinstance(result, str)
+        assert result == ""

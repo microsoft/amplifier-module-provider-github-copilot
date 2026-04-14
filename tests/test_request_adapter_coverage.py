@@ -98,7 +98,6 @@ class TestExtractContentBlockToolResult:
         """ToolResult with output but no tool_call_id returns '[Tool Result: ...]'.
 
         Line ~221 in request_adapter.py — return f"[Tool Result: {output}]"
-        Contract: provider-protocol:complete:MUST — preserve tool results
         """
         from amplifier_module_provider_github_copilot.request_adapter import (
             _extract_content_block,  # pyright: ignore[reportPrivateUsage]
@@ -164,8 +163,8 @@ class TestExtractSystemMessageMultiple:
         """Two system messages → joined with '\\n\\n'.
 
         Line ~273 in request_adapter.py — the len(system_parts) > 1 branch
-        Contract: provider-protocol:complete:MUST:2 — system message forwarding
         """
+        # Contract: sdk-boundary:Config:MUST:2
         from amplifier_module_provider_github_copilot.request_adapter import extract_system_message
 
         @dataclass
@@ -187,10 +186,7 @@ class TestExtractSystemMessageMultiple:
 
         result = extract_system_message(request)
 
-        assert result is not None
-        assert "\n\n" in result
-        assert "You are a helpful assistant." in result
-        assert "Always be concise." in result
+        assert result == "You are a helpful assistant.\n\nAlways be concise."
 
     def test_single_system_message_no_join_log(self) -> None:
         """Single system message is returned as-is without join."""
@@ -243,8 +239,8 @@ class TestBuildRequestPayloadToolNameExtraction:
         """Nested {'function': {'name': '...'}} format tool name is extracted.
 
         Line ~346 in request_adapter.py — Subformat 2a: OpenAI-style nested dict
-        Contract: observability:Payload:SHOULD:2 — Type-safe tool name extraction
         """
+        # Contract: observability:Payload:SHOULD:2
         from amplifier_module_provider_github_copilot.request_adapter import (
             build_request_payload_for_observability,
         )
@@ -274,6 +270,7 @@ class TestBuildRequestPayloadToolNameExtraction:
 
         Subformat 2b — should already be covered but verify
         """
+        # Contract: observability:Payload:SHOULD:2
         from amplifier_module_provider_github_copilot.request_adapter import (
             build_request_payload_for_observability,
         )
@@ -301,6 +298,7 @@ class TestBuildRequestPayloadToolNameExtraction:
 
         Exercises multiple branches in the tool extraction loop.
         """
+        # Contract: observability:Payload:SHOULD:2
         from amplifier_module_provider_github_copilot.request_adapter import (
             build_request_payload_for_observability,
         )

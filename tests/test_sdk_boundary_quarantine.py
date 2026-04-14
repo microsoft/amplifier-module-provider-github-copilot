@@ -1,9 +1,13 @@
-"""SDK boundary structure tests.
+"""SDK boundary quarantine tests.
 
 Contract: contracts/sdk-boundary.md
 
-These tests verify that SDK imports are quarantined in _imports.py
-and that sdk_adapter/__init__.py exports only domain types.
+Tests in this module verify:
+- ImportQuarantine:MUST:1 — SDK imports confined to sdk_adapter/
+- ImportQuarantine:MUST:5 — ImportError with install instructions if SDK absent
+- ImportQuarantine:MUST:6 — Multi-level fallback for moved SDK types
+- Membrane:MUST:1 — Import from sdk_adapter package, not submodules
+- Membrane:MUST:3 — __init__.py does not expose _imports module
 """
 
 from __future__ import annotations
@@ -13,9 +17,13 @@ import importlib
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 # Root path for source code
 SDK_ADAPTER_PATH = Path("amplifier_module_provider_github_copilot/sdk_adapter")
@@ -25,121 +33,44 @@ IMPORTS_FILE = SDK_ADAPTER_PATH / "_imports.py"
 class TestSDKImportQuarantine:
     """Verify SDK imports are quarantined in _imports.py.
 
-    Contract: sdk-boundary:Membrane:MUST:2
+    Contract: sdk-boundary:Membrane:MUST:1
     """
 
     def test_imports_py_exists(self) -> None:
-        """AC-1: _imports.py exists as single SDK import point."""
+        """_imports.py MUST exist as the single SDK import point.
+
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
+        # Contract: sdk-boundary:Membrane:MUST:1
         assert IMPORTS_FILE.exists(), (
             f"_imports.py not found at {IMPORTS_FILE}. "
-            "SDK imports must be quarantined in _imports.py per."
-        )
-
-    def test_imports_py_contains_sdk_imports(self) -> None:
-        """_imports.py contains the SDK imports."""
-        if not IMPORTS_FILE.exists():
-            pytest.skip("_imports.py not found")
-
-        content = IMPORTS_FILE.read_text(encoding="utf-8")
-        assert "from copilot import" in content or "import copilot" in content, (
-            "_imports.py should contain SDK imports (from copilot import ...)"
-        )
-
-    def test_client_imports_from_imports_py(self) -> None:
-        """AC-2: client.py imports SDK types from _imports.py, not directly."""
-        client_file = SDK_ADAPTER_PATH / "client.py"
-        if not client_file.exists():
-            pytest.skip("client.py not found")
-
-        content = client_file.read_text(encoding="utf-8")
-
-        # Should NOT have direct SDK imports
-        # Note: We allow "from copilot import" in string literals (e.g., docstrings)
-        tree = ast.parse(content)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                assert node.module is None or not node.module.startswith("copilot"), (
-                    f"client.py should not import directly from copilot. "
-                    f"Found: from {node.module} import ..."
-                )
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert not alias.name.startswith("copilot"), (
-                        f"client.py should not import copilot directly. Found: import {alias.name}"
-                    )
-
-    def test_no_sdk_imports_in_other_files(self) -> None:
-        """SDK imports only exist in _imports.py, not other sdk_adapter files."""
-        if not SDK_ADAPTER_PATH.exists():
-            pytest.skip("sdk_adapter directory not found")
-
-        violations: list[str] = []
-        for py_file in SDK_ADAPTER_PATH.glob("*.py"):
-            if py_file.name == "_imports.py":
-                continue  # Skip the quarantine file
-
-            content = py_file.read_text(encoding="utf-8")
-            tree = ast.parse(content)
-
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom):
-                    if node.module and node.module.startswith("copilot"):
-                        violations.append(f"{py_file.name}: from {node.module} import ...")
-                elif isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name.startswith("copilot"):
-                            violations.append(f"{py_file.name}: import {alias.name}")
-
-        assert not violations, "SDK imports found outside _imports.py:\n" + "\n".join(
-            f"  - {v}" for v in violations
+            "SDK imports must be quarantined in _imports.py."
         )
 
 
 class TestSDKAdapterExports:
-    """Verify __init__.py exports domain types.
+    """Verify __init__.py does not expose private quarantine module.
 
-    Contract: sdk-boundary:Membrane:MUST:1
+    Contract: sdk-boundary:Membrane:MUST:3
     """
 
-    def test_init_exports_session_config(self) -> None:
-        """AC-3: __init__.py exports SessionConfig domain type."""
-        init_file = SDK_ADAPTER_PATH / "__init__.py"
-        if not init_file.exists():
-            pytest.skip("__init__.py not found")
-
-        content = init_file.read_text(encoding="utf-8")
-        assert "SessionConfig" in content, "__init__.py should export SessionConfig domain type"
-
-    def test_init_exports_sdk_session_type(self) -> None:
-        """__init__.py exports SDKSession type alias."""
-        init_file = SDK_ADAPTER_PATH / "__init__.py"
-        if not init_file.exists():
-            pytest.skip("__init__.py not found")
-
-        content = init_file.read_text(encoding="utf-8")
-        assert "SDKSession" in content, "__init__.py should export SDKSession type alias"
-
-    def test_init_has_docstring_about_quarantine(self) -> None:
-        """__init__.py documents the quarantine pattern."""
-        init_file = SDK_ADAPTER_PATH / "__init__.py"
-        if not init_file.exists():
-            pytest.skip("__init__.py not found")
-
-        content = init_file.read_text(encoding="utf-8")
-        assert "_imports.py" in content or "quarantine" in content.lower(), (
-            "__init__.py should document that SDK imports are quarantined"
-        )
-
     def test_init_does_not_expose_imports_module(self) -> None:
-        """__init__.py does not re-export the _imports quarantine module."""
+        """__init__.py MUST NOT re-export the _imports quarantine module.
+
+        Contract: sdk-boundary:Membrane:MUST:3
+
+        Domain code must use the public sdk_adapter API, never reach into
+        _imports directly. If _imports is in __all__, domain code could
+        accidentally bypass the membrane.
+        """
+        # Contract: sdk-boundary:Membrane:MUST:3
         init_file = SDK_ADAPTER_PATH / "__init__.py"
-        if not init_file.exists():
-            pytest.skip("__init__.py not found")
+        assert init_file.exists(), f"{init_file} must exist in the repository"
 
         content = init_file.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
-        # Find __all__ list
+        # Find __all__ list and check it does not contain "_imports"
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for target in node.targets:
@@ -151,107 +82,60 @@ class TestSDKAdapterExports:
                                 if isinstance(elt, ast.Constant)
                             ]
                             assert "_imports" not in exports, (
-                                "__all__ should not export _imports module"
+                                "__all__ exports '_imports' — this violates "
+                                "sdk-boundary:Membrane:MUST:3. Domain code must not "
+                                "reach into private quarantine module."
                             )
 
 
-class TestDomainCodeBoundary:
-    """Verify domain code doesn't import SDK directly.
+class TestSDKImportsRealPath:
+    """Cover sdk_adapter/_imports.py real SDK import paths.
 
-    Contract: sdk-boundary:Membrane:MUST:2 — domain code MUST NOT import from SDK.
+    Contract: sdk-boundary:Membrane:MUST:5
+    Contract: sdk-boundary:ImportQuarantine:MUST:6
     """
 
-    def test_provider_no_direct_sdk_imports(self) -> None:
-        """provider.py must not import from copilot directly."""
-        provider_file = Path("amplifier_module_provider_github_copilot/provider.py")
-        if not provider_file.exists():
-            pytest.skip("provider.py not found")
-
-        content = provider_file.read_text(encoding="utf-8")
-        tree = ast.parse(content)
-
-        violations: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.module and node.module.startswith("copilot"):
-                    violations.append(f"from {node.module} import ...")
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.startswith("copilot"):
-                        violations.append(f"import {alias.name}")
-
-        assert not violations, (
-            f"provider.py has direct SDK imports: {violations}\n"
-            "Domain code must import through sdk_adapter, not copilot directly."
-        )
-
-    def test_streaming_no_direct_sdk_imports(self) -> None:
-        """streaming.py must not import from copilot directly."""
-        streaming_file = Path("amplifier_module_provider_github_copilot/streaming.py")
-        if not streaming_file.exists():
-            pytest.skip("streaming.py not found")
-
-        content = streaming_file.read_text(encoding="utf-8")
-        tree = ast.parse(content)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                assert node.module is None or not node.module.startswith("copilot"), (
-                    f"streaming.py imports from copilot directly: from {node.module}"
-                )
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert not alias.name.startswith("copilot"), (
-                        f"streaming.py imports copilot directly: import {alias.name}"
-                    )
-
-    def test_error_translation_no_direct_sdk_imports(self) -> None:
-        """error_translation.py must not import from copilot directly."""
-        error_file = Path("amplifier_module_provider_github_copilot/error_translation.py")
-        if not error_file.exists():
-            pytest.skip("error_translation.py not found")
-
-        content = error_file.read_text(encoding="utf-8")
-        tree = ast.parse(content)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                assert node.module is None or not node.module.startswith("copilot"), (
-                    f"error_translation.py imports from copilot: from {node.module}"
-                )
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert not alias.name.startswith("copilot"), (
-                        f"error_translation.py imports copilot: import {alias.name}"
-                    )
-
-
-# ============================================================================
-# Merged from test_coverage_gaps_final.py
-# sdk_adapter/_imports.py — real SDK import path (L39-52)
-# ============================================================================
-
-
-class TestSDKImportsRealPath:
-    """Cover sdk_adapter/_imports.py L39-52: real SDK import when SKIP_SDK_CHECK unset."""
-
-    def test_sdk_import_failure_raises_import_error(self) -> None:
-        """L39-44: copilot import failing raises ImportError with install instructions.
-
-        Contract: sdk-boundary:Membrane:MUST:1
-        """
-        # Save state
+    def _save_import_state(self) -> tuple[str | None, ModuleType | None]:
+        """Save environment and module state before import tests."""
         original_skip = os.environ.get("SKIP_SDK_CHECK")
         original_module = sys.modules.pop(
             "amplifier_module_provider_github_copilot.sdk_adapter._imports", None
         )
+        return original_skip, original_module
+
+    def _restore_import_state(
+        self, original_skip: str | None, original_module: ModuleType | None
+    ) -> None:
+        """Restore environment and module state after import tests."""
+        if original_skip is not None:
+            os.environ["SKIP_SDK_CHECK"] = original_skip
+        else:
+            os.environ["SKIP_SDK_CHECK"] = "1"
+
+        sys.modules.pop("amplifier_module_provider_github_copilot.sdk_adapter._imports", None)
+
+        if original_module is not None:
+            sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
+                original_module
+            )
+
+    def test_sdk_import_failure_raises_import_error(self) -> None:
+        """copilot import failing MUST raise ImportError with install instructions.
+
+        Contract: sdk-boundary:Membrane:MUST:5
+
+        When SKIP_SDK_CHECK is not set and copilot is not importable,
+        _imports.py must raise ImportError with a message containing
+        'github-copilot-sdk not installed'.
+        """
+        # Contract: sdk-boundary:Membrane:MUST:5
+        original_skip, original_module = self._save_import_state()
 
         try:
-            # Clear SKIP_SDK_CHECK so the real import path runs
             os.environ.pop("SKIP_SDK_CHECK", None)
 
-            # Ensure copilot is not importable
-            copilot_modules = {k: v for k, v in sys.modules.items() if k.startswith("copilot")}
+            # Clear any cached copilot modules
+            copilot_modules = [k for k in sys.modules if k.startswith("copilot")]
             for k in copilot_modules:
                 sys.modules.pop(k, None)
 
@@ -261,78 +145,49 @@ class TestSDKImportsRealPath:
                         "amplifier_module_provider_github_copilot.sdk_adapter._imports"
                     )
         finally:
-            # Restore state
-            if original_skip is not None:
-                os.environ["SKIP_SDK_CHECK"] = original_skip
-            else:
-                os.environ["SKIP_SDK_CHECK"] = "1"
-
-            # Remove the freshly imported module to avoid test pollution
-            sys.modules.pop("amplifier_module_provider_github_copilot.sdk_adapter._imports", None)
-
-            # Re-import with SKIP_SDK_CHECK restored
-            if original_module is not None:
-                sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
-                    original_module
-                )
+            self._restore_import_state(original_skip, original_module)
 
     def test_permission_request_result_missing_sets_none(self) -> None:
-        """PermissionRequestResult import fails → None stub (SDK < 0.1.28).
+        """PermissionRequestResult MUST be None when absent from all SDK locations.
 
-        Simulates the oldest SDK without PermissionRequestResult in ANY module:
-        copilot.types absent, copilot root has no attribute, copilot.session absent.
-        All three fallback levels must fail to produce None.
+        Contract: sdk-boundary:ImportQuarantine:MUST:6
 
-        Contract: sdk-boundary:Membrane:MUST:1
+        Simulates SDK < 0.1.28 which predates PermissionRequestResult entirely.
+        All three fallback levels (copilot.types, copilot root, copilot.session)
+        fail, resulting in PermissionRequestResult = None.
         """
-        original_skip = os.environ.get("SKIP_SDK_CHECK")
-        original_module = sys.modules.pop(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports", None
-        )
+        # Contract: sdk-boundary:ImportQuarantine:MUST:6
+        original_skip, original_module = self._save_import_state()
 
         try:
             os.environ.pop("SKIP_SDK_CHECK", None)
 
-            # Provide copilot (CopilotClient available) but no PermissionRequestResult
-            # anywhere — simulates SDK < 0.1.28 which predates the type entirely.
-            mock_copilot = MagicMock()
+            # Mock copilot with CopilotClient but no PermissionRequestResult anywhere
+            mock_copilot = MagicMock(spec=["CopilotClient"])
             mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
-            # Ensure root has no PermissionRequestResult attribute
-            del mock_copilot.PermissionRequestResult
 
             with patch.dict(
                 "sys.modules",
                 {
                     "copilot": mock_copilot,
-                    # None in sys.modules triggers ImportError on from-import
-                    "copilot.types": None,
-                    "copilot.session": None,  # also absent on pre-0.1.28 SDK
+                    "copilot.types": None,  # ImportError on from-import
+                    "copilot.session": None,  # ImportError on from-import
                 },
             ):
                 mod = importlib.import_module(
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports"
                 )
-                # PermissionRequestResult should be the None stub
-                assert mod.PermissionRequestResult is None
-        except ImportError:
-            # If copilot itself fails to import because of None stub, that's acceptable;
-            # the key path L39-44 is still exercised.
-            pass
-        finally:
-            if original_skip is not None:
-                os.environ["SKIP_SDK_CHECK"] = original_skip
-            else:
-                os.environ["SKIP_SDK_CHECK"] = "1"
-
-            sys.modules.pop("amplifier_module_provider_github_copilot.sdk_adapter._imports", None)
-
-            if original_module is not None:
-                sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
-                    original_module
+                # PermissionRequestResult must be None when all fallbacks fail
+                assert mod.PermissionRequestResult is None, (
+                    "PermissionRequestResult should be None when absent from all SDK locations"
                 )
+        finally:
+            self._restore_import_state(original_skip, original_module)
 
     def test_subprocess_config_loads_when_copilot_types_absent(self) -> None:
         """SubprocessConfig MUST resolve even when copilot.types does not exist.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:6
 
         Regression test for SDK 0.2.1 breaking change: copilot.types was removed.
         SubprocessConfig moved to copilot.client, re-exported from copilot root.
@@ -340,13 +195,9 @@ class TestSDKImportsRealPath:
         Before fix: from copilot.types import SubprocessConfig → ModuleNotFoundError
                     → SubprocessConfig = None → ConfigurationError with any GitHub token
         After fix:  fallback to from copilot import SubprocessConfig → succeeds
-
-        Contract: sdk-boundary:Membrane:MUST:5
         """
-        original_skip = os.environ.get("SKIP_SDK_CHECK")
-        original_module = sys.modules.pop(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports", None
-        )
+        # Contract: sdk-boundary:ImportQuarantine:MUST:6
+        original_skip, original_module = self._save_import_state()
 
         try:
             os.environ.pop("SKIP_SDK_CHECK", None)
@@ -354,7 +205,7 @@ class TestSDKImportsRealPath:
             # Simulate SDK 0.2.1: copilot root has SubprocessConfig,
             # but copilot.types does NOT exist.
             mock_subprocess_config = MagicMock(name="SubprocessConfig")
-            mock_copilot = MagicMock()
+            mock_copilot = MagicMock(spec=["CopilotClient", "SubprocessConfig"])
             mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
             mock_copilot.SubprocessConfig = mock_subprocess_config
 
@@ -369,28 +220,20 @@ class TestSDKImportsRealPath:
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports"
                 )
 
-            # SubprocessConfig MUST NOT be None — it must have been resolved from copilot root
-            assert mod.SubprocessConfig is not None, (
-                "SubprocessConfig is None when copilot.types is absent (SDK 0.2.1 regression). "
-                "_imports.py must fall back to 'from copilot import SubprocessConfig'."
+            # SubprocessConfig MUST be the mock from copilot root, not None
+            assert mod.SubprocessConfig is mock_subprocess_config, (
+                f"SubprocessConfig is {mod.SubprocessConfig!r} but should be "
+                f"{mock_subprocess_config!r}. _imports.py must fall back to "
+                "'from copilot import SubprocessConfig' when copilot.types is absent."
             )
-            assert mod.SubprocessConfig is mock_subprocess_config
 
         finally:
-            if original_skip is not None:
-                os.environ["SKIP_SDK_CHECK"] = original_skip
-            else:
-                os.environ["SKIP_SDK_CHECK"] = "1"
-
-            sys.modules.pop("amplifier_module_provider_github_copilot.sdk_adapter._imports", None)
-
-            if original_module is not None:
-                sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
-                    original_module
-                )
+            self._restore_import_state(original_skip, original_module)
 
     def test_permission_request_result_falls_back_to_copilot_session(self) -> None:
         """PermissionRequestResult MUST resolve from copilot.session when copilot.types absent.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:6
 
         Regression guard for SDK v0.2.1 breaking change: copilot/types.py was deleted
         (PR #871). PermissionRequestResult moved to copilot.session and is NOT
@@ -398,17 +241,13 @@ class TestSDKImportsRealPath:
 
         Before fix:  copilot.types fails → copilot root fails → PermissionRequestResult = None
                      → deny_permission_request() returns dict → SDK calls .kind → AttributeError
-                     → wrong deny reason: "denied-no-approval-rule-and-could-not-request-from-user"
+                     → wrong deny reason: 'denied-no-approval-rule-and-could-not-request-from-user'
 
         After fix:   copilot.types fails → copilot root fails → copilot.session succeeds
-                     → PermissionRequestResult is the real class → .kind works → "denied-by-rules"
-
-        Contract: sdk-boundary:ImportQuarantine:MUST:1
+                     → PermissionRequestResult is the real class → .kind works → 'denied-by-rules'
         """
-        original_skip = os.environ.get("SKIP_SDK_CHECK")
-        original_module = sys.modules.pop(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports", None
-        )
+        # Contract: sdk-boundary:ImportQuarantine:MUST:6
+        original_skip, original_module = self._save_import_state()
 
         try:
             os.environ.pop("SKIP_SDK_CHECK", None)
@@ -418,12 +257,10 @@ class TestSDKImportsRealPath:
             # - copilot.types is deleted (None → ImportError on from-import)
             # - copilot.session has PermissionRequestResult
             mock_prr = MagicMock(name="PermissionRequestResult")
-            mock_copilot = MagicMock()
+            mock_copilot = MagicMock(spec=["CopilotClient"])
             mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
-            # Ensure root has no PermissionRequestResult attribute
-            del mock_copilot.PermissionRequestResult
 
-            mock_copilot_session = MagicMock()
+            mock_copilot_session = MagicMock(spec=["PermissionRequestResult"])
             mock_copilot_session.PermissionRequestResult = mock_prr
 
             with patch.dict(
@@ -438,34 +275,21 @@ class TestSDKImportsRealPath:
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports"
                 )
 
-            # PermissionRequestResult MUST be resolved from copilot.session
-            assert mod.PermissionRequestResult is not None, (
-                "PermissionRequestResult is None when copilot.types is absent (SDK v0.2.1 "
-                "regression). _imports.py must fall back to "
-                "'from copilot.session import PermissionRequestResult'."
-            )
+            # PermissionRequestResult MUST be the mock from copilot.session
             assert mod.PermissionRequestResult is mock_prr, (
-                "PermissionRequestResult must be the value from copilot.session, not a stub."
+                f"PermissionRequestResult is {mod.PermissionRequestResult!r} but should be "
+                f"{mock_prr!r}. _imports.py must fall back to "
+                "'from copilot.session import PermissionRequestResult'."
             )
 
         finally:
-            if original_skip is not None:
-                os.environ["SKIP_SDK_CHECK"] = original_skip
-            else:
-                os.environ["SKIP_SDK_CHECK"] = "1"
-
-            sys.modules.pop("amplifier_module_provider_github_copilot.sdk_adapter._imports", None)
-
-            if original_module is not None:
-                sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
-                    original_module
-                )
+            self._restore_import_state(original_skip, original_module)
 
 
 class TestMembraneAPIPattern:
     """Verify domain code uses sdk_adapter package API, not submodule imports.
 
-    Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter, not submodules
+    Contract: sdk-boundary:Membrane:MUST:1, sdk-boundary:Membrane:MUST:3
 
     Domain modules (provider.py, streaming.py, request_adapter.py, __init__.py)
     MUST import from .sdk_adapter package, NOT from .sdk_adapter.client,
@@ -491,13 +315,14 @@ class TestMembraneAPIPattern:
         ".sdk_adapter.types",
         ".sdk_adapter._imports",
         ".sdk_adapter._spec_utils",
+        ".sdk_adapter.model_translation",
     ]
 
     @pytest.mark.parametrize("file_path", DOMAIN_FILES)
     def test_domain_file_uses_membrane_api(self, file_path: str) -> None:
-        """Domain file must import from sdk_adapter package, not submodules.
+        """Domain file MUST import from sdk_adapter package, not submodules.
 
-        Contract: sdk-boundary:Membrane:MUST:1
+        Contract: sdk-boundary:Membrane:MUST:1, sdk-boundary:Membrane:MUST:3
 
         Example of WRONG (bypasses membrane):
             from .sdk_adapter.client import CopilotClientWrapper
@@ -505,9 +330,9 @@ class TestMembraneAPIPattern:
         Example of RIGHT (uses membrane):
             from .sdk_adapter import CopilotClientWrapper
         """
+        # Contract: sdk-boundary:Membrane:MUST:1, sdk-boundary:Membrane:MUST:3
         py_file = Path(file_path)
-        if not py_file.exists():
-            pytest.skip(f"{file_path} not found")
+        assert py_file.exists(), f"{file_path} must exist in the repository"
 
         content = py_file.read_text(encoding="utf-8")
         tree = ast.parse(content)
@@ -518,14 +343,13 @@ class TestMembraneAPIPattern:
                 # Check if import is from sdk_adapter submodule
                 for pattern in self.FORBIDDEN_PATTERNS:
                     if node.module.endswith(pattern) or pattern in node.module:
-                        # Extract what's being imported
                         names = ", ".join(alias.name for alias in node.names)
                         violations.append(
                             f"from {node.module} import {names} "
                             f"(line {node.lineno}) — should use from .sdk_adapter import"
                         )
 
-        assert not violations, (
+        assert violations == [], (
             f"{file_path} bypasses sdk_adapter membrane:\n"
             + "\n".join(f"  - {v}" for v in violations)
             + "\n\nFix: import from .sdk_adapter package, not submodules. "
