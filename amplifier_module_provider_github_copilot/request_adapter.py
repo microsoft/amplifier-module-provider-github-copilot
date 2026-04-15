@@ -75,6 +75,10 @@ def _repair_tool_sequence(
     Detection is scoped to the current message list only (stateless). No
     cross-request state is needed because repair operates on a local copy.
 
+    SDK kernel result format: role='tool' Message with tool_call_id attribute.
+    Each Message.tool_call_id identifies the specific ToolCallBlock it answers.
+    This is the Amplifier canonical format (verified: sessions 5fc69faf, 39ad7e88).
+
     Contract: provider-protocol:complete:MUST:9
 
     Args:
@@ -87,7 +91,7 @@ def _repair_tool_sequence(
     # Phase 1: collect call IDs (with source msg_index) and result IDs.
     # dict-fallbacks are mandatory: getattr({"key": "v"}, "key", None) returns None.
     tool_calls: dict[str, tuple[int, str]] = {}  # call_id → (msg_index, tool_name)
-    unnamed_calls: list[tuple[int, str]] = []    # (msg_index, tool_name) — no call_id
+    unnamed_calls: list[tuple[int, str]] = []  # (msg_index, tool_name) — no call_id
     tool_result_ids: set[str] = set()
 
     for idx, msg in enumerate(messages):
@@ -95,9 +99,27 @@ def _repair_tool_sequence(
         content: Any = getattr(msg, "content", None)
         if content is None:
             continue
-        blocks: list[Any] = content if isinstance(content, list) else [content]
 
-        for block in blocks:
+        # SDK kernel format: role='tool' Message carries a single tool result.
+        # The tool_call_id is on the Message itself, not in content blocks.
+        # Reference pattern: amplifier-module-provider-anthropic _find_missing_tool_results()
+        #   elif msg.role == "tool" and hasattr(msg, "tool_call_id") and msg.tool_call_id:
+        #       tool_results.add(msg.tool_call_id)
+        if role == "tool":
+            result_id: str | None = getattr(msg, "tool_call_id", None)
+            if isinstance(msg, dict):
+                result_id = result_id or cast(dict[str, Any], msg).get("tool_call_id")
+            if result_id:
+                tool_result_ids.add(result_id)
+            continue  # String content — no blocks to iterate.
+
+        # Only iterate content blocks when content is actually a list.
+        # Reference: Anthropic provider guards with isinstance(msg.content, list)
+        # before entering the block loop — string content has no tool blocks.
+        if not isinstance(content, list):
+            continue
+
+        for block in content:
             if block is None:
                 continue
             block_type: str | None = getattr(block, "type", None)
@@ -105,16 +127,26 @@ def _repair_tool_sequence(
                 block_type = block_type or cast(dict[str, Any], block).get("type")
 
             # Tool call block — only count those from assistant messages.
-            if role == "assistant" and (
-                block_type == "tool_call" or hasattr(block, "tool_name")
-            ):
-                call_id: str | None = getattr(block, "tool_call_id", None)
+            # block_type == "tool_call" is the canonical check: ToolCallBlock.type is
+            # always "tool_call" (verified against amplifier_core 1.3.3).
+            if role == "assistant" and block_type == "tool_call":
+                # ToolCallBlock (SDK kernel type) uses .id — always a non-None str.
+                # Legacy ToolCallContent uses .tool_call_id.
+                # Prefer .id (SDK canonical) then .tool_call_id (legacy fallback).
+                call_id: str | None = getattr(block, "id", None) or getattr(
+                    block, "tool_call_id", None
+                )
                 if isinstance(block, dict):
-                    call_id = call_id or cast(dict[str, Any], block).get("tool_call_id")
+                    call_id = call_id or (
+                        cast(dict[str, Any], block).get("id")
+                        or cast(dict[str, Any], block).get("tool_call_id")
+                    )
                 tool_name: str = (
-                    getattr(block, "tool_name", None)
+                    getattr(block, "name", None)
+                    or getattr(block, "tool_name", None)
                     or (
-                        cast(dict[str, Any], block).get("tool_name")
+                        cast(dict[str, Any], block).get("name")
+                        or cast(dict[str, Any], block).get("tool_name")
                         if isinstance(block, dict)
                         else None
                     )
@@ -124,14 +156,6 @@ def _repair_tool_sequence(
                     tool_calls[call_id] = (idx, str(tool_name))
                 else:
                     unnamed_calls.append((idx, str(tool_name)))
-
-            # Tool result block — collect matched IDs to exclude from repair.
-            elif block_type == "tool_result" or hasattr(block, "output"):
-                result_id: str | None = getattr(block, "tool_call_id", None)
-                if isinstance(block, dict):
-                    result_id = result_id or cast(dict[str, Any], block).get("tool_call_id")
-                if result_id:
-                    tool_result_ids.add(result_id)
 
     # Phase 2: group unmatched calls by their source assistant message index.
     missing_by_idx: dict[int, list[str | None]] = {}
@@ -152,8 +176,8 @@ def _repair_tool_sequence(
     for msg_idx in sorted(missing_by_idx.keys(), reverse=True):
         synthetic_blocks = [
             {"type": "tool_result", "tool_call_id": cid, "output": _TOOL_SEQUENCE_REPAIR_MESSAGE}
-            if cid else
-            {"type": "tool_result", "output": _TOOL_SEQUENCE_REPAIR_MESSAGE}
+            if cid
+            else {"type": "tool_result", "output": _TOOL_SEQUENCE_REPAIR_MESSAGE}
             for cid in missing_by_idx[msg_idx]
         ]
         repair_count += len(synthetic_blocks)
@@ -188,13 +212,7 @@ def convert_chat_request(
     if isinstance(request, CompletionRequest):
         return request
 
-    # DEBUG: Log incoming request structure
     messages: list[Any] = getattr(request, "messages", [])
-    logger.debug(
-        "[REQUEST_ADAPTER] Received ChatRequest with %d messages, roles=%s",
-        len(messages),
-        [getattr(m, "role", "?") for m in messages[:5]],  # First 5 roles
-    )
 
     # Contract: provider-protocol:complete:MUST:9 — repair malformed tool sequences
     # before prompt extraction so the LLM receives coherent message history.
@@ -365,15 +383,17 @@ def _extract_content_block(block: Any) -> str:
         # Contract: behaviors:Security:MUST:1 — sanitize user content
         return _sanitize_content_for_injection(str(text)) if text else ""
 
-    # Skip ToolCallContent blocks entirely — they are handled via tool_calls field.
+    # Skip tool_call blocks entirely — they are handled via tool_calls field.
     # This prevents fake tool call detection from triggering on prior turns.
-    if block_type == "tool_call" or hasattr(block, "tool_name"):
+    # ToolCallBlock.type is always "tool_call" (amplifier_core 1.3.3 verified).
+    if block_type == "tool_call":
         return ""
 
     # ToolResultContent - format tool result including tool_call_id for correlation
-    # L-2: L-2: MUST include tool_call_id so the model can correlate results to calls.
+    # L-2: MUST include tool_call_id so the model can correlate results to calls.
     # Contract: provider-protocol:complete:MUST — preserve tool call IDs
-    if block_type == "tool_result" or hasattr(block, "output"):
+    # ToolResultBlock.type is always "tool_result" (amplifier_core 1.3.3 verified).
+    if block_type == "tool_result":
         output: str | None = getattr(block, "output", None) or _get("output")
         if output:
             tool_result_call_id: str | None = getattr(block, "tool_call_id", None) or _get(
@@ -531,9 +551,8 @@ def build_request_payload_for_observability(
                 desc_raw = getattr(tool, "description", None)
                 if isinstance(desc_raw, str):
                     description = desc_raw[:300]  # truncate — descriptions can be large
-                params_raw = (
-                    getattr(tool, "parameters", None)
-                    or getattr(tool, "input_schema", None)
+                params_raw = getattr(tool, "parameters", None) or getattr(
+                    tool, "input_schema", None
                 )
                 if isinstance(params_raw, dict):
                     parameters = params_raw
