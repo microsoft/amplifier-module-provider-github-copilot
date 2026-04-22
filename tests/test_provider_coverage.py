@@ -219,39 +219,6 @@ class TestProgressiveStreamingEmission:
     """Test progressive streaming content emission paths."""
 
     @pytest.mark.asyncio
-    async def test_text_content_emitted_during_streaming(self) -> None:
-        """Text deltas are emitted through hooks during streaming.
-
-        Covers: provider.py lines 659-666 (text content emission)
-        """
-        from amplifier_module_provider_github_copilot.provider import (
-            GitHubCopilotProvider,
-        )
-
-        events = [
-            text_delta_event("Hello "),
-            text_delta_event("World!"),
-            usage_event(5, 10),
-        ]
-
-        mock_client = MockCopilotClientWrapper(events=events)
-
-        # Create mock coordinator with hooks
-        from unittest.mock import AsyncMock
-
-        mock_coordinator = MagicMock()
-        mock_coordinator.hooks = MagicMock()
-        mock_coordinator.hooks.emit = AsyncMock()
-
-        provider = GitHubCopilotProvider(client=mock_client, coordinator=mock_coordinator)  # type: ignore[arg-type]
-        request = _create_mock_request()
-
-        await provider.complete(request)
-
-        # Emission should have been attempted
-        # (actual call may vary based on event loop timing)
-
-    @pytest.mark.asyncio
     async def test_thinking_content_emitted_during_streaming(self) -> None:
         """Thinking/reasoning deltas are emitted during streaming.
 
@@ -516,56 +483,6 @@ class TestToolCaptureAndAbort:
 # =============================================================================
 
 
-class TestEmitHelpers:
-    """Test streaming emission helper methods."""
-
-    def test_emit_streaming_content_outside_event_loop(self) -> None:
-        """_emit_streaming_content handles no running loop gracefully.
-
-        Covers: provider.py lines 795-797 (RuntimeError branch)
-        """
-        from amplifier_core import TextContent
-
-        from amplifier_module_provider_github_copilot.provider import (
-            GitHubCopilotProvider,
-        )
-
-        provider = GitHubCopilotProvider()
-        content = TextContent(text="test")
-
-        # Call outside event loop - should not raise
-        provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
-
-    @pytest.mark.asyncio
-    async def test_emit_content_async_logs_on_error(
-        self,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """_emit_content_async logs error but doesn't raise.
-
-        Covers: provider.py lines 806-815 (emit error handling)
-        """
-        import logging
-        from unittest.mock import AsyncMock
-
-        from amplifier_core import TextContent
-
-        from amplifier_module_provider_github_copilot.provider import (
-            GitHubCopilotProvider,
-        )
-
-        # Create coordinator with failing hooks
-        mock_coordinator = MagicMock()
-        mock_coordinator.hooks = MagicMock()
-        mock_coordinator.hooks.emit = AsyncMock(side_effect=RuntimeError("Hook failed"))
-
-        provider = GitHubCopilotProvider(coordinator=mock_coordinator)
-        content = TextContent(text="test")
-
-        with caplog.at_level(logging.DEBUG):
-            # Should not raise
-            await provider._emit_content_async(content)  # pyright: ignore[reportPrivateUsage]
-
 
 # =============================================================================
 # Close and Cleanup Tests (Lines 828-842)
@@ -612,47 +529,8 @@ class TestCloseAndCleanup:
         assert len(provider._pending_emit_tasks) == 0  # pyright: ignore[reportPrivateUsage]
 
 
-class TestEmitContentAsyncGuards:
-    """Test _emit_content_async edge cases."""
-
-    @pytest.mark.asyncio
-    async def test_emit_content_async_with_none_coordinator(self) -> None:
-        """_emit_content_async returns early when coordinator is None.
-
-        Covers: provider.py line 806 (coordinator guard)
-        """
-        from amplifier_core import TextContent
-
-        from amplifier_module_provider_github_copilot.provider import (
-            GitHubCopilotProvider,
-        )
-
-        provider = GitHubCopilotProvider(coordinator=None)
-        content = TextContent(text="test")
-
-        # Should return immediately without error
-        await provider._emit_content_async(content)  # pyright: ignore[reportPrivateUsage]
-
-
 class TestHandleEmitTaskException:
     """Test _handle_emit_task_exception callback."""
-
-    def test_handle_cancelled_task(self) -> None:
-        """Cancelled task is ignored without logging.
-
-        Covers: provider.py lines 824-825 (cancelled branch)
-        """
-        from amplifier_module_provider_github_copilot.provider import (
-            GitHubCopilotProvider,
-        )
-
-        provider = GitHubCopilotProvider()
-
-        mock_task = MagicMock()
-        mock_task.cancelled.return_value = True
-
-        # Should not raise
-        provider._handle_emit_task_exception(mock_task)  # pyright: ignore[reportPrivateUsage]
 
     def test_handle_task_with_exception(
         self,

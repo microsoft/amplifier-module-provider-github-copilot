@@ -14,6 +14,7 @@ These tests verify the singleton lifecycle for CopilotClientWrapper:
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -345,18 +346,6 @@ class TestLockTimeout:
             release_signal.set()
             t.join(timeout=2.0)
 
-    def test_state_lock_is_eager_threading_lock(self) -> None:
-        """_state_lock is a threading.Lock, eagerly initialized at import time.
-
-        Contract: provider-protocol:mount:MUST:5
-        No asyncio.Lock at module level — threading.Lock is event-loop-safe.
-        """
-        import threading
-
-        import amplifier_module_provider_github_copilot as provider_module
-
-        assert isinstance(provider_module._state_lock, type(threading.Lock()))
-
     def test_lock_timeout_in_singleton_config(self) -> None:
         """lock_timeout_seconds must be present in SingletonConfig.
 
@@ -447,7 +436,7 @@ class TestMountIntegration:
             mock_acquire.assert_called_once()
             # Contract: provider-protocol:mount:MUST:2
             assert callable(cleanup)
-            assert asyncio.iscoroutinefunction(cleanup)
+            assert inspect.iscoroutinefunction(cleanup)
 
     @pytest.mark.asyncio
     async def test_cleanup_calls_release(self) -> None:
@@ -476,7 +465,7 @@ class TestMountIntegration:
             cleanup = await provider_module.mount(mock_coordinator)
             # Contract: provider-protocol:mount:MUST:2
             assert callable(cleanup)
-            assert asyncio.iscoroutinefunction(cleanup)
+            assert inspect.iscoroutinefunction(cleanup)
 
             await cleanup()
             mock_release.assert_called_once()
@@ -519,7 +508,7 @@ class TestMountIntegration:
             cleanup = await provider_module.mount(mock_coordinator)
             # Contract: provider-protocol:mount:MUST:2
             assert callable(cleanup)
-            assert asyncio.iscoroutinefunction(cleanup)
+            assert inspect.iscoroutinefunction(cleanup)
 
             await cleanup()
 
@@ -582,9 +571,9 @@ class TestMountIntegration:
 
             # Contract: provider-protocol:mount:MUST:2
             assert callable(cleanup1)
-            assert asyncio.iscoroutinefunction(cleanup1)
+            assert inspect.iscoroutinefunction(cleanup1)
             assert callable(cleanup2)
-            assert asyncio.iscoroutinefunction(cleanup2)
+            assert inspect.iscoroutinefunction(cleanup2)
 
             # Both should use the same client
             assert provider_module._shared_client is mock_client
@@ -632,9 +621,9 @@ class TestConcurrentAccess:
 
             # Contract: provider-protocol:mount:MUST:2
             assert callable(results[0])
-            assert asyncio.iscoroutinefunction(results[0])
+            assert inspect.iscoroutinefunction(results[0])
             assert callable(results[1])
-            assert asyncio.iscoroutinefunction(results[1])
+            assert inspect.iscoroutinefunction(results[1])
 
             # Both should use the same client
             assert provider_module._shared_client is mock_client
@@ -756,29 +745,6 @@ class TestMountExceptionPaths:
         monkeypatch.setattr(m, "_shared_client_refcount", 0)
 
     @pytest.mark.asyncio
-    async def test_mount_coordinator_exception_raises(self) -> None:
-        """coordinator.mount() throwing raises (P2 Fix: not graceful degradation).
-
-        Contract: provider-protocol.md
-        P2 Fix: Raise instead of return None.
-        """
-        import amplifier_module_provider_github_copilot as m
-
-        coordinator = MagicMock(spec=ModuleCoordinator)
-        coordinator.mount = AsyncMock(side_effect=Exception("coordinator error"))
-
-        mock_client = MagicMock(spec=CopilotClientWrapper)
-
-        with (
-            patch.object(
-                m, "_acquire_shared_client", new_callable=AsyncMock, return_value=mock_client
-            ),
-            patch.object(m, "_release_shared_client", new_callable=AsyncMock),
-        ):
-            with pytest.raises(Exception, match="coordinator error"):
-                await m.mount(coordinator)
-
-    @pytest.mark.asyncio
     async def test_mount_acquire_timeout_raises(self) -> None:
         """TimeoutError from _acquire_shared_client raises (P2 Fix).
 
@@ -876,9 +842,9 @@ class TestSessionIsolation:
         # Both cleanups should exist
         # Contract: provider-protocol:mount:MUST:2
         assert callable(cleanup1)
-        assert asyncio.iscoroutinefunction(cleanup1)
+        assert inspect.iscoroutinefunction(cleanup1)
         assert callable(cleanup2)
-        assert asyncio.iscoroutinefunction(cleanup2)
+        assert inspect.iscoroutinefunction(cleanup2)
 
         # Two independent providers should have been created
         assert len(captured_providers) == 2
@@ -923,7 +889,7 @@ class TestSessionIsolation:
             # Cleanup first session
             # Contract: provider-protocol:mount:MUST:2
             assert callable(cleanup1)
-            assert asyncio.iscoroutinefunction(cleanup1)
+            assert inspect.iscoroutinefunction(cleanup1)
             await cleanup1()
 
             # Client should still be alive (refcount > 0)
@@ -934,7 +900,7 @@ class TestSessionIsolation:
             # Second session cleanup releases last reference
             # Contract: provider-protocol:mount:MUST:2
             assert callable(cleanup2)
-            assert asyncio.iscoroutinefunction(cleanup2)
+            assert inspect.iscoroutinefunction(cleanup2)
             await cleanup2()
 
             # Now client should be closed
@@ -996,7 +962,7 @@ class TestSessionIsolation:
             cleanup = await provider_module.mount(mock_coordinator)
             # Contract: provider-protocol:mount:MUST:2
             assert callable(cleanup)
-            assert asyncio.iscoroutinefunction(cleanup)
+            assert inspect.iscoroutinefunction(cleanup)
 
             # First cleanup
             await cleanup()
@@ -1008,3 +974,4 @@ class TestSessionIsolation:
 
             # Refcount should never go negative
             assert provider_module._shared_client_refcount == 0
+

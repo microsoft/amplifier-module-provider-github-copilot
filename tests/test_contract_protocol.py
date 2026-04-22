@@ -32,7 +32,10 @@ class TestProtocolNameProperty:
         assert provider.name == "github-copilot"
 
     def test_is_a_property_not_method(self) -> None:
-        """provider-protocol:name:MUST:2 - Is a property, not a method."""
+        """provider-protocol:name:MUST:2 - Is a property, not a method.
+
+        Contract: provider-protocol:name:MUST:2
+        """
         assert isinstance(GitHubCopilotProvider.name, property)
 
 
@@ -242,6 +245,47 @@ class TestProtocolParseToolCalls:
         import inspect
 
         assert not inspect.iscoroutinefunction(provider.parse_tool_calls)
+
+
+class TestProtocolMount:
+    """provider-protocol:mount:MUST:2,3 — migrated from test_protocol_compliance.py"""
+
+    @pytest.mark.asyncio
+    async def test_mount_registers_provider(self) -> None:
+        """provider-protocol:mount:MUST:3 — mount() calls coordinator.mount() with correct args."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_core import ModuleCoordinator  # type: ignore[import]
+
+        from amplifier_module_provider_github_copilot import mount
+
+        coordinator = MagicMock(spec=ModuleCoordinator)
+        coordinator.mount = AsyncMock()
+
+        _ = await mount(coordinator, config=None)
+
+        coordinator.mount.assert_called_once()
+        call_args = coordinator.mount.call_args
+        assert call_args[0][0] == "providers"
+        assert call_args[1]["name"] == "github-copilot"
+
+    @pytest.mark.asyncio
+    async def test_mount_returns_cleanup_callable(self) -> None:
+        """provider-protocol:mount:MUST:2 — mount() returns an async cleanup coroutine."""
+        import inspect
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_core import ModuleCoordinator  # type: ignore[import]
+
+        from amplifier_module_provider_github_copilot import mount
+
+        coordinator = MagicMock(spec=ModuleCoordinator)
+        coordinator.mount = AsyncMock()
+
+        cleanup = await mount(coordinator, config=None)
+
+        assert inspect.iscoroutinefunction(cleanup)
+        assert callable(cleanup)
 
 
 class TestConcreteProtocolBehavior:

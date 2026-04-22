@@ -156,6 +156,7 @@ class TestSessionConfigContract:
         """Deny hook MUST be passed via session config 'hooks' key.
 
         Contract: deny-destroy:DenyHook:MUST:1
+        Contract: sdk-boundary:Config:MUST:5
         Hooks are passed via session config, not method calls.
         """
         mock_client = ConfigCapturingMock()
@@ -515,6 +516,8 @@ class TestRuntimeSDKTypeLeak:
 
         The module attribute for SessionHandle must point to our sdk_adapter,
         not to the Copilot SDK package.
+
+        Contract: sdk-boundary:TypeTranslation:MUST:1
         """
         from amplifier_module_provider_github_copilot.sdk_adapter import SessionHandle
 
@@ -942,3 +945,201 @@ class TestSessionHandleMethods:
         await handle.abort()
 
         raw.abort.assert_awaited_once()
+
+
+class TestSDKImportError:
+    """sdk-boundary:Membrane:MUST:5 — Missing SDK raises ProviderUnavailableError.
+
+    Migrated from test_sdk_boundary.py.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sdk_import_error_raises_provider_unavailable(self) -> None:
+        """Missing SDK raises ProviderUnavailableError or other LLMError.
+
+        Contract: sdk-boundary:Membrane:MUST:5
+        """
+        import sys
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.error_translation import LLMError
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        copilot_module = sys.modules.pop("copilot", None)
+        try:
+            with patch.dict(sys.modules, {"copilot": None}):
+                wrapper = CopilotClientWrapper()
+
+                with pytest.raises(LLMError):
+                    async with wrapper.session():
+                        pass  # pragma: no cover
+        finally:
+            if copilot_module is not None:
+                sys.modules["copilot"] = copilot_module
+
+
+class TestTypeTranslationEventHandlers:
+    """sdk-boundary:TypeTranslation:MUST:2 — handlers receive typed SessionEvent objects.
+
+    This contract was lost when test_sdk_mocks.py was deleted. The SDK session dispatch
+    mechanism MUST convert any event representation into typed SessionEvent instances
+    before invoking registered handlers — raw dicts must never reach callbacks.
+    """
+
+    @pytest.mark.asyncio
+    async def test_handler_receives_session_event_not_dict(self) -> None:
+        """sdk-boundary:TypeTranslation:MUST:2 — on() handlers receive typed SessionEvent.
+
+        Verifies that typed SessionEvent inputs flow through to handlers as SessionEvent
+        instances — no unexpected transformation or wrapping occurs in the dispatch path.
+        Complements test_dict_event_converted_to_session_event_before_dispatch which
+        tests the conversion path from raw dict inputs.
+
+        Contract: sdk-boundary:TypeTranslation:MUST:2
+        """
+        from tests.fixtures.sdk_mocks import MockSDKSession, SessionEvent, text_delta_event
+
+        received: list[object] = []
+        session = MockSDKSession(
+            session_id="type-check-session",
+            events=[text_delta_event("hello")],
+        )
+        session.on(lambda e: received.append(e))
+
+        await session.send("test prompt")
+
+        # Includes text_delta + auto-injected SESSION_IDLE
+        untyped = [e for e in received if not isinstance(e, SessionEvent)]
+        assert not untyped, (
+            f"TypeTranslation:MUST:2 — all dispatched events must be SessionEvent instances. "
+            f"Got {len(untyped)} non-SessionEvent events out of {len(received)} total."
+        )
+
+    @pytest.mark.asyncio
+    async def test_dict_event_converted_to_session_event_before_dispatch(self) -> None:
+        """sdk-boundary:TypeTranslation:MUST:2 — dict events converted before handler dispatch.
+
+        Even when MockSDKSession receives raw dicts (legacy format), handlers MUST
+        receive typed SessionEvent objects, never the raw dict. This verifies the
+        _to_session_event() boundary translation is applied before dispatch.
+
+        Mutation check: skip _to_session_event() for dict inputs → dict reaches handler,
+        event.type and event.data attribute access raise AttributeError.
+        """
+        from tests.fixtures.sdk_mocks import MockSDKSession, SessionEvent
+
+        received: list[object] = []
+        raw_dict_event: dict[str, Any] = {"type": "assistant.message_delta", "text": "chunk"}
+        session = MockSDKSession(
+            session_id="dict-conversion-session",
+            events=[raw_dict_event],
+        )
+        session.on(lambda e: received.append(e))
+
+        await session.send("test prompt")
+
+        for event in received:
+            assert isinstance(event, SessionEvent), (
+                f"TypeTranslation:MUST:2 — dict event must be converted to SessionEvent before "
+                f"dispatch. Handler received {type(event).__name__!r} — raw dict leak detected."
+            )
+
+
+class TestConfigImmutability:
+    """Protection configs are frozen dataclasses supporting sdk-protection invariants.
+
+    ToolCaptureConfig supports sdk-protection:ToolCapture:MUST:1,2 (first-turn-only and
+    deduplication policy). SessionProtectionConfig supports sdk-protection:Session:MUST:3,4
+    (explicit abort and abort timeout). Both use @dataclass(frozen=True) — these tests catch
+    accidental removal of frozen=True, which would allow callers to mutate shared config
+    objects and silently break session isolation between requests.
+    """
+
+    def test_tool_capture_config_first_turn_only_is_immutable(self) -> None:
+        """frozen=True — ToolCaptureConfig.first_turn_only raises FrozenInstanceError on write.
+
+        Mutation check: remove frozen=True from ToolCaptureConfig → assignment silently
+        succeeds, this assertion fails, regression caught.
+        """
+        from dataclasses import FrozenInstanceError
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            ToolCaptureConfig,
+        )
+
+        config = ToolCaptureConfig()
+        with pytest.raises(FrozenInstanceError):
+            config.first_turn_only = False  # type: ignore[misc]
+
+    def test_tool_capture_config_deduplicate_is_immutable(self) -> None:
+        """frozen=True — ToolCaptureConfig.deduplicate raises FrozenInstanceError on write."""
+        from dataclasses import FrozenInstanceError
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            ToolCaptureConfig,
+        )
+
+        config = ToolCaptureConfig()
+        with pytest.raises(FrozenInstanceError):
+            config.deduplicate = False  # type: ignore[misc]
+
+    def test_tool_capture_config_first_turn_only_is_strict_bool(self) -> None:
+        """ToolCaptureConfig.first_turn_only must be exactly bool, not truthy int.
+
+        Strict type() check (not isinstance) catches int(1) or other truthy values
+        that would pass isinstance but break type-narrowing callers.
+        """
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            ToolCaptureConfig,
+        )
+
+        config = ToolCaptureConfig()
+        assert type(config.first_turn_only) is bool, (
+            f"ToolCaptureConfig.first_turn_only must be exactly bool, "
+            f"got {type(config.first_turn_only).__name__!r}"
+        )
+
+    def test_session_protection_config_explicit_abort_is_immutable(self) -> None:
+        """frozen=True — SessionProtectionConfig.explicit_abort raises FrozenInstanceError on write.
+
+        Mutation check: remove frozen=True from SessionProtectionConfig → assignment
+        silently succeeds, session abort policy becomes mutable across callers.
+        """
+        from dataclasses import FrozenInstanceError
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SessionProtectionConfig,
+        )
+
+        config = SessionProtectionConfig()
+        with pytest.raises(FrozenInstanceError):
+            config.explicit_abort = False  # type: ignore[misc]
+
+    def test_session_protection_config_abort_timeout_is_immutable(self) -> None:
+        """frozen=True — SessionProtectionConfig.abort_timeout_seconds raises FrozenInstanceError.
+
+        Mutation check: remove frozen=True → assignment silently succeeds.
+        """
+        from dataclasses import FrozenInstanceError
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SessionProtectionConfig,
+        )
+
+        config = SessionProtectionConfig()
+        with pytest.raises(FrozenInstanceError):
+            config.abort_timeout_seconds = 0.0  # type: ignore[misc]
+
+    def test_session_protection_config_explicit_abort_is_strict_bool(self) -> None:
+        """SessionProtectionConfig.explicit_abort must be exactly bool."""
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SessionProtectionConfig,
+        )
+
+        config = SessionProtectionConfig()
+        assert type(config.explicit_abort) is bool, (
+            f"SessionProtectionConfig.explicit_abort must be exactly bool, "
+            f"got {type(config.explicit_abort).__name__!r}"
+        )

@@ -438,7 +438,8 @@ class TestConnectionErrorMapping:
 
 
 class TestAbortErrorTranslation:
-    """error-hierarchy:AbortError:MUST:1 — SDK abort/cancel errors must translate to AbortError."""
+    """error-hierarchy:AbortError:MUST:1,2 — SDK abort/cancel errors must translate to AbortError.
+    """
 
     def test_abort_error_translation(self) -> None:
         """AbortError or CancelledError must translate to kernel AbortError(retryable=False).
@@ -463,6 +464,42 @@ class TestAbortErrorTranslation:
             f"AbortError:MUST:1 — expected AbortError, got {type(result).__name__}"
         )
         assert result.retryable is False, "AbortError:MUST:1 — abort errors must not be retryable"
+
+    def test_asyncio_timeout_produces_llm_timeout_not_abort_error(self) -> None:
+        """asyncio.TimeoutError MUST translate to LLMTimeoutError, NOT AbortError.
+
+        Contract: error-hierarchy:AbortError:MUST:2
+
+        asyncio.TimeoutError is a network/provider timeout, not a user-initiated
+        abort. It must translate to LLMTimeoutError (retryable) rather than
+        AbortError (non-retryable).
+        """
+
+        from amplifier_core.llm_errors import LLMTimeoutError as KernelLLMTimeoutError
+
+        from amplifier_module_provider_github_copilot.error_translation import (
+            load_error_config,
+            translate_sdk_error,
+        )
+
+        config = load_error_config()
+
+        # asyncio.TimeoutError should NOT become AbortError
+        result = translate_sdk_error(TimeoutError("operation timed out"), config)
+
+        # Contract: error-hierarchy:AbortError:MUST:2 — timeout != abort
+        assert type(result) is not KernelAbortError, (
+            f"AbortError:MUST:2 — asyncio.TimeoutError must NOT become AbortError, "
+            f"got {type(result).__name__}"
+        )
+        # It should become LLMTimeoutError (retryable)
+        assert type(result) is KernelLLMTimeoutError, (
+            f"AbortError:MUST:2 — asyncio.TimeoutError must become LLMTimeoutError, "
+            f"got {type(result).__name__}"
+        )
+        assert result.retryable is True, (
+            "AbortError:MUST:2 — LLMTimeoutError should be retryable"
+        )
 
 
 class TestKernelTypesOnly:

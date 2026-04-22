@@ -245,22 +245,6 @@ def sdk_module() -> Any:
     return pytest.importorskip("copilot", reason="github-copilot-sdk not installed")
 
 
-@pytest.fixture
-def restore_github_tokens() -> Generator[None, None, None]:
-    """Restore saved GitHub tokens for live tests.
-
-    Use this fixture in @pytest.mark.live tests that need real tokens.
-    Tokens were saved and cleared at module load for security (P1-6).
-    """
-    for var, val in _saved_tokens.items():
-        os.environ[var] = val
-    yield
-    # Restore cleared state after test
-    for var in _saved_tokens:
-        if var in os.environ:
-            del os.environ[var]
-
-
 @pytest.fixture(autouse=True)
 def _auto_restore_tokens_for_live_tests(  # pyright: ignore[reportUnusedFunction]
     request: pytest.FixtureRequest,
@@ -284,44 +268,3 @@ def _auto_restore_tokens_for_live_tests(  # pyright: ignore[reportUnusedFunction
         yield
 
 
-@pytest.fixture
-def mock_sdk_event_dict() -> dict[str, Any]:
-    """Sample SDK event as dict for testing helpers.
-
-    Contract: sdk-boundary:EventShape:MUST:1
-    Reference: SDK SessionEvent structure from github-copilot-sdk
-
-    SDK v0.1.33+ uses nested data structure:
-    - event.data.delta_content for streaming deltas
-    - event.data.content for complete messages
-    """
-    return {
-        "type": "assistant.message_delta",
-        "data": {
-            "delta_content": "hello",
-            "message_id": "msg_001",
-        },
-    }
-
-
-@pytest.fixture
-def mock_sdk_event_object() -> Any:
-    """Sample SDK event as object for testing helpers.
-
-    Contract: sdk-boundary:EventShape:MUST:2, sdk-boundary:EventShape:MUST:3
-    Reference: SDK SessionEvent structure from github-copilot-sdk
-
-    Matches real SDK SessionEvent structure from generated SessionEvents.
-    """
-
-    class MockData:
-        delta_content = "hello"
-        content = None
-        message_id = "msg_001"
-        reasoning_id = None
-
-    class MockEvent:
-        type = "assistant.message_delta"
-        data = MockData()
-
-    return MockEvent()

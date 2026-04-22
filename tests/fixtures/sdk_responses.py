@@ -61,35 +61,5 @@ class MockUsage:
     total_tokens: int = 0
 
 
-# Pre-built fixtures for common test scenarios
-
-
-def create_simple_response(content: str) -> MockSDKResponse:
-    """Create a simple SDK response with text content."""
-    return MockSDKResponse(data=MockData(content=content))
-
-
-def create_empty_response() -> MockSDKResponse:
-    """Create an SDK response with empty content."""
-    return MockSDKResponse(data=MockData(content=""))
-
-
-def create_none_response() -> MockSDKResponse:
-    """Create an SDK response with None data."""
-    return MockSDKResponse(data=None)
-
-
-def create_dict_response(content: str) -> MockSDKResponse:
-    """Create an SDK response with dict data (backward compat)."""
-    return MockSDKResponse(data={"content": content})
-
-
-# Fixture registry for parametrized tests
-SDK_RESPONSE_FIXTURES = {
-    "simple": create_simple_response("Hello, world!"),
-    "empty": create_empty_response(),
-    "none": create_none_response(),
-    "dict": create_dict_response("Dict content"),
-    "multiline": create_simple_response("Line 1\nLine 2\nLine 3"),
-    "unicode": create_simple_response("Unicode: 你好世界 🌍"),
-}
+# Pre-built fixtures for common test scenarios and SDK_RESPONSE_FIXTURES removed —
+# zero consumers found (orphaned from deleted test files).

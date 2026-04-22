@@ -126,7 +126,8 @@ class TestKeyValueRedaction:
         result = redact_sensitive_text(text)
 
         assert "sk_live_abc123" not in result
-        assert '"user":"x"' in result or "user" in result
+        # Non-sensitive fields must be preserved unchanged
+        assert '"user":"x"' in result
 
     def test_preserves_non_secret_text(self) -> None:
         """Non-secret text is unchanged.
@@ -226,7 +227,9 @@ class TestExceptionRedaction:
         exc = Exception("Authentication failed: token=ghp_" + "a" * 36)
         result = redact_exception_message(exc)
 
-        assert "ghp_" not in result or REDACTED in result
+        # behaviors:Logging:MUST:4 — token MUST be removed AND placeholder MUST be present
+        assert "ghp_" not in result
+        assert REDACTED in result
         assert "Authentication failed" in result
 
     def test_redact_exception_with_api_key(self) -> None:
@@ -296,7 +299,9 @@ class TestErrorTranslationIntegration:
         result = translate_sdk_error(exc, config)
 
         # Should be classified as LLMTimeoutError (matching worked)
-        assert "LLMTimeoutError" in type(result).__name__ or result.retryable is True
+        # error-hierarchy:Translation:MUST:2 — classification uses original message, both must hold
+        assert "LLMTimeoutError" in type(result).__name__
+        assert result.retryable is True
 
 
 # ============================================================================
@@ -492,7 +497,9 @@ class TestShadowTestFailures:
         sdk_error = Exception("CAPI request failed: ghp_" + "x" * 30)
         result = redact_exception_message(sdk_error)
 
-        assert "ghp_" not in result or REDACTED in result
+        # behaviors:Logging:MUST:4 — token MUST be removed AND placeholder MUST be present
+        assert "ghp_" not in result
+        assert REDACTED in result
 
 
 # ============================================================================

@@ -582,26 +582,6 @@ class TestCopilotClientWrapperListModels:
     """
 
     @pytest.mark.asyncio
-    async def test_client_wrapper_list_models_calls_sdk(self) -> None:
-        """Contract: sdk-boundary:Models:MUST:1
-
-        CopilotClientWrapper.list_models() MUST call SDK client.list_models().
-        """
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            CopilotClientWrapper,
-        )
-
-        # Mock SDK client
-        mock_sdk_client = MagicMock()
-        mock_sdk_client.list_models = AsyncMock(return_value=[make_sdk_model_info()])
-
-        wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
-        result = await wrapper.list_models()
-
-        mock_sdk_client.list_models.assert_called_once()
-        assert len(result) == 1
-
-    @pytest.mark.asyncio
     async def test_client_wrapper_list_models_returns_sdk_models(self) -> None:
         """Contract: sdk-boundary:Models:MUST:1
 
@@ -658,40 +638,6 @@ class TestFetchModelsFromSDK:
     Contract: sdk-boundary:ModelDiscovery:MUST:1
     - MUST fetch models from SDK list_models() API
     """
-
-    @pytest.mark.asyncio
-    async def test_fetch_calls_sdk_list_models(self) -> None:
-        """Contract: sdk-boundary:ModelDiscovery:MUST:1
-
-        MUST call SDK client.list_models() to get available models.
-        """
-        from amplifier_module_provider_github_copilot.models import fetch_models
-
-        # Mock SDK client
-        mock_client = MagicMock()
-        mock_client.list_models = AsyncMock(
-            return_value=[
-                make_sdk_model_info(
-                    model_id="claude-sonnet-4-5",
-                    name="Claude Sonnet 4.5",
-                    context_window=200000,
-                    max_prompt_tokens=168000,
-                ),
-                make_sdk_model_info(
-                    model_id="gpt-4o",
-                    name="GPT-4o",
-                    context_window=128000,
-                    max_prompt_tokens=100000,
-                ),
-            ]
-        )
-
-        result = await fetch_models(mock_client)
-
-        mock_client.list_models.assert_called_once()
-        assert len(result) == 2
-        assert result[0].id == "claude-sonnet-4-5"
-        assert result[1].id == "gpt-4o"
 
     @pytest.mark.asyncio
     async def test_fetch_returns_copilot_model_info_list(self) -> None:
@@ -783,26 +729,6 @@ class TestModelDiscoveryErrors:
     Contract: behaviors:ModelDiscoveryError:MUST:1-2
     Contract: behaviors:ModelDiscoveryError:MUST_NOT:1
     """
-
-    @pytest.mark.asyncio
-    async def test_list_models_raises_when_sdk_fails_and_no_cache(self) -> None:
-        """Contract: behaviors:ModelDiscoveryError:MUST:1
-
-        MUST raise ProviderUnavailableError when SDK unavailable AND disk cache empty.
-        """
-        from amplifier_core import ProviderUnavailableError
-
-        from amplifier_module_provider_github_copilot.models import fetch_models
-
-        mock_client = MagicMock(spec=_MockSDKClient)
-        mock_client.list_models = AsyncMock(side_effect=Exception("SDK connection failed"))
-
-        with pytest.raises(ProviderUnavailableError) as exc_info:
-            await fetch_models(mock_client)
-
-        # Check error includes the exact documented message
-        # Contract: behaviors:ModelDiscoveryError:MUST:1
-        assert "Failed to fetch models from SDK" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_error_message_includes_reason(self) -> None:

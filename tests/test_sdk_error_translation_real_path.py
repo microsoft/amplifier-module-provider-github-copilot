@@ -18,7 +18,6 @@ import pytest
 
 from amplifier_module_provider_github_copilot.error_translation import (
     AuthenticationError,
-    LLMError,
     LLMTimeoutError,
     ProviderUnavailableError,
 )
@@ -209,8 +208,9 @@ class TestRealSDKPathErrorTranslation:
 
         request = CompletionRequest(prompt="test", model="gpt-4o")
 
-        # Should translate to some LLMError subclass (likely ProviderUnavailableError)
-        with pytest.raises(LLMError):
+        # Contract: error-hierarchy:ConnectionError:MUST:1
+        # ConnectionError MUST → ProviderUnavailableError
+        with pytest.raises(ProviderUnavailableError):
             await provider.complete(request)  # type: ignore[arg-type]
 
 

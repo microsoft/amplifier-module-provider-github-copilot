@@ -15,6 +15,7 @@ the P1-6 security fix (fail-closed when token cannot be applied).
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -113,7 +114,7 @@ class TestMountFailurePath:
 
         # On success, should return a cleanup function (not None)
         assert callable(result)
-        assert asyncio.iscoroutinefunction(result), (
+        assert inspect.iscoroutinefunction(result), (
             "mount() must return an async cleanup callable (coroutine function). "
             "Got sync callable — cleanup cannot await provider.cancel_emit_tasks() or "
             "_release_shared_client(). See provider-protocol:mount:MUST:2"

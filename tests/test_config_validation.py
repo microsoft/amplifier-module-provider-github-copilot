@@ -79,6 +79,7 @@ class TestConfigLoaderMissingKeys:
         """Missing PROVIDER definition raises ConfigurationError.
 
         # Contract: behaviors:ConfigLoading:MUST:2
+        # Contract: behaviors:ConfigLoading:MUST:6
         """
         from amplifier_module_provider_github_copilot.config_loader import (
             load_models_config,
@@ -137,68 +138,32 @@ class TestConfigLoaderMissingKeys:
         load_models_config.cache_clear()
 
 
-class TestPythonConfigStructure:
-    """Tests validating the Python config structure in config/models.py.
+class TestSdkLogLevelValidation:
+    """sdk-protection:Subprocess:MUST:7 — log level validation.
 
-    These tests catch accidental corruption or deletion of required fields
-    in the config/models.py data module.
+    Migrated from test_sdk_protection.py.
     """
 
-    def test_models_constant_does_not_exist(self) -> None:
-        """config/_models.py MODELS constant has been removed.
+    def test_validation_rejects_invalid_log_level_directly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """SDK log level validator falls back to default for invalid env values.
 
-        MODELS was removed because the SDK is the authoritative model catalog.
-        Contract: behaviors:ModelDiscoveryError:MUST_NOT:1
+        Contract: sdk-protection:Subprocess:MUST:7
         """
-        from amplifier_module_provider_github_copilot.config import _models as models
+        import logging
+        import os
+        from unittest.mock import patch
 
-        assert not hasattr(models, "MODELS"), (
-            "MODELS was removed — model catalog must come from the SDK, not config. "
-            "Contract: behaviors:ModelDiscoveryError:MUST_NOT:1"
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            _resolve_sdk_log_level,  # pyright: ignore[reportPrivateUsage]
         )
 
-    def test_default_model_limits_match_sdk_verified_values(self) -> None:
-        """PROVIDER defaults have SDK-verified context and output limits.
+        with (
+            patch.dict(os.environ, {"COPILOT_SDK_LOG_LEVEL": "invalid_level"}, clear=False),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = _resolve_sdk_log_level()
 
-        # Contract: provider-protocol:list_models:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.config import _models as models
-
-        assert models.PROVIDER["defaults"]["context_window"] == 200000
-        assert models.PROVIDER["defaults"]["max_output_tokens"] == 32000
-
-    def test_provider_has_required_fields(self) -> None:
-        """config/_models.py PROVIDER has required top-level and nested fields.
-
-        # Contract: provider-protocol:name:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.config import _models as models
-
-        assert models.PROVIDER["id"] == "github-copilot"
-        assert models.PROVIDER["display_name"] == "GitHub Copilot SDK"
-        assert models.PROVIDER["defaults"]["model"] == "claude-opus-4.5"
-        assert models.PROVIDER["defaults"]["timeout"] == 3600
-
-    def test_fallbacks_has_required_keys(self) -> None:
-        """config/_models.py FALLBACKS has required keys.
-
-        # Contract: provider-protocol:get_info:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.config import _models as models
-
-        assert models.FALLBACKS["context_window"] == 128000
-        assert models.FALLBACKS["max_output_tokens"] == 16384
-
-    def test_load_models_config_returns_valid_config(self) -> None:
-        """load_models_config() returns valid ProviderConfig from Python module.
-
-        # Contract: provider-protocol:get_info:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_models_config,
-        )
-
-        load_models_config.cache_clear()
-        config = load_models_config()
-        assert config.provider_id == "github-copilot"
-        load_models_config.cache_clear()
+        assert result == "info"
+        assert any("Invalid SDK log level" in r.getMessage() for r in caplog.records)

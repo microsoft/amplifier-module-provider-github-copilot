@@ -138,46 +138,6 @@ class TestLlmRequestEvent:
     """
 
     @pytest.mark.asyncio
-    async def test_complete_emits_llm_request_event(
-        self,
-        mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
-    ) -> None:
-        """complete() should emit llm:request event before SDK call.
-
-        Contract: provider-protocol:hooks:llm_request:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
-
-        provider = GitHubCopilotProvider(
-            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
-            coordinator=mock_coordinator,
-        )
-
-        # Mock _execute_sdk_completion to do nothing
-        async def mock_execute(
-            *args: Any, accumulator: StreamingAccumulator, **kwargs: Any
-        ) -> None:
-            """Mock SDK execution that populates accumulator with minimal response."""
-            pass  # Just succeed without adding events
-
-        provider._execute_sdk_completion = mock_execute  # type: ignore[method-assign]
-
-        await provider.complete(
-            sample_request,  # type: ignore[arg-type]
-            model="claude-opus-4.5",
-        )
-
-        # Find llm:request call
-        request_calls = [
-            call
-            for call in mock_coordinator.hooks.emit.call_args_list
-            if call[0][0] == "llm:request"
-        ]
-        assert len(request_calls) == 1, "Expected exactly one llm:request event"
-
-    @pytest.mark.asyncio
     async def test_llm_request_contains_required_fields(
         self,
         mock_coordinator: MagicMock,
@@ -236,44 +196,6 @@ class TestLlmResponseEvent:
 
     Contract: provider-protocol:hooks:llm_response:MUST:1, MUST:2, MUST:3
     """
-
-    @pytest.mark.asyncio
-    async def test_complete_emits_llm_response_event(
-        self,
-        mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
-    ) -> None:
-        """complete() should emit llm:response event after SDK call.
-
-        Contract: provider-protocol:hooks:llm_response:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
-
-        provider = GitHubCopilotProvider(
-            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
-            coordinator=mock_coordinator,
-        )
-
-        async def mock_execute(
-            *args: Any, accumulator: StreamingAccumulator, **kwargs: Any
-        ) -> None:
-            pass
-
-        provider._execute_sdk_completion = mock_execute  # type: ignore[method-assign]
-
-        await provider.complete(
-            sample_request,  # type: ignore[arg-type]
-            model="claude-opus-4.5",
-        )
-
-        # Find llm:response call
-        response_calls = [
-            call
-            for call in mock_coordinator.hooks.emit.call_args_list
-            if call[0][0] == "llm:response"
-        ]
-        assert len(response_calls) == 1, "Expected exactly one llm:response event"
 
     @pytest.mark.asyncio
     async def test_llm_response_contains_duration_ms(
@@ -718,59 +640,6 @@ class TestProviderRetryEvent:
 
     Contract: provider-protocol:hooks:provider_retry:MUST:1, MUST:2
     """
-
-    @pytest.mark.asyncio
-    async def test_emits_provider_retry_on_retryable_error(
-        self,
-        mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
-    ) -> None:
-        """Should emit provider:retry event before retry sleep.
-
-        Contract: provider-protocol:hooks:provider_retry:MUST:1
-        """
-        from unittest.mock import patch
-
-        from amplifier_core import llm_errors
-
-        # PROVIDER_RETRY = "provider:retry" per amplifier_core.events
-        PROVIDER_RETRY = "provider:retry"
-
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
-
-        provider = GitHubCopilotProvider(
-            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
-            coordinator=mock_coordinator,
-        )
-
-        call_count = 0
-
-        async def mock_execute(
-            *args: Any, accumulator: StreamingAccumulator, **kwargs: Any
-        ) -> None:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                # Use ProviderUnavailableError which is retryable
-                raise llm_errors.ProviderUnavailableError("Service temporarily unavailable")
-            # Second call succeeds
-
-        provider._execute_sdk_completion = mock_execute  # type: ignore[method-assign]
-
-        with patch("asyncio.sleep", new_callable=AsyncMock):
-            await provider.complete(
-                sample_request,  # type: ignore[arg-type]
-                model="claude-opus-4.5",
-            )
-
-        # Find provider:retry call
-        retry_calls = [
-            call
-            for call in mock_coordinator.hooks.emit.call_args_list
-            if call[0][0] == PROVIDER_RETRY
-        ]
-        assert len(retry_calls) >= 1, f"Expected at least one {PROVIDER_RETRY} event"
 
     @pytest.mark.asyncio
     async def test_provider_retry_contains_required_fields(

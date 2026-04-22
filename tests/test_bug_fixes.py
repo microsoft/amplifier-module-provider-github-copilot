@@ -90,21 +90,6 @@ class TestAC3RetryAfterRegex:
 class TestAC5FinishReasonMap:
     """AC-5: Verify finish_reason_map in event config."""
 
-    def test_load_event_config_loads_finish_reason_map(self) -> None:
-        """load_event_config should populate finish_reason_map.
-
-        # Contract: event-vocabulary:FinishReason:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        result = load_event_config()
-
-        # Values MUST be lowercase per amplifier-core proto
-        # Valid values: "stop", "tool_calls", "length", "content_filter"
-        assert result.finish_reason_map.get("end_turn") == "stop"
-        assert result.finish_reason_map.get("stop") == "stop"
-        assert result.finish_reason_map.get("tool_use") == "tool_calls"
-
     def test_translate_event_uses_finish_reason_map(self) -> None:
         """translate_event should map finish reasons per config.
 
@@ -174,27 +159,6 @@ class TestSessionLifecycleValidation:
 
     Contract: streaming-contract:SessionLifecycle:MUST:1
     """
-
-    def test_production_config_has_required_session_lifecycle_events(self) -> None:
-        """Production event config MUST have valid session_lifecycle config.
-
-        # Contract: streaming-contract:SessionLifecycle:MUST:1
-
-        Verifies the hardcoded config has the expected lifecycle event types.
-        """
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
-
-        # Verify session_lifecycle is populated
-        assert config.idle_event_types, "idle_event_types must not be empty"
-        assert "session.idle" in config.idle_event_types
-        assert "session.error" in config.error_event_types, (
-            "Production config must include 'session.error' in error_event_types"
-        )
-        assert "assistant.usage" in config.usage_event_types, (
-            "Production config must include 'assistant.usage' in usage_event_types"
-        )
 
     def test_empty_idle_events_raises_configuration_error(self) -> None:
         """Provider raises ConfigurationError when idle_events is empty.

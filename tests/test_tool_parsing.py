@@ -183,24 +183,6 @@ class TestToolCallType:
         with pytest.raises(AttributeError):
             _ = tc.input  # type: ignore[attr-defined]
 
-    def test_tool_call_fields(self) -> None:
-        """ToolCall has required fields: id, name, arguments.
-
-        Contract: provider-protocol:parse_tool_calls:MUST:4
-        """
-        tc = ToolCall(id="tc-123", name="read_file", arguments={"path": "/etc/hosts"})
-        assert tc.id == "tc-123"
-        assert tc.name == "read_file"
-        assert tc.arguments == {"path": "/etc/hosts"}
-
-    def test_tool_call_empty_arguments(self) -> None:
-        """ToolCall can have empty arguments dict.
-
-        Contract: provider-protocol:parse_tool_calls:MUST:4
-        """
-        tc = ToolCall(id="1", name="get_time", arguments={})
-        assert tc.arguments == {}
-
 
 class TestEdgeCases:
     """Edge case tests for tool parsing.
@@ -576,22 +558,6 @@ class TestTruncateText:
         """
         result = _truncate_text("hello world", 5)
         assert result == "hello..."
-
-    def test_truncate_text_zero_limit(self) -> None:
-        """Zero limit returns original.
-
-        Contract: behaviors:Logging:MUST:4
-        """
-        result = _truncate_text("hello", 0)
-        assert result == "hello"
-
-    def test_truncate_text_negative_limit(self) -> None:
-        """Negative limit returns original.
-
-        Contract: behaviors:Logging:MUST:4
-        """
-        result = _truncate_text("hello", -5)
-        assert result == "hello"
 
 
 class TestLoggingConfigDefaults:

@@ -56,7 +56,8 @@ class TestStreamingAccumulator:
 
         assert accumulator.is_complete
         result = accumulator.get_result()
-        assert result.finish_reason == "STOP"
+        # streaming-contract:FinishReason:MUST:5 — SDK UPPERCASE must be normalized to lowercase
+        assert result.finish_reason == "stop"
 
     def test_separates_text_and_thinking_content(self) -> None:
         """Contract: streaming-contract:ContentTypes:MUST:1 — Separates text and thinking."""
@@ -124,7 +125,9 @@ class TestToolCallCapture:
 
         result = accumulator.get_result()
         assert len(result.tool_calls) == 2
-        assert result.finish_reason == "TOOL_USE"
+        # streaming-contract:FinishReason:MUST:5
+        # "TOOL_USE" SDK value MUST normalize to "tool_calls"
+        assert result.finish_reason == "tool_calls"
 
 
 class TestAccumulatedResponse:
