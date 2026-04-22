@@ -102,9 +102,6 @@ def _repair_tool_sequence(
 
         # SDK kernel format: role='tool' Message carries a single tool result.
         # The tool_call_id is on the Message itself, not in content blocks.
-        # Reference pattern: amplifier-module-provider-anthropic _find_missing_tool_results()
-        #   elif msg.role == "tool" and hasattr(msg, "tool_call_id") and msg.tool_call_id:
-        #       tool_results.add(msg.tool_call_id)
         if role == "tool":
             result_id: str | None = getattr(msg, "tool_call_id", None)
             if isinstance(msg, dict):
@@ -114,11 +111,9 @@ def _repair_tool_sequence(
             continue  # String content — no blocks to iterate.
 
         # Only iterate content blocks when content is actually a list.
-        # Reference: Anthropic provider guards with isinstance(msg.content, list)
-        # before entering the block loop — string content has no tool blocks.
+        # String content has no tool blocks.
         if not isinstance(content, list):
             continue
-
         for block in content:
             if block is None:
                 continue
@@ -439,7 +434,11 @@ def _extract_content_block(block: Any) -> str:
     for attr in ("text", "content", "value"):
         val: Any = getattr(block, attr, None) or _get(attr)
         if val:
-            return str(val)
+            # Contract: behaviors:Security:MUST:1 — sanitize all interpolated values.
+            # This fallback covers unknown block types whose string representation
+            # reaches the prompt. Defense-in-depth: any attacker-controlled content
+            # block must go through the injection sanitizer regardless of type.
+            return _sanitize_content_for_injection(str(val))
 
     return ""
 
@@ -455,8 +454,7 @@ def extract_system_message(request: Any) -> str | None:
     - With system_message, the Amplifier bundle persona takes precedence
     - Missing system_message causes agent to not follow bundle instructions
 
-    If multiple system messages exist, they are joined with double newlines
-    (consistent with Anthropic/OpenAI/Gemini providers).
+    If multiple system messages exist, they are joined with double newlines.
 
     Args:
         request: Kernel ChatRequest with messages attribute.

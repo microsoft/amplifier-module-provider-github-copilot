@@ -147,9 +147,7 @@ def sample_chat_request() -> MagicMock:
     return req
 
 
-def _extract_event(
-    coordinator: MagicMock, event_name: str
-) -> dict[str, Any]:
+def _extract_event(coordinator: MagicMock, event_name: str) -> dict[str, Any]:
     """Return the payload dict from the first matching emitted event."""
     calls = coordinator.hooks.emit.call_args_list
     for call in calls:
@@ -491,9 +489,7 @@ class TestRawPayloadContent:
         data = _extract_event(mock_coordinator, "llm:request")
         raw = data["raw"]
 
-        assert "prompt_length" in raw, (
-            f"raw payload missing 'prompt_length'. Keys: {list(raw)}"
-        )
+        assert "prompt_length" in raw, f"raw payload missing 'prompt_length'. Keys: {list(raw)}"
         assert isinstance(raw["prompt_length"], int), (
             f"prompt_length must be int, got {type(raw['prompt_length'])}"
         )
@@ -502,4 +498,3 @@ class TestRawPayloadContent:
         assert "prompt" not in raw, (
             "Full prompt text MUST NOT appear in raw payload (user data, unbounded size)"
         )
-

@@ -70,6 +70,8 @@ Events ignored entirely. The authoritative list is `config/events.yaml`; this ta
 | `heartbeat` | Connection keepalive |
 | `session.compaction.*` | Internal optimization |
 | `session.custom_agents_updated` | SDK v0.2.1+ session-state notification; no domain value |
+| `session.skills_loaded` | SDK SessionSkillsLoadedEvent; Amplifier does not host skills; no domain value |
+| `system.message` | SDK SystemMessageEvent; carries system/developer prompt text; not forwarded |
 
 ---
 

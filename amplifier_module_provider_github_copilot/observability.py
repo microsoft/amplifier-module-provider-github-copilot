@@ -191,6 +191,8 @@ class LlmLifecycleContext:
         *,
         usage_input: int,
         usage_output: int,
+        usage_cache_read: int | None = None,
+        usage_cache_write: int | None = None,
         finish_reason: str | None,
         content_blocks: int,
         tool_calls: int,
@@ -214,15 +216,21 @@ class LlmLifecycleContext:
                 else self.config.finish_reasons.end_turn
             )
 
+        usage_payload: dict[str, Any] = {
+            "input": usage_input,
+            "output": usage_output,
+        }
+        if usage_cache_read is not None:
+            usage_payload["cache_read_tokens"] = usage_cache_read
+        if usage_cache_write is not None:
+            usage_payload["cache_write_tokens"] = usage_cache_write
+
         payload: dict[str, Any] = {
             "provider": self.provider_name,
             "model": self.model,
             "status": self.config.status.ok,
             "duration_ms": elapsed_ms,
-            "usage": {
-                "input": usage_input,
-                "output": usage_output,
-            },
+            "usage": usage_payload,
             "finish_reason": finish_reason,
             "content_blocks": content_blocks,
             "tool_calls": tool_calls,

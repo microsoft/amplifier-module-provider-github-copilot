@@ -34,6 +34,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Auth env vars checked by the SDK resolver, in priority order.
+AUTH_ENV_VARS: tuple[str, ...] = (
+    "COPILOT_AGENT_TOKEN",
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+)
+
+
+def _minimal_mode_session_config() -> dict[str, Any]:
+    """Build per-session minimal-mode config without leaking shared mutable state."""
+    minimal_mode = load_sdk_protection_config().minimal_mode
+    return {
+        "infinite_sessions": {"enabled": minimal_mode.infinite_sessions_enabled},
+        "enable_config_discovery": minimal_mode.enable_config_discovery,
+        "mcp_servers": dict(minimal_mode.mcp_servers),
+        "skill_directories": list(minimal_mode.skill_directories),
+        "custom_agents": list(minimal_mode.custom_agents),
+        "commands": list(minimal_mode.commands),
+    }
+
+
 # Deny hook constant - aligned with _make_deny_hook_config minimal reason strategy
 DENY_ALL: dict[str, Any] = {
     "permissionDecision": "deny",
@@ -144,7 +166,7 @@ def _resolve_token() -> str | None:
     3. GH_TOKEN - GitHub CLI compatible
     4. GITHUB_TOKEN - GitHub Actions compatible
     """
-    for var in ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+    for var in AUTH_ENV_VARS:
         token = os.environ.get(var)
         if token:
             return token
@@ -480,6 +502,10 @@ class CopilotClientWrapper:
         # Contract: deny-destroy:DenyHook:MUST:1
         session_config["hooks"] = _make_deny_hook_config()
         logger.debug("[CLIENT] Deny hook configured via session_config['hooks']")
+
+        # Contract: sdk-boundary:MinimalMode:MUST:1-6
+        # Disable SDK features Amplifier handles. Evidence: 57% wall-clock improvement.
+        session_config.update(_minimal_mode_session_config())
 
         sdk_session = None
         try:

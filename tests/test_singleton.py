@@ -25,26 +25,38 @@ from amplifier_module_provider_github_copilot.config._sdk_protection import (
 )
 from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
 
+
+@pytest.fixture(autouse=False)
+def reset_singleton() -> Generator[None, None, None]:
+    """Reset module-level singleton state before and after each test."""
+    import amplifier_module_provider_github_copilot as provider_module
+
+    provider_module._shared_client = None
+    provider_module._shared_client_refcount = 0
+
+    yield
+
+    provider_module._shared_client = None
+    provider_module._shared_client_refcount = 0
+
+
+@pytest.fixture(autouse=False)
+def reset_singleton_mp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset module-level singleton state via monkeypatch (auto-restored)."""
+    import amplifier_module_provider_github_copilot as provider_module
+
+    monkeypatch.setattr(provider_module, "_shared_client", None)
+    monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
+
+
 # ============================================================================
 # Test: Singleton Lifecycle
 # ============================================================================
 
 
+@pytest.mark.usefixtures("reset_singleton")
 class TestSingletonLifecycle:
     """Tests for _acquire_shared_client / _release_shared_client."""
-
-    @pytest.fixture(autouse=True)
-    def reset_singleton_state(self) -> Generator[None, None, None]:
-        """Reset module-level singleton state before and after each test."""
-        import amplifier_module_provider_github_copilot as provider_module
-
-        provider_module._shared_client = None
-        provider_module._shared_client_refcount = 0
-
-        yield
-
-        provider_module._shared_client = None
-        provider_module._shared_client_refcount = 0
 
     @pytest.mark.asyncio
     async def test_acquire_creates_client_on_first_call(self) -> None:
@@ -204,21 +216,9 @@ class TestSingletonLifecycle:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("reset_singleton")
 class TestHealthCheck:
     """Tests for is_healthy() and unhealthy client replacement."""
-
-    @pytest.fixture(autouse=True)
-    def reset_singleton_state(self) -> Generator[None, None, None]:
-        """Reset module-level singleton state before and after each test."""
-        import amplifier_module_provider_github_copilot as provider_module
-
-        provider_module._shared_client = None
-        provider_module._shared_client_refcount = 0
-
-        yield
-
-        provider_module._shared_client = None
-        provider_module._shared_client_refcount = 0
 
     def test_is_healthy_true_for_live_client(self) -> None:
         """is_healthy() returns True when client is alive.
@@ -296,21 +296,9 @@ class TestHealthCheck:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("reset_singleton")
 class TestLockTimeout:
     """Tests for lock timeout protection."""
-
-    @pytest.fixture(autouse=True)
-    def reset_singleton_state(self) -> Generator[None, None, None]:
-        """Reset module-level singleton state before and after each test."""
-        import amplifier_module_provider_github_copilot as provider_module
-
-        provider_module._shared_client = None
-        provider_module._shared_client_refcount = 0
-
-        yield
-
-        provider_module._shared_client = None
-        provider_module._shared_client_refcount = 0
 
     @pytest.mark.asyncio
     async def test_lock_timeout_raises_timeout_error(self) -> None:
@@ -429,16 +417,9 @@ class TestProviderClientInjection:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("reset_singleton_mp")
 class TestMountIntegration:
     """Tests for mount() singleton integration."""
-
-    @pytest.fixture(autouse=True)
-    def reset_singleton_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Reset module-level singleton state before each test."""
-        import amplifier_module_provider_github_copilot as provider_module
-
-        monkeypatch.setattr(provider_module, "_shared_client", None)
-        monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
 
     @pytest.mark.asyncio
     async def test_mount_creates_shared_client(self) -> None:
@@ -618,16 +599,9 @@ class TestMountIntegration:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("reset_singleton_mp")
 class TestConcurrentAccess:
     """Tests for concurrent mount() calls."""
-
-    @pytest.fixture(autouse=True)
-    def reset_singleton_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Reset module-level singleton state before each test."""
-        import amplifier_module_provider_github_copilot as provider_module
-
-        monkeypatch.setattr(provider_module, "_shared_client", None)
-        monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
 
     @pytest.mark.asyncio
     async def test_concurrent_mounts_serialized(self) -> None:
@@ -851,6 +825,7 @@ class TestMountExceptionPaths:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("reset_singleton_mp")
 class TestSessionIsolation:
     """Tests verifying session isolation — no cross-session state bleed.
 
@@ -862,14 +837,6 @@ class TestSessionIsolation:
     - Not share accumulated response state
     - Cleanup independently
     """
-
-    @pytest.fixture(autouse=True)
-    def reset_singleton_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Reset module-level singleton state before each test."""
-        import amplifier_module_provider_github_copilot as provider_module
-
-        monkeypatch.setattr(provider_module, "_shared_client", None)
-        monkeypatch.setattr(provider_module, "_shared_client_refcount", 0)
 
     @pytest.mark.asyncio
     async def test_provider_instances_are_independent(self) -> None:

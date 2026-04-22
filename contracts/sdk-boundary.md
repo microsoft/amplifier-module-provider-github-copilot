@@ -415,6 +415,36 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 
 ---
 
+## SDK Minimal Mode Configuration
+
+**Purpose:** Disable SDK features that Amplifier handles, reducing overhead and ensuring Amplifier is the true orchestrator.
+
+**Evidence:** Sessions `7db2b5f7-28e8-49ca-aa6c-562a65331ec4` (baseline) and `2fa58db6-7a30-4d78-8bf8-e9ad3f4c54bf` showed 57% wall-clock improvement (12.5s → 5.4s) and elimination of compaction processing.
+
+### Constraints
+
+| ID | Constraint | Rationale |
+|----|------------|--------|
+| sdk-boundary:MinimalMode:MUST:1 | `infinite_sessions` MUST be set to `{"enabled": False}` | Disables SDK compaction — Amplifier handles context management |
+| sdk-boundary:MinimalMode:MUST:2 | `enable_config_discovery` MUST be set to `False` | Prevents SDK from scanning for .mcp.json and AGENTS.md — Amplifier provides all config |
+| sdk-boundary:MinimalMode:MUST:3 | `mcp_servers` MUST be set to `{}` | Explicit empty — Amplifier routes all tools |
+| sdk-boundary:MinimalMode:MUST:4 | `skill_directories` MUST be set to `[]` | Explicit empty — Amplifier has its own skills system |
+| sdk-boundary:MinimalMode:MUST:5 | `custom_agents` MUST be set to `[]` | Explicit empty — Amplifier orchestrates agents |
+| sdk-boundary:MinimalMode:MUST:6 | `commands` MUST be set to `[]` | Explicit empty — Amplifier handles slash commands |
+
+### Test Anchors
+
+| Anchor | Clause | Test Location |
+|--------|--------|---------------|
+| `sdk-boundary:MinimalMode:MUST:1` | infinite_sessions disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_infinite_sessions_disabled` |
+| `sdk-boundary:MinimalMode:MUST:2` | config discovery disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_config_discovery_disabled` |
+| `sdk-boundary:MinimalMode:MUST:3` | mcp_servers empty | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_mcp_servers_empty` |
+| `sdk-boundary:MinimalMode:MUST:4` | skill_directories empty | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_skill_directories_empty` |
+| `sdk-boundary:MinimalMode:MUST:5` | custom_agents empty | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_custom_agents_empty` |
+| `sdk-boundary:MinimalMode:MUST:6` | commands empty | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_commands_empty` |
+
+---
+
 ## Test Anchors
 
 ### Membrane
@@ -452,6 +482,8 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 |--------|--------|
 | `sdk-boundary:TypeTranslation:MUST:1` | SDK types translated to domain types at boundary |
 | `sdk-boundary:TypeTranslation:MUST:2` | Mock sessions deliver SessionEvent objects to handlers |
+| `sdk-boundary:TypeTranslation:MUST:3` | SessionHandle wraps the raw SDK session; raw session must not be directly exposed to callers |
+| `sdk-boundary:TypeTranslation:MUST:4` | SessionHandle delegates on() and close() to raw_session without leaking SDK types |
 | `sdk-boundary:TypeTranslation:SHOULD:1` | Mock sessions accept legacy dict events for backward compat |
 
 ### Config

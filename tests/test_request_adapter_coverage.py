@@ -85,6 +85,60 @@ class TestExtractContentBlockThinkingEmpty:
         result = _extract_content_block(UnknownBlockWithThinking(thinking=""))
         assert result == ""
 
+    def test_block_with_both_thinking_and_text_attrs_takes_thinking_path(self) -> None:
+        """Block with explicit type="thinking" AND .text attribute classifies as thinking.
+
+        Contract: streaming-contract:Accumulation:MUST:2 — block boundaries maintained.
+
+        Regression guard: if the explicit block_type == "thinking" branch is removed
+        entirely, the hasattr(block, "text") fallback would match and return the text
+        path. This canary turns red when the thinking type-check is deleted.
+
+        Note: this test does NOT catch a simple branch reorder of the elif chain because
+        the explicit block_type == "thinking" check fires before any elif. The untyped
+        test below (type=None) is the canary for hasattr ordering.
+
+        Mutation check: remove the explicit `block_type == "thinking"` branch from
+        request_adapter._extract_content_block — this assertion turns red.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @dataclass
+        class ThinkingWithShadowText:
+            type: str = "thinking"
+            thinking: str = "internal reasoning payload"
+            text: str = "SHOULD_NOT_APPEAR_IN_OUTPUT"
+
+        result = _extract_content_block(ThinkingWithShadowText())
+        assert result == "[Thinking: internal reasoning payload]"
+        assert "SHOULD_NOT_APPEAR_IN_OUTPUT" not in result
+
+    def test_block_type_none_with_both_thinking_and_text_takes_thinking_path(
+        self,
+    ) -> None:
+        """type=None + BOTH .thinking AND .text → hasattr fallback picks thinking.
+
+        Contract: streaming-contract:Accumulation:MUST:2
+
+        Exercises the `block_type is None` fallback path where both hasattr
+        checks would match. The thinking hasattr check is first in the if/elif
+        chain — this guards that ordering.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        @dataclass
+        class UntypedThinkingAndText:
+            thinking: str = "untyped reasoning"
+            text: str = "SHOULD_NOT_APPEAR"
+
+        result = _extract_content_block(UntypedThinkingAndText())
+        assert result == "[Thinking: untyped reasoning]"
+        assert "SHOULD_NOT_APPEAR" not in result
+
 
 # ---------------------------------------------------------------------------
 # _extract_content_block: tool result without tool_call_id (lines ~221-222)

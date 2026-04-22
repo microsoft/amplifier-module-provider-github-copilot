@@ -500,3 +500,262 @@ class TestUsageInjectionFromUsageHolder:
         assert response.usage is not None  # narrowed for pyright
         assert response.usage.input_tokens == 10
         assert response.usage.output_tokens == 20
+
+
+# ---------------------------------------------------------------------------
+# Canary: captured-tools added to accumulator BEFORE event_queue drain.
+# Contract: sdk-protection:ToolCapture:MUST:1,2
+# Contract: streaming-contract:Accumulation (is_complete drops post-TURN_COMPLETE)
+# ---------------------------------------------------------------------------
+
+
+class ToolThenIdleSession(MockSDKSession):
+    """Fires a tool-request event, then SESSION_IDLE — both enter event_queue.
+
+    This mirrors the real SDK race pattern where tool.execution_complete is
+    followed by session.idle. The tool event populates tool_capture_handler
+    AND is queued; session.idle also enters the queue and translates to a
+    TURN_COMPLETE domain event that would set accumulator.is_complete=True.
+
+    Regression target: provider._execute_sdk_completion MUST add captured_tools
+    to the accumulator BEFORE draining the queue. If the drain runs first,
+    TURN_COMPLETE sets is_complete=True and the subsequent accumulator.add()
+    for TOOL_CALL is silently dropped (see streaming.StreamingAccumulator.add
+    is_complete guard). Response would return with tool_calls=[].
+    """
+
+    async def send(
+        self,
+        prompt: str,
+        *,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> str:
+        self.last_prompt = prompt
+        # 1. Tool request event (populates tool_capture_handler.captured_tools
+        #    via EventRouter, AND queues the event)
+        tool_event = SessionEvent(
+            type=SessionEventType.ASSISTANT_MESSAGE,
+            data=SessionEventData(
+                tool_requests=[
+                    {
+                        "tool_call_id": "canary_tool_id_7",
+                        "name": "canary_read",
+                        "arguments": {"path": "/tmp/x"},
+                    },
+                ],
+            ),
+        )
+        for handler in self._handlers:
+            handler(tool_event)
+        # 2. SESSION_IDLE — unblocks provider; ALSO queued.
+        #    Its translation produces TURN_COMPLETE which sets is_complete=True.
+        for handler in self._handlers:
+            handler(idle_event())
+        return "message-id"
+
+
+class TestCapturedToolsAddedBeforeDrainCanary:
+    """Regression canary for the captured-tools-before-drain ordering."""
+
+    @pytest.mark.asyncio
+    async def test_captured_tools_survive_turn_complete_in_same_drain(self) -> None:
+        """Captured tools MUST land in response even when TURN_COMPLETE is queued.
+
+        Contract: sdk-protection:ToolCapture:MUST:1,2
+        Contract: streaming-contract:Accumulation (is_complete guard)
+
+        Mutation check: in provider._execute_sdk_completion, moving the
+        `for tool in tool_capture_handler.captured_tools: accumulator.add(...)`
+        block to AFTER the `while not event_queue.empty(): ...` drain turns
+        this assertion red — TURN_COMPLETE drains first, is_complete=True,
+        then accumulator.add(TOOL_CALL) silently drops → tool_calls=[].
+        """
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        mock_client = MockCopilotClientWrapper(session_class=ToolThenIdleSession)
+        coordinator = _make_coordinator()
+        provider = GitHubCopilotProvider(
+            config={},
+            coordinator=coordinator,
+            client=mock_client,  # type: ignore[arg-type]
+        )
+        request = _make_request(tools=[{"name": "canary_read", "description": "d"}])
+
+        response = await provider.complete(request)
+
+        # Exact assertions — tool must survive the drain, not be silently dropped.
+        assert response.tool_calls is not None  # narrowed for pyright
+        assert len(response.tool_calls) == 1, (
+            "Tool call dropped — captured-tools-before-drain ordering regressed. "
+            "See provider._execute_sdk_completion: captured_tools loop MUST run "
+            "before the event_queue drain, otherwise TURN_COMPLETE sets "
+            "is_complete=True and accumulator.add(TOOL_CALL) is silently discarded."
+        )
+        assert response.tool_calls[0].id == "canary_tool_id_7"
+        assert response.tool_calls[0].name == "canary_read"
+
+
+# ---------------------------------------------------------------------------
+# _parse_raw_flag and _config_int edge cases (provider.py lines 180, 197)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigHelpers:
+    """Coverage for _parse_raw_flag and _config_int edge cases.
+
+    Contract: provider-protocol:complete:MUST:1
+    """
+
+    def test_parse_raw_flag_non_string_non_bool_uses_bool_coercion(self) -> None:
+        """_parse_raw_flag with int 1 → True; int 0 → False.
+
+        Line 180 in provider.py — the `return bool(value)` path.
+        Mutation check: remove the final `return bool(value)` → any non-bool, non-str
+        truthy value (e.g. int 1) would hit an unhandled code path.
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            _parse_raw_flag,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        assert _parse_raw_flag(1) is True
+        assert _parse_raw_flag(0) is False
+        assert _parse_raw_flag(42) is True
+
+    def test_config_int_unparseable_value_returns_default(self) -> None:
+        """_config_int with non-numeric string → logs warning and returns default.
+
+        Line 197 in provider.py — the `except (TypeError, ValueError)` path.
+        Mutation check: remove the except block → unparseable config raises ValueError
+        and crashes the provider instead of gracefully falling back.
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            _config_int,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        result = _config_int("not-an-int", default=42)
+        assert result == 42, f"Expected default 42, got {result}"
+
+    def test_config_int_none_value_returns_default(self) -> None:
+        """_config_int(None, default) returns default immediately.
+
+        Lines 196-197 in provider.py — the `if value is None: return default` guard.
+        Mutation check: remove the None guard → int(None) raises TypeError in the
+        try block, which is handled by the except, but the None guard is the cheaper
+        early exit that documents the contract for callers.
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            _config_int,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        result = _config_int(None, default=7)
+        assert result == 7, f"Expected default 7 for None input, got {result}"
+
+
+# ---------------------------------------------------------------------------
+# list_models() cache write failure (provider.py lines 430-433)
+# ---------------------------------------------------------------------------
+
+
+class TestListModelsCacheWriteFailure:
+    """write_cache failure during list_models() does not suppress the SDK result."""
+
+    @pytest.mark.asyncio
+    async def test_write_cache_failure_still_returns_sdk_models(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When write_cache raises, list_models still returns the SDK models and logs a warning.
+
+        Contract: provider-protocol:list_models:MUST:1
+        Lines 430-433 in provider.py — the except block around write_cache().
+        Mutation check: remove the except block → OSError from write_cache propagates,
+        list_models raises instead of returning models → callers see error instead of model list.
+        """
+        import logging
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        fake_model = MagicMock()
+        fake_copilot_model = MagicMock()
+        mock_client = MagicMock()
+        mock_client.is_healthy.return_value = True
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
+                new=AsyncMock(return_value=([fake_model], [fake_copilot_model])),
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.provider.write_cache",
+                side_effect=OSError("disk full"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+            models = await provider.list_models()
+
+        assert len(models) == 1, "SDK models must be returned even when cache write fails"
+        assert models[0] is fake_model
+        assert any("Failed to cache models" in r.getMessage() for r in caplog.records), (
+            "write_cache failure must be logged as a warning"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Correction loop for/else exhaustion (provider.py line 693)
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectionLoopForElseExhaustion:
+    """For/else on the fake-tool correction loop fires when all attempts are used."""
+
+    @pytest.mark.asyncio
+    async def test_all_correction_attempts_exhausted_logs_and_returns_response(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When every correction attempt still detects a fake tool call, the for/else
+        fires and log_exhausted is called, then the last response is returned.
+
+        Contract: provider-protocol:complete:MUST:1 — always returns response
+        Line 693 in provider.py — for...else clause on correction loop.
+        Mutation check: change `for...else` to `for` without else → log_exhausted is
+        never called when loop exhausts (only called on exceptions), silently hiding
+        the "max corrections exhausted" event from observability.
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        mock_client = MockCopilotClientWrapper(session_class=FakeToolTextSession)
+        coordinator = _make_coordinator()
+        provider = GitHubCopilotProvider(
+            config={},
+            coordinator=coordinator,
+            client=mock_client,  # type: ignore[arg-type]
+        )
+        tool_mock = MagicMock()
+        tool_mock.name = "search_files"
+        tool_mock.description = "Search files"
+        tool_mock.parameters = {}
+        request = _make_request(tools=[tool_mock])
+
+        # Force should_retry to always return True so the loop exhausts every attempt
+        # without breaking. This tests the for/else path, not fake tool detection logic.
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.provider.should_retry_for_fake_tool_calls",
+                return_value=(True, "forced_pattern"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            response = await provider.complete(request)
+
+        assert isinstance(response.content, list), (
+            "provider.complete() must return a ChatResponse with content list "
+            "even when all correction attempts are exhausted"
+        )
+        assert any("exhausted" in r.getMessage().lower() for r in caplog.records), (
+            "log_exhausted must be called when for/else fires — 'exhausted' not found in logs"
+        )

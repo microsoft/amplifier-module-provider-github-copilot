@@ -1,9 +1,9 @@
 # Contract: Behaviors
 
 ## Version
-- **Current:** 1.0 (v2.1 Kernel-Validated)
+- **Current:** 1.1 (retry.yaml → _policy.py migration)
 - **Module Reference:** Multiple modules
-- **Config:** amplifier_module_provider_github_copilot/config/retry.yaml
+- **Config:** amplifier_module_provider_github_copilot/config/_policy.py
 - **Kernel Errors:** `amplifier_core.llm_errors`
 - **Status:** Specification
 
@@ -11,7 +11,7 @@
 
 ## Overview
 
-This contract defines behavioral policies that are config-driven. Unlike mechanism (Python), these behaviors can be tuned via YAML configuration.
+This contract defines behavioral policies that are config-driven. Policy values are held in `config/_policy.py` (Python dataclasses). `config/data/errors.yaml` and `config/data/events.yaml` hold SDK-correlated tabular data only.
 
 ---
 

@@ -13,91 +13,60 @@ from typing import Any
 
 import pytest
 
+from amplifier_module_provider_github_copilot.streaming import (
+    DomainEvent,
+    DomainEventType,
+    EventClassification,
+    classify_event,
+    load_event_config,
+    translate_event,
+)
+
+_event_config = load_event_config()
+
 
 class TestEventClassification:
     """Tests for classify_event function."""
 
     def test_text_delta_classified_as_bridge(self):
         """text_delta is a BRIDGE event."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         result = classify_event("assistant.message_delta", config)
         assert result == EventClassification.BRIDGE
 
     def test_thinking_delta_classified_as_bridge(self):
         """assistant.reasoning_delta is a BRIDGE event."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         result = classify_event("assistant.reasoning_delta", config)
         assert result == EventClassification.BRIDGE
 
     def test_tool_use_start_classified_as_consume(self):
         """tool_use_start is a CONSUME event."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         result = classify_event("tool_use_start", config)
         assert result == EventClassification.CONSUME
 
     def test_heartbeat_classified_as_drop(self):
         """heartbeat is a DROP event."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         result = classify_event("heartbeat", config)
         assert result == EventClassification.DROP
 
     def test_wildcard_pattern_tool_result(self):
         """tool_result_* pattern matches tool_result_success."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         result = classify_event("tool_result_success", config)
         assert result == EventClassification.DROP
 
     def test_wildcard_pattern_debug(self):
         """debug_* pattern matches debug_log."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         result = classify_event("debug_log", config)
         assert result == EventClassification.DROP
 
     def test_unknown_event_dropped_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """Unknown events are dropped with warning."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         with caplog.at_level(logging.WARNING):
             result = classify_event("completely_unknown_event_xyz", config)
         assert result == EventClassification.DROP
@@ -108,13 +77,7 @@ class TestEventClassification:
 
         # Contract: event-vocabulary:classification:system_notification:MUST:1
         """
-        from amplifier_module_provider_github_copilot.streaming import (
-            EventClassification,
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         result = classify_event("system_notification", config)
         assert result == EventClassification.CONSUME, (
             "system_notification should be CONSUME, not unknown"
@@ -125,12 +88,7 @@ class TestEventClassification:
 
         # Contract: event-vocabulary:classification:system_notification:MUST:1
         """
-        from amplifier_module_provider_github_copilot.streaming import (
-            classify_event,
-            load_event_config,
-        )
-
-        config = load_event_config()
+        config = _event_config
         with caplog.at_level(logging.WARNING):
             classify_event("system_notification", config)
 
@@ -145,14 +103,7 @@ class TestTranslateEvent:
 
         Contract: event-vocabulary:Bridge:MUST:1
         """
-        from amplifier_module_provider_github_copilot.streaming import (
-            DomainEvent,
-            DomainEventType,
-            load_event_config,
-            translate_event,
-        )
-
-        config = load_event_config()
+        config = _event_config
         sdk_event = {"type": "assistant.message_delta", "text": "Hello"}
         result = translate_event(sdk_event, config)
         assert isinstance(result, DomainEvent)
@@ -164,14 +115,7 @@ class TestTranslateEvent:
 
         # Contract: streaming-contract:ThinkingBlock:MUST:1
         """
-        from amplifier_module_provider_github_copilot.streaming import (
-            DomainEvent,
-            DomainEventType,
-            load_event_config,
-            translate_event,
-        )
-
-        config = load_event_config()
+        config = _event_config
         sdk_event = {"type": "assistant.reasoning_delta", "text": "Let me think..."}
         result = translate_event(sdk_event, config)
         assert isinstance(result, DomainEvent)
@@ -183,14 +127,7 @@ class TestTranslateEvent:
 
         # Contract: streaming-contract:ToolCallBlock:MUST:1
         """
-        from amplifier_module_provider_github_copilot.streaming import (
-            DomainEvent,
-            DomainEventType,
-            load_event_config,
-            translate_event,
-        )
-
-        config = load_event_config()
+        config = _event_config
         sdk_event = {"type": "tool_use_complete", "id": "tc1", "name": "read_file"}
         result = translate_event(sdk_event, config)
         assert isinstance(result, DomainEvent)
@@ -198,37 +135,21 @@ class TestTranslateEvent:
 
     def test_consume_event_returns_none(self):
         """Contract: event-vocabulary:Consume:MUST:1 — CONSUME events return None."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            load_event_config,
-            translate_event,
-        )
-
-        config = load_event_config()
+        config = _event_config
         sdk_event = {"type": "tool_use_start", "id": "tc1"}
         result = translate_event(sdk_event, config)
         assert result is None
 
     def test_drop_event_returns_none(self):
         """DROP events return None."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            load_event_config,
-            translate_event,
-        )
-
-        config = load_event_config()
+        config = _event_config
         sdk_event = {"type": "heartbeat"}
         result = translate_event(sdk_event, config)
         assert result is None
 
     def test_event_data_preserved(self):
         """Event data is preserved in domain event."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            DomainEvent,
-            load_event_config,
-            translate_event,
-        )
-
-        config = load_event_config()
+        config = _event_config
         sdk_event = {"type": "assistant.message_delta", "text": "Hello world", "index": 0}
         result = translate_event(sdk_event, config)
         assert isinstance(result, DomainEvent)
@@ -246,13 +167,7 @@ class TestTranslateEvent:
         downstream streaming consumers silently receive empty data dicts and
         produce no visible exception — only silent content loss.
         """
-        from amplifier_module_provider_github_copilot.streaming import (
-            DomainEvent,
-            load_event_config,
-            translate_event,
-        )
-
-        config = load_event_config()
+        config = _event_config
         # SDK shape: nested data dict (SessionEventData-style)
         sdk_event = {
             "type": "assistant.message_delta",
@@ -276,32 +191,24 @@ class TestEventConfig:
 
         Contract: event-vocabulary:Bridge:MUST:2
         """
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
+        config = _event_config
         # Contract: event-vocabulary:Bridge:MUST:2
         assert "assistant.message_delta" in config.bridge_mappings
 
     def test_config_has_bridge_mappings(self):
         """Config contains bridge mappings."""
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
+        config = _event_config
         assert len(config.bridge_mappings) > 0
         assert "assistant.message_delta" in config.bridge_mappings
 
     def test_config_has_consume_patterns(self):
         """Config contains consume patterns."""
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
+        config = _event_config
         assert len(config.consume_patterns) > 0
 
     def test_config_has_drop_patterns(self):
         """Config contains drop patterns."""
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
+        config = _event_config
         assert len(config.drop_patterns) > 0
 
 
@@ -1299,9 +1206,7 @@ class TestConfigurationFailFast:
         Contract: streaming-contract:SessionLifecycle:MUST:1
         If idle_events is empty, provider cannot detect session completion.
         """
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
+        config = _event_config
 
         # idle_events MUST be populated
         assert config.idle_event_types, (
@@ -1317,9 +1222,7 @@ class TestConfigurationFailFast:
 
         Contract: streaming-contract:SessionLifecycle:MUST:1
         """
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
+        config = _event_config
 
         # error_events MUST be populated
         assert config.error_event_types, "error_events must be populated for error detection"
@@ -1329,10 +1232,8 @@ class TestConfigurationFailFast:
 
         Baseline test to ensure fail-fast doesn't break normal operation.
         """
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        # Should not raise
-        config = load_event_config()
+        # Should not raise when loading config
+        config = _event_config
 
         # Config should have required fields populated
         assert config.idle_event_types, "idle_events should be populated"

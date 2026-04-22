@@ -10,14 +10,46 @@ SoC: This module contains DATA (dataclasses + defaults) only.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 __all__ = [
+    "MinimalModeConfig",
     "ToolCaptureConfig",
     "SessionProtectionConfig",
     "SingletonConfig",
     "SdkConfig",
     "SdkProtectionConfig",
 ]
+
+
+@dataclass(frozen=True)
+class MinimalModeConfig:
+    """Minimal mode session configuration policy.
+
+    Contract: sdk-boundary:MinimalMode:MUST:1-6
+
+    Disables SDK features that Amplifier handles, ensuring Amplifier is the sole
+    orchestrator. Evidence: 57% wall-clock improvement (12.5s → 5.4s) confirmed
+    in sessions 7db2b5f7 and 2fa58db6.
+    """
+
+    # MUST:1 — Disable SDK compaction; Amplifier manages context.
+    infinite_sessions_enabled: bool = False
+
+    # MUST:2 — Prevent SDK from scanning for .mcp.json and AGENTS.md.
+    enable_config_discovery: bool = False
+
+    # MUST:3 — Explicit empty; Amplifier routes all tools.
+    mcp_servers: dict[str, Any] = field(default_factory=dict)
+
+    # MUST:4 — Explicit empty; Amplifier has its own skills system.
+    skill_directories: list[str] = field(default_factory=list)
+
+    # MUST:5 — Explicit empty; Amplifier orchestrates agents.
+    custom_agents: list[str] = field(default_factory=list)
+
+    # MUST:6 — Explicit empty; Amplifier handles slash commands.
+    commands: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -132,6 +164,7 @@ class SdkProtectionConfig:
         config = SdkProtectionConfig()
     """
 
+    minimal_mode: MinimalModeConfig = field(default_factory=MinimalModeConfig)
     tool_capture: ToolCaptureConfig = field(default_factory=ToolCaptureConfig)
     session: SessionProtectionConfig = field(default_factory=SessionProtectionConfig)
     sdk: SdkConfig = field(default_factory=SdkConfig)

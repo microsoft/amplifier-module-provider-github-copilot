@@ -20,6 +20,20 @@ import pytest
 from amplifier_core import ChatRequest
 from amplifier_core.message_models import Message
 
+
+def _make_standard_request(model: str = "claude-opus-4.5") -> MagicMock:
+    """Create a standard mock ChatRequest for provider.complete() calls."""
+    request = MagicMock(spec=ChatRequest)
+    request.model = model
+    request.messages = [MagicMock(spec=Message, role="user", content="test")]
+    request.tools = None
+    request.max_tokens = None
+    request.temperature = None
+    request.stop = None
+    request.stream = None
+    return request
+
+
 # =============================================================================
 # Contract Discovery Tests (verify contract and config exist)
 # =============================================================================
@@ -294,7 +308,7 @@ class TestBoundedQueueBehavior:
         queue: asyncio.Queue[object] = asyncio.Queue(maxsize=2)
         idle_event = asyncio.Event()
         error_holder: list[Exception] = []
-        usage_holder: list[dict[str, int]] = []
+        usage_holder: list[dict[str, int | None]] = []
         capture_handler = ToolCaptureHandler()
         ttft_state: dict[str, object] = {"checked": False, "start_time": time.time()}
         event_config = load_event_config()
@@ -356,14 +370,7 @@ class TestBoundedQueueBehavior:
         mock_client = MockCopilotClientWrapper(events=[text_delta_event("hello")])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         with patch(
             "amplifier_module_provider_github_copilot.provider.asyncio.Queue",
@@ -403,14 +410,7 @@ class TestModelResolution:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "nonexistent-model-xyz"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request("nonexistent-model-xyz")
 
         with pytest.raises(NotFoundError):
             await provider.complete(request)
@@ -592,14 +592,7 @@ class TestProductionPathWithMockClient:
         # Create request using proper kernel type
         from amplifier_core.message_models import TextBlock
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         # Call the production complete() method
         # This uses _execute_sdk_completion(), NOT completion.py
@@ -621,14 +614,7 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=[])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4-turbo"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request("gpt-4-turbo")
 
         await provider.complete(request)
 
@@ -652,14 +638,8 @@ class TestProductionPathWithMockClient:
             "description": "Get weather",
             "parameters": {},
         }
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
+        request = _make_standard_request()
         request.tools = [tool]
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
 
         await provider.complete(request)
 
@@ -694,14 +674,8 @@ class TestProductionPathWithMockClient:
         user_msg.role = "user"
         user_msg.content = "Hello"
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
+        request = _make_standard_request()
         request.messages = [system_msg, user_msg]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
 
         await provider.complete(request)
 
@@ -728,14 +702,7 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         # Should raise translated error
         with pytest.raises(ProviderUnavailableError):
@@ -758,14 +725,7 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=[text_delta_event("hello")])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         await provider.complete(request)
 
@@ -793,14 +753,7 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         with pytest.raises(ProviderUnavailableError):
             await provider.complete(request)
@@ -829,14 +782,7 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=events)
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         response = await provider.complete(request)
 
@@ -861,14 +807,7 @@ class TestProductionPathWithMockClient:
         mock_client = MockCopilotClientWrapper(events=[])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         response = await provider.complete(request)
 
@@ -897,14 +836,7 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         with pytest.raises(ProviderUnavailableError) as exc_info:
             await provider.complete(request)
@@ -932,14 +864,7 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         with pytest.raises(LLMError) as exc_info:
             await provider.complete(request)
@@ -968,14 +893,7 @@ class TestProductionPathWithMockClient:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         with pytest.raises(AuthenticationError) as exc_info:
             await provider.complete(request)
@@ -1062,14 +980,8 @@ class TestRuntimeConfigOverride:
         )
 
         # Request WITHOUT model specified — should use runtime default
-        request = MagicMock(spec=ChatRequest)
+        request = _make_standard_request()
         request.model = None  # No model in request
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
 
         await provider.complete(request)
 
@@ -1095,15 +1007,7 @@ class TestRuntimeConfigOverride:
             client=mock_client,  # type: ignore[arg-type]
         )
 
-        # Request WITH explicit model
-        request = MagicMock(spec=ChatRequest)
-        request.model = request_model  # Explicit model in request
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request(request_model)
 
         await provider.complete(request)
 
@@ -1189,14 +1093,7 @@ class TestCancelledErrorTranslation:
         )
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         # MUST raise AbortError — NOT raw asyncio.CancelledError
         with pytest.raises(AbortError) as exc_info:
@@ -1240,14 +1137,7 @@ class TestCancelledErrorTranslation:
         mock_client = CountingCancelMock(events=[])
         provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
 
-        request = MagicMock(spec=ChatRequest)
-        request.model = "gpt-4"
-        request.messages = [MagicMock(spec=Message, role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_standard_request()
 
         with pytest.raises(AbortError):
             await provider.complete(request)

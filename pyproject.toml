@@ -105,6 +105,7 @@ addopts = "-m 'not live'"
 markers = [
     "live: marks tests requiring real credentials (run explicitly with -m live)",
     "sdk_assumption: marks tests verifying SDK types/shapes exist",
+    "security: marks tests verifying security invariants (injection, redaction, sanitization)",
 ]
 
 # Note: [dependency-groups] removed — use [project.optional-dependencies] dev instead

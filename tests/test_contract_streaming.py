@@ -382,7 +382,7 @@ def _make_event_router(
     queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=256)
     idle_event = asyncio.Event()
     error_holder: list[Exception] = []
-    usage_holder: list[dict[str, int]] = []
+    usage_holder: list[dict[str, int | None]] = []
 
     if capture_handler is None:
         capture_handler = ToolCaptureHandler(on_capture_complete=on_capture)

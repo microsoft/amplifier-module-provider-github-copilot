@@ -23,7 +23,7 @@ Coverage Targets (provider.py):
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -452,6 +452,63 @@ class TestToolCaptureAndAbort:
         assert any(
             r.levelno == logging.DEBUG and "abort" in r.getMessage().lower() for r in caplog.records
         )
+
+    @pytest.mark.asyncio
+    async def test_tool_capture_skips_abort_when_explicit_abort_disabled(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When explicit_abort=False, session.abort() is NOT called after tool capture.
+
+        Contract: sdk-protection:Session:MUST:3,4
+        Line 897 in provider.py — the `if sdk_protection.session.explicit_abort:` False branch.
+        Mutation check: change `if explicit_abort:` to `if True:` → abort is always called,
+        even when the operator has configured explicit_abort=False, violating the policy contract.
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SdkProtectionConfig,
+            SessionProtectionConfig,
+        )
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        tool_events = [
+            tool_request_event("call_no_abort", "read_file", {"path": "/x.txt"}),
+        ]
+
+        # abort_behavior="exception" — if abort() is called despite explicit_abort=False,
+        # the exception would propagate, revealing the misconfiguration.
+        mock_client = MockCopilotClientWrapper(
+            events=tool_events,
+            session_class=MockSDKSessionWithAbort,
+            abort_behavior="exception",
+        )
+
+        no_abort_protection = SdkProtectionConfig(
+            session=SessionProtectionConfig(explicit_abort=False),
+        )
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.provider.load_sdk_protection_config",
+                return_value=no_abort_protection,
+            ),
+            caplog.at_level(logging.DEBUG),
+        ):
+            provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+            request = _create_mock_request()
+            request.tools = [{"name": "read_file", "description": "Read a file"}]
+            response = await provider.complete(request)
+
+        # Tool capture still works
+        assert response.tool_calls is not None  # narrowed for pyright
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "read_file"
+        # Abort was NOT called — no "Session aborted after tool capture" message
+        assert not any(
+            "Session aborted after tool capture" in r.getMessage() for r in caplog.records
+        ), "abort() must not be called when explicit_abort=False"
 
 
 # =============================================================================

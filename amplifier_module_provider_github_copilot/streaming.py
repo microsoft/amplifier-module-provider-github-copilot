@@ -343,13 +343,23 @@ class StreamingAccumulator:
         # correct behaviour since direct mutation violates the accumulator contract.
         # streaming-contract:StreamingResponse:MUST:2
 
-        # Convert usage - all three fields REQUIRED
+        # Convert usage — the three base fields are required by the kernel Usage
+        # model; cache fields are optional (int|None) and forwarded when present.
+        # The SDK populates cache_read_tokens on cache hits. cache_write_tokens
+        # is defined in the SDK schema (session_events.Data.cache_write_tokens)
+        # but is not currently populated by the SDK even when a cache write occurs.
+        # reasoning_tokens is intentionally omitted (defaults to None): the SDK
+        # does not expose a separate reasoning token count; thinking tokens are
+        # included in output_tokens.
+        # Contract: streaming-contract:usage:MUST:2
         usage: Any | None = None
         if self.usage:
             usage = Usage(
                 input_tokens=self.usage.get("input_tokens", 0),
                 output_tokens=self.usage.get("output_tokens", 0),
                 total_tokens=self.usage.get("total_tokens", 0),
+                cache_read_tokens=self.usage.get("cache_read_tokens"),
+                cache_write_tokens=self.usage.get("cache_write_tokens"),
             )
 
         # Normalize finish_reason for orchestrator
@@ -770,6 +780,23 @@ def translate_event(sdk_event: dict[str, Any], config: EventConfig) -> DomainEve
         return None
 
     domain_type, block_type = config.bridge_mappings[event_type]
+
+    # For USAGE_UPDATE events, use extract_usage_data to apply the
+    # fresh-only input_tokens computation (MUST:3) rather than raw extraction.
+    # Raw _extract_event_data would pass the SDK's billing total (fresh + cache_read).
+    # Contract: streaming-contract:usage:MUST:3
+    if domain_type == DomainEventType.USAGE_UPDATE:
+        from .sdk_adapter.event_helpers import extract_usage_data
+
+        usage_data = extract_usage_data(sdk_event)
+        if usage_data is None:
+            return None
+        return DomainEvent(
+            type=domain_type,
+            data=usage_data,
+            block_type=block_type,
+        )
+
     data = _extract_event_data(sdk_event)
 
     # Apply finish_reason_map for TURN_COMPLETE events

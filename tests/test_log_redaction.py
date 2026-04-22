@@ -610,7 +610,7 @@ class TestEventRouterErrorRedaction:
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         idle_event = asyncio.Event()
         error_holder: list[Exception] = []
-        usage_holder: list[dict[str, int]] = []
+        usage_holder: list[dict[str, int | None]] = []
         capture_handler = ToolCaptureHandler()
         ttft_state = {"checked": False, "start_time": 0.0}
 
@@ -677,7 +677,7 @@ class TestEventRouterErrorRedaction:
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         idle_event = asyncio.Event()
         error_holder: list[Exception] = []
-        usage_holder: list[dict[str, int]] = []
+        usage_holder: list[dict[str, int | None]] = []
         capture_handler = ToolCaptureHandler()
         ttft_state = {"checked": False, "start_time": 0.0}
 
@@ -750,8 +750,7 @@ class TestS2PemBlockRedaction:
         pem = (
             _h + "\n"
             "MIIEowIBAAKCAQEA1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n"
-            "OPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR\n"
-            + _f
+            "OPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR\n" + _f
         )
         result = redact_sensitive_text(pem)
 

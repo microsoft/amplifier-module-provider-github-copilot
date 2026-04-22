@@ -134,20 +134,53 @@ def is_usage_event(event_type: str | None, *, usage_events: Set[str] | None = No
     return type_lower in {"assistant.usage", "usage_update"}
 
 
-def extract_usage_data(sdk_event: Any) -> dict[str, int] | None:
-    """Extract usage data (input_tokens, output_tokens) from SDK event.
+def extract_usage_data(sdk_event: Any) -> dict[str, int | None] | None:
+    """Extract token usage fields from a Copilot SDK ``assistant.usage`` event.
+
+    Handles both dict events (used in tests) and real SDK object events that
+    carry a ``.data`` attribute. Returns a dict suitable for unpacking into the
+    kernel ``Usage`` constructor.
+
+    Fields returned:
+
+    * ``input_tokens`` (int, required) — **fresh (uncacheable) tokens only**.
+      The Copilot SDK's ``assistant.usage`` event reports ``input_tokens`` as the
+      billing total (``fresh + cache_read + cache_write``). The kernel
+      ``Usage.input_tokens`` convention — established by the Anthropic provider
+      and consumed by the Amplifier streaming UI — defines this field as the
+      fresh/uncacheable portion only. The streaming UI computes the display total
+      as ``input_tokens + cache_read + cache_write``, so subtracting both cache
+      buckets means the display exactly recovers the SDK billing total.
+      Formula: ``max(0, sdk_input_tokens - cache_read_tokens - cache_write_tokens)``.
+    * ``output_tokens`` (int, required) — output tokens generated.
+    * ``total_tokens`` (int, required) — ``input_tokens + output_tokens``
+      (fresh + output). Computed here because the SDK does not populate
+      ``totalTokens`` in ``assistant.usage`` events (``Data.total_tokens`` is
+      ``float | None = None`` in the schema; it is ``None`` in usage payloads).
+      The kernel ``Usage.total_tokens`` is non-optional so we compute it.
+    * ``cache_read_tokens`` (int | None) — tokens served from the upstream LLM's
+      prompt cache. ``None`` when the field is absent from the event, which is
+      semantically distinct from ``0`` (SDK reported a confirmed zero, meaning no
+      cache hit). Evidence: real ``assistant.usage`` events show ``cache_read_tokens``
+      populated as ``0`` on cache misses and as the actual hit count on cache hits.
+    * ``cache_write_tokens`` (int | None) — tokens written to the upstream LLM's
+      prompt cache. ``None`` when the field is absent from the event. The SDK schema
+      (``session_events.Data.cache_write_tokens: float | None``) and real
+      ``assistant.usage`` events both carry this field (observed as ``0`` in
+      production logs). Extracted unconditionally so the implementation handles
+      non-zero values if the SDK begins populating them.
+
+    Contract: streaming-contract:usage:MUST:2, streaming-contract:usage:MUST:3
 
     Args:
-        sdk_event: SDK event (dict or object with .data attribute)
+        sdk_event: SDK event — either a ``dict`` with a ``"data"`` key or an
+            object with a ``.data`` attribute whose fields mirror the SDK's
+            ``Data`` type (``session_events.py``).
 
     Returns:
-        Dict with input_tokens and output_tokens, or None if not a usage event.
-
-    Note:
-        This function handles dynamic SDK data with unknown structure.
-        Type ignores are used for dict access on dynamic data.
+        Dict with usage fields, or ``None`` if the event carries no token data.
     """
-    # Handle dict events (tests)
+    # Handle dict events (used in tests and by the event translation pipeline)
     if isinstance(sdk_event, dict):
         typed_dict = cast(dict[str, Any], sdk_event)
         data = typed_dict.get("data", typed_dict)
@@ -158,17 +191,40 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int] | None:
             if input_tokens is not None or output_tokens is not None:
                 in_tok = int(input_tokens) if input_tokens else 0
                 out_tok = int(output_tokens) if output_tokens else 0
+                # Cache fields: preserve None vs 0 distinction.
+                # None → SDK did not report the field (field absent from event).
+                # 0   → SDK explicitly reported zero (e.g. no cache activity).
+                raw_cache_read: Any = typed_data.get("cache_read_tokens")
+                raw_cache_write: Any = typed_data.get("cache_write_tokens")
+                cache_read: int | None = int(raw_cache_read) if raw_cache_read is not None else None
+                cache_write: int | None = (
+                    int(raw_cache_write) if raw_cache_write is not None else None
+                )
+                # Contract: streaming-contract:usage:MUST:3 — kernel Usage.input_tokens
+                # must be the fresh (uncacheable) portion only.
+                # SDK input_tokens = fresh + cache_read + cache_write (billing total).
+                # Subtract both buckets so the computation is exact in all cases.
+                # The streaming UI adds cache_read + cache_write back for display, so
+                # display total = fresh + cache_read + cache_write = sdk_input_tokens.
+                fresh_tok = max(0, in_tok - (cache_read or 0) - (cache_write or 0))
                 return {
-                    "input_tokens": in_tok,
+                    "input_tokens": fresh_tok,
                     "output_tokens": out_tok,
                     # SDK assistant.usage does not send total_tokens — compute it.
                     # Kernel Usage.total_tokens: int is required (not Optional).
-                    # Contract: streaming-contract:Usage:MUST
-                    "total_tokens": in_tok + out_tok,
+                    # total_tokens = fresh + output (consistent with input_tokens convention).
+                    # Contract: streaming-contract:usage:MUST:1, MUST:3
+                    "total_tokens": fresh_tok + out_tok,
+                    # Contract: streaming-contract:usage:MUST:2
+                    "cache_read_tokens": cache_read,
+                    "cache_write_tokens": cache_write,
                 }
         return None
 
-    # Handle object events (real SDK)
+    # Handle real SDK object events (production path).
+    # The SDK Data type (session_events.py) carries cache_read_tokens and
+    # cache_write_tokens as float|None, populated from the cacheReadTokens
+    # and cacheWriteTokens fields of the underlying JSON event.
     data = getattr(sdk_event, "data", None)
     if data is not None:
         input_tokens = getattr(data, "input_tokens", None)
@@ -176,13 +232,23 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int] | None:
         if input_tokens is not None or output_tokens is not None:
             in_tok = int(input_tokens) if input_tokens else 0
             out_tok = int(output_tokens) if output_tokens else 0
+            raw_cache_read = getattr(data, "cache_read_tokens", None)
+            raw_cache_write = getattr(data, "cache_write_tokens", None)
+            cache_read = int(raw_cache_read) if raw_cache_read is not None else None
+            cache_write = int(raw_cache_write) if raw_cache_write is not None else None
+            # Contract: streaming-contract:usage:MUST:3 — kernel Usage.input_tokens
+            # must be the fresh (uncacheable) portion only.
+            # SDK input_tokens = fresh + cache_read + cache_write (billing total).
+            fresh_tok = max(0, in_tok - (cache_read or 0) - (cache_write or 0))
             return {
-                "input_tokens": in_tok,
+                "input_tokens": fresh_tok,
                 "output_tokens": out_tok,
-                # SDK assistant.usage does not send total_tokens — compute it.
-                # Kernel Usage.total_tokens: int is required (not Optional).
-                # Contract: streaming-contract:Usage:MUST
-                "total_tokens": in_tok + out_tok,
+                # total_tokens = fresh + output (consistent with input_tokens convention).
+                # Contract: streaming-contract:usage:MUST:1, MUST:3
+                "total_tokens": fresh_tok + out_tok,
+                # Contract: streaming-contract:usage:MUST:2
+                "cache_read_tokens": cache_read,
+                "cache_write_tokens": cache_write,
             }
 
     return None

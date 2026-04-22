@@ -16,7 +16,7 @@ SDK Utilities (re-exported via membrane):
 """
 
 from ._spec_utils import get_copilot_spec_origin
-from .client import CopilotClientWrapper
+from .client import AUTH_ENV_VARS, CopilotClientWrapper
 from .event_helpers import (
     extract_event_type,
     extract_tool_requests,
@@ -44,6 +44,7 @@ from .types import (
 # CopilotClientWrapper is exposed for provider.py but is an internal detail
 # _imports.py contains the actual SDK imports (quarantined)
 __all__ = [
+    "AUTH_ENV_VARS",  # Shared auth env-var priority order
     "CopilotClientWrapper",  # Internal: provider.py needs this
     "SessionConfig",  # Domain type
     "SDKSession",  # Domain type alias

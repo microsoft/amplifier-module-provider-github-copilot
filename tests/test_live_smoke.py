@@ -47,6 +47,7 @@ def _get_token() -> str:
         "No GITHUB_TOKEN available. Set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN. "
         "Tests run, not skip - this is a test failure."
     )
+    return ""  # unreachable — pytest.fail() raises; satisfies type checker
 
 
 def _get_sdk_available() -> bool:
@@ -417,9 +418,7 @@ class TestRetryEventPayloadShape:
     """
 
     @pytest.mark.asyncio
-    async def test_retry_event_emitted_with_retry_after_none(
-        self, live_client: Any
-    ) -> None:
+    async def test_retry_event_emitted_with_retry_after_none(self, live_client: Any) -> None:
         """provider:retry payload reaches hooks with retry_after=None on non-rate-limit errors.
 
         Uses real GitHubCopilotProvider with real coordinator hook wiring.
@@ -638,8 +637,7 @@ class TestRetryEventPayloadShape:
         retry_events = [(name, data) for name, data in emitted if name == PROVIDER_RETRY]
 
         assert len(retry_events) >= 1, (
-            f"Expected provider:retry event. "
-            f"All emitted: {[name for name, _ in emitted]}"
+            f"Expected provider:retry event. All emitted: {[name for name, _ in emitted]}"
         )
 
         _, payload = retry_events[0]

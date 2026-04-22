@@ -17,6 +17,19 @@ from unittest.mock import patch
 
 import pytest
 
+from amplifier_module_provider_github_copilot.config._policy import CacheConfig
+from amplifier_module_provider_github_copilot.model_cache import (
+    get_cache_dir,
+    get_cache_file_path,
+    get_cache_filename,
+    get_cache_ttl_seconds,
+    invalidate_cache,
+    load_cache_config,
+    read_cache,
+    write_cache,
+)
+from amplifier_module_provider_github_copilot.models import CopilotModelInfo
+
 # =============================================================================
 # Test Fixtures
 # =============================================================================
@@ -57,16 +70,12 @@ class TestCacheDirectory:
 
     def test_get_cache_dir_returns_path(self) -> None:
         """get_cache_dir() MUST return a Path object."""
-        from amplifier_module_provider_github_copilot.model_cache import get_cache_dir
-
         result = get_cache_dir()
 
         assert isinstance(result, Path)
 
     def test_get_cache_dir_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On Windows, cache dir MUST be in LOCALAPPDATA."""
-        from amplifier_module_provider_github_copilot.model_cache import get_cache_dir
-
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local")
         result = get_cache_dir()
@@ -75,8 +84,6 @@ class TestCacheDirectory:
 
     def test_get_cache_dir_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On Linux, cache dir MUST follow XDG_CACHE_HOME or ~/.cache."""
-        from amplifier_module_provider_github_copilot.model_cache import get_cache_dir
-
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setenv("XDG_CACHE_HOME", "/custom/cache")
         result = get_cache_dir()
@@ -85,8 +92,6 @@ class TestCacheDirectory:
 
     def test_get_cache_dir_macos(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On macOS, cache dir MUST be in ~/Library/Caches."""
-        from amplifier_module_provider_github_copilot.model_cache import get_cache_dir
-
         monkeypatch.setattr(sys, "platform", "darwin")
         result = get_cache_dir()
 
@@ -111,9 +116,6 @@ class TestWriteCache:
 
         write_cache() MUST create a cache file on disk.
         """
-        from amplifier_module_provider_github_copilot.model_cache import write_cache
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         models = [
             CopilotModelInfo(
                 id="claude-sonnet-4-5",
@@ -133,9 +135,6 @@ class TestWriteCache:
 
         # Contract: behaviors:ModelCache:SHOULD:1
         """
-        from amplifier_module_provider_github_copilot.model_cache import write_cache
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         # Model with non-ASCII characters
         models = [
             CopilotModelInfo(
@@ -159,9 +158,6 @@ class TestWriteCache:
 
         # Contract: behaviors:ModelCache:SHOULD:2
         """
-        from amplifier_module_provider_github_copilot.model_cache import write_cache
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         models = [
             CopilotModelInfo(
                 id="test",
@@ -185,9 +181,6 @@ class TestWriteCache:
 
         # Contract: behaviors:ModelCache:SHOULD:1
         """
-        from amplifier_module_provider_github_copilot.model_cache import write_cache
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         models = [
             CopilotModelInfo(
                 id="test",
@@ -221,12 +214,6 @@ class TestReadCache:
 
         read_cache() MUST return list of CopilotModelInfo on success.
         """
-        from amplifier_module_provider_github_copilot.model_cache import (
-            read_cache,
-            write_cache,
-        )
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         # Write cache first
         models = [
             CopilotModelInfo(
@@ -251,8 +238,6 @@ class TestReadCache:
 
     def test_read_cache_returns_none_when_file_missing(self, tmp_path: Path) -> None:
         """read_cache() MUST return None when cache file doesn't exist."""
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_file = tmp_path / "nonexistent.json"
         result = read_cache(cache_file)
 
@@ -260,8 +245,6 @@ class TestReadCache:
 
     def test_read_cache_returns_none_when_invalid_json(self, tmp_path: Path) -> None:
         """read_cache() MUST return None when cache contains invalid JSON."""
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_file = tmp_path / "invalid.json"
         cache_file.write_text("not valid json {", encoding="utf-8")
 
@@ -274,8 +257,6 @@ class TestReadCache:
 
         read_cache() MUST return None when cache is older than TTL.
         """
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         # Create a stale cache (timestamp in the past)
         stale_data: dict[str, Any] = {
             "version": "1.0",
@@ -316,19 +297,11 @@ class TestCachePolicy:
 
     def test_cache_config_has_ttl(self) -> None:
         """CacheConfig MUST define disk_ttl_seconds."""
-        from amplifier_module_provider_github_copilot.model_cache import (
-            load_cache_config,
-        )
-
         config = load_cache_config()
         assert isinstance(config.disk_ttl_seconds, int)
 
     def test_ttl_is_reasonable(self) -> None:
         """TTL SHOULD be at least 1 hour and at most 7 days."""
-        from amplifier_module_provider_github_copilot.model_cache import (
-            get_cache_ttl_seconds,
-        )
-
         ttl = get_cache_ttl_seconds()
 
         assert ttl >= 3600, "TTL should be at least 1 hour"
@@ -383,10 +356,6 @@ class TestCacheConfigHelpers:
 
         # Contract: behaviors:ConfigLoading:MUST:1
         """
-        from amplifier_module_provider_github_copilot.model_cache import (
-            get_cache_filename,
-        )
-
         filename = get_cache_filename()
 
         assert isinstance(filename, str)
@@ -401,10 +370,6 @@ class TestInvalidateCache:
 
         # Contract: behaviors:ModelCache:SHOULD:3
         """
-        from amplifier_module_provider_github_copilot.model_cache import (
-            invalidate_cache,
-        )
-
         cache_file = tmp_path / "test_cache.json"
         cache_file.write_text("{}", encoding="utf-8")
         assert cache_file.exists()
@@ -418,9 +383,6 @@ class TestInvalidateCache:
 
         # Contract: behaviors:ModelCache:SHOULD:3
         """
-        from amplifier_module_provider_github_copilot.model_cache import (
-            invalidate_cache,
-        )
 
         cache_file = tmp_path / "nonexistent.json"
         assert not cache_file.exists()
@@ -441,9 +403,6 @@ class TestWriteCacheErrorHandling:
 
         # Contract: behaviors:ModelCache:SHOULD:1
         """
-        from amplifier_module_provider_github_copilot.model_cache import write_cache
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         cache_file = tmp_path / "test_cache.json"
         temp_file = cache_file.with_suffix(".tmp")
 
@@ -489,11 +448,6 @@ class TestLoadCacheConfigFallback:
         # Contract: behaviors:ConfigLoading:MUST:1
         # Contract: behaviors:ModelCache:SHOULD:2
         """
-        from amplifier_module_provider_github_copilot.config._policy import CacheConfig
-        from amplifier_module_provider_github_copilot.model_cache import (
-            load_cache_config,
-        )
-
         config = load_cache_config()
 
         assert isinstance(config, CacheConfig)
@@ -509,8 +463,6 @@ class TestCacheFileOperations:
 
         # Contract: behaviors:ModelCache:SHOULD:1
         """
-        from amplifier_module_provider_github_copilot.model_cache import get_cache_file_path
-
         result = get_cache_file_path()
         assert isinstance(result, Path)
         assert result.suffix == ".json"
@@ -524,8 +476,6 @@ class TestReadCacheErrorHandling:
 
         # Contract: behaviors:ModelDiscoveryError:MUST:1
         """
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_file = tmp_path / "missing_models.json"
         cache_data = '{"version": "1.0", "timestamp": ' + str(time.time()) + "}"
         cache_file.write_text(cache_data, encoding="utf-8")
@@ -546,7 +496,6 @@ class TestInvalidateCacheErrorHandling:
         # Contract: behaviors:ModelCache:SHOULD:3
         Exception is swallowed and logged, not raised.
         """
-        from amplifier_module_provider_github_copilot.model_cache import invalidate_cache
 
         cache_file = tmp_path / "locked.json"
         cache_file.write_text("{}", encoding="utf-8")
@@ -586,9 +535,6 @@ class TestWriteCacheTempFileCleanup:
 
         # Contract: behaviors:ModelCache:SHOULD:1
         """
-        from amplifier_module_provider_github_copilot.model_cache import write_cache
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         cache_file = tmp_path / "test_cache.json"
         temp_file = cache_file.with_suffix(".tmp")
 
@@ -638,8 +584,6 @@ class TestInvalidateCacheEdgeCases:
         # Contract: behaviors:ModelCache:SHOULD:3
         Exception is swallowed and logged, not raised.
         """
-        from amplifier_module_provider_github_copilot.model_cache import invalidate_cache
-
         cache_file = tmp_path / "test.json"
         cache_file.write_text("{}", encoding="utf-8")
 
@@ -671,11 +615,6 @@ class TestReadCachePartialRecovery:
 
         # Contract: behaviors:ModelCache:SHOULD:1
         """
-        import json
-        import time
-
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_data = {
             "timestamp": time.time(),
             "version": "1.0",
@@ -711,11 +650,6 @@ class TestReadCachePartialRecovery:
         live API call (return None), not return [] which would signal 'no models
         available'.  The live API will repopulate the cache with valid data.
         """
-        import json
-        import time
-
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_data = {
             "timestamp": time.time(),
             "version": "1.0",
@@ -739,11 +673,6 @@ class TestReadCachePartialRecovery:
 
         # Contract: behaviors:ModelCache:SHOULD:1
         """
-        import json
-        import time
-
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_data = {
             "timestamp": time.time(),
             "version": "1.0",
@@ -784,11 +713,6 @@ class TestReadCacheVersionCheck:
 
         # Contract: behaviors:ModelCache:SHOULD:2
         """
-        import json
-        import time
-
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_data = {
             "timestamp": time.time(),
             "version": "1.0",
@@ -815,11 +739,6 @@ class TestReadCacheVersionCheck:
 
         # Contract: behaviors:ModelDiscoveryError:MUST:1
         """
-        import json
-        import time
-
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_data = {
             "timestamp": time.time(),
             "version": "2.0",  # Unsupported future version
@@ -845,11 +764,6 @@ class TestReadCacheVersionCheck:
 
         # Contract: behaviors:ModelCache:SHOULD:2
         """
-        import json
-        import time
-
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         cache_data = {
             "timestamp": time.time(),
             # No 'version' key — pre-versioning cache format
@@ -881,11 +795,6 @@ class TestReadCacheVersionCheck:
         # Contract: behaviors:ModelDiscoveryError:MUST:1
         An unreadable cache (wrong schema) is treated as a cache miss.
         """
-        import json
-        import time
-
-        from amplifier_module_provider_github_copilot.model_cache import read_cache
-
         # Write cache file with bad/unsupported version
         cache_data = {
             "version": bad_version,
@@ -916,12 +825,6 @@ class TestWriteCacheOverwrite:
         # Contract: behaviors:ModelCache:SHOULD:1
         Stale content must not persist after a successful write.
         """
-        from amplifier_module_provider_github_copilot.model_cache import (
-            read_cache,
-            write_cache,
-        )
-        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
-
         cache_file = tmp_path / "models.json"
 
         # Write initial content

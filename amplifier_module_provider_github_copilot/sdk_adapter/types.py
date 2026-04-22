@@ -14,7 +14,7 @@ from typing import Any, cast
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class SessionConfig:
     """Configuration for creating an SDK session.
 
@@ -177,7 +177,7 @@ SDKCreateFn = Callable[[SessionConfig], Awaitable[SDKSession]]
 # ============================================================================
 
 
-@dataclass
+@dataclass(frozen=True)
 class SDKToolWrapper:
     """Wrapper to provide SDK-compatible attribute access for Amplifier tools.
 

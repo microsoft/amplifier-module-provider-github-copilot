@@ -113,13 +113,12 @@ class TestCalculateRetryDelayMultiplier:
         )
         error = RateLimitError("429", provider="github-copilot")
         from amplifier_module_provider_github_copilot.error_translation import _OVERLOADED_SENTINEL
+
         error.delay_multiplier = _OVERLOADED_SENTINEL  # overloaded sentinel
 
         result = provider._calculate_retry_delay(error, attempt=0, config=config)
 
-        assert result == pytest.approx(10_000.0), (
-            f"Expected 10x delay (10000ms), got {result}ms"
-        )
+        assert result == pytest.approx(10_000.0), f"Expected 10x delay (10000ms), got {result}ms"
 
     def test_non_overloaded_error_delay_is_not_multiplied(self) -> None:
         """Timeout error with delay_multiplier=1.0 → delay is NOT scaled.
@@ -143,9 +142,7 @@ class TestCalculateRetryDelayMultiplier:
 
         result = provider._calculate_retry_delay(error, attempt=0, config=config)
 
-        assert result == pytest.approx(1_000.0), (
-            f"Expected base delay (1000ms), got {result}ms"
-        )
+        assert result == pytest.approx(1_000.0), f"Expected base delay (1000ms), got {result}ms"
 
     def test_retry_after_supersedes_multiplier(self) -> None:
         """RateLimitError with retry_after=30 → 30000ms, ignoring overloaded multiplier.
@@ -169,6 +166,7 @@ class TestCalculateRetryDelayMultiplier:
         )
         error = RateLimitError("429", provider="github-copilot", retry_after=30.0)
         from amplifier_module_provider_github_copilot.error_translation import _OVERLOADED_SENTINEL
+
         error.delay_multiplier = _OVERLOADED_SENTINEL  # overloaded sentinel
 
         result = provider._calculate_retry_delay(error, attempt=0, config=config)
@@ -202,6 +200,7 @@ class TestCalculateRetryDelayMultiplier:
         )
         error = RateLimitError("429", provider="github-copilot")
         from amplifier_module_provider_github_copilot.error_translation import _OVERLOADED_SENTINEL
+
         error.delay_multiplier = _OVERLOADED_SENTINEL  # overloaded sentinel
 
         result = provider._calculate_retry_delay(error, attempt=20, config=config)
@@ -233,6 +232,7 @@ class TestCalculateRetryDelayMultiplier:
         )
         error = RateLimitError("429", provider="github-copilot")
         from amplifier_module_provider_github_copilot.error_translation import _OVERLOADED_SENTINEL
+
         error.delay_multiplier = _OVERLOADED_SENTINEL  # overloaded sentinel
 
         result = provider._calculate_retry_delay(error, attempt=0, config=config)

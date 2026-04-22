@@ -6,10 +6,27 @@ Contract: provider-protocol.md (parse_tool_calls method)
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
+
+from amplifier_module_provider_github_copilot.fake_tool_detection import (
+    FakeToolDetectionConfig,
+    LoggingConfig,
+    _truncate_text,  # type: ignore[reportPrivateUsage]
+    contains_fake_tool_calls,
+    load_fake_tool_detection_config,
+    log_detection,
+    log_exhausted,
+    log_retry,
+    log_success,
+    should_retry_for_fake_tool_calls,
+)
+from amplifier_module_provider_github_copilot.tool_parsing import ToolCall, parse_tool_calls
+
+_fake_tool_config = load_fake_tool_detection_config()
 
 
 # Mock types for testing (before implementation exists)
@@ -41,8 +58,6 @@ class TestParseToolCalls:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         response = MockChatResponse(content=[], tool_calls=None)
         result = parse_tool_calls(response)
         assert result == []
@@ -52,7 +67,6 @@ class TestParseToolCalls:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(content=[], tool_calls=[])
         result = parse_tool_calls(response)
@@ -63,8 +77,6 @@ class TestParseToolCalls:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         response = MockChatResponse(
             content=[],
             tool_calls=[MockToolCall(id="tc1", name="read_file", arguments={"path": "test.py"})],
@@ -80,8 +92,6 @@ class TestParseToolCalls:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         response = MockChatResponse(
             content=[],
             tool_calls=[
@@ -103,8 +113,6 @@ class TestParseToolCalls:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         response = MockChatResponse(
             content=[],
             tool_calls=[MockToolCall(id="tc1", name="bash", arguments='{"command": "ls -la"}')],
@@ -115,8 +123,6 @@ class TestParseToolCalls:
     def test_invalid_json_raises_invalid_tool_call_error(self) -> None:
         """Invalid JSON arguments raise InvalidToolCallError (error-hierarchy.md:MUST:1)."""
         from amplifier_core.llm_errors import InvalidToolCallError
-
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         response = MockChatResponse(
             content=[],
@@ -132,8 +138,6 @@ class TestParseToolCalls:
         provider-protocol.md:parse_tool_calls — arguments MUST be dict.
         """
         from amplifier_core.llm_errors import InvalidToolCallError
-
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
 
         class BadArgsToolCall:
             id = "tc1"
@@ -155,8 +159,6 @@ class TestParseToolCalls:
         """
         from amplifier_core.llm_errors import InvalidToolCallError
 
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         response = MockChatResponse(
             content=[],
             tool_calls=[MockToolCall(id="tc1", name="bash", arguments='["not", "an", "object"]')],
@@ -176,8 +178,6 @@ class TestToolCallType:
 
         Contract: provider-protocol:parse_tool_calls:MUST:4
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import ToolCall
-
         tc = ToolCall(id="1", name="test", arguments={"key": "value"})
         assert tc.arguments == {"key": "value"}
         with pytest.raises(AttributeError):
@@ -188,8 +188,6 @@ class TestToolCallType:
 
         Contract: provider-protocol:parse_tool_calls:MUST:4
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import ToolCall
-
         tc = ToolCall(id="tc-123", name="read_file", arguments={"path": "/etc/hosts"})
         assert tc.id == "tc-123"
         assert tc.name == "read_file"
@@ -200,8 +198,6 @@ class TestToolCallType:
 
         Contract: provider-protocol:parse_tool_calls:MUST:4
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import ToolCall
-
         tc = ToolCall(id="1", name="get_time", arguments={})
         assert tc.arguments == {}
 
@@ -217,8 +213,6 @@ class TestEdgeCases:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         nested = {"config": {"nested": {"deep": "value"}}, "list": [1, 2, 3]}
         response = MockChatResponse(
             content=[],
@@ -232,8 +226,6 @@ class TestEdgeCases:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         response = MockChatResponse(
             content=[],
             tool_calls=[MockToolCall(id="tc1", name="write", arguments={"text": "Hello 世界 🌍"})],
@@ -247,8 +239,6 @@ class TestEdgeCases:
 
         Contract: provider-protocol:parse_tool_calls:MUST:1
         """
-        from amplifier_module_provider_github_copilot.tool_parsing import parse_tool_calls
-
         response = MockChatResponse(
             content=[],
             tool_calls=[MockToolCall(id="tc1", name="mcp_server:read_file", arguments={})],
@@ -276,12 +266,7 @@ class TestFakeToolCallDetection:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            contains_fake_tool_calls,
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         text = 'I will run this command: [Tool Call: bash(command="ls -la")]'
         detected, pattern = contains_fake_tool_calls(text, config)
         assert detected is True
@@ -292,12 +277,7 @@ class TestFakeToolCallDetection:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            contains_fake_tool_calls,
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         text = '<tool_used name="bash"><command>ls -la</command></tool_used>'
         detected, pattern = contains_fake_tool_calls(text, config)
         assert detected is True
@@ -308,12 +288,7 @@ class TestFakeToolCallDetection:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            contains_fake_tool_calls,
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         text = '<tool_result name="bash">output here</tool_result>'
         detected, pattern = contains_fake_tool_calls(text, config)
         assert detected is True
@@ -324,12 +299,7 @@ class TestFakeToolCallDetection:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            contains_fake_tool_calls,
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         text = "Hello, how can I help you today? Let me know what you need."
         detected, pattern = contains_fake_tool_calls(text, config)
         assert detected is False
@@ -340,12 +310,7 @@ class TestFakeToolCallDetection:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            contains_fake_tool_calls,
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         detected, pattern = contains_fake_tool_calls("", config)
         assert detected is False
         assert pattern is None
@@ -355,12 +320,7 @@ class TestFakeToolCallDetection:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            contains_fake_tool_calls,
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         text = "When you need to use a tool call, make sure it's structured properly."
         detected, _ = contains_fake_tool_calls(text, config)
         assert detected is False
@@ -370,12 +330,7 @@ class TestFakeToolCallDetection:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            contains_fake_tool_calls,
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         text = '[TOOL CALL: Bash(command="ls")]'
         detected, _ = contains_fake_tool_calls(text, config)
         assert detected is True
@@ -392,12 +347,7 @@ class TestShouldRetryForFakeToolCalls:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            load_fake_tool_detection_config,
-            should_retry_for_fake_tool_calls,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         # Fake text in response BUT real tool_calls present
         should_retry, _ = should_retry_for_fake_tool_calls(
             response_text="[Tool Call: bash(command='ls')]",
@@ -412,12 +362,7 @@ class TestShouldRetryForFakeToolCalls:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            load_fake_tool_detection_config,
-            should_retry_for_fake_tool_calls,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         # Fake text BUT no tools in original request
         should_retry, _ = should_retry_for_fake_tool_calls(
             response_text="[Tool Call: bash(command='ls')]",
@@ -432,12 +377,7 @@ class TestShouldRetryForFakeToolCalls:
 
         Contract: provider-protocol:complete:MUST:6
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            load_fake_tool_detection_config,
-            should_retry_for_fake_tool_calls,
-        )
-
-        config = load_fake_tool_detection_config()
+        config = _fake_tool_config
         should_retry, pattern = should_retry_for_fake_tool_calls(
             response_text="[Tool Call: bash(command='ls')]",
             tool_calls=[],  # Empty - no real tool calls
@@ -460,14 +400,6 @@ class TestFakeToolLogging:
 
         Contract: behaviors:Logging:MUST:4
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_detection,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             logging=LoggingConfig(
@@ -490,14 +422,6 @@ class TestFakeToolLogging:
 
         Contract: behaviors:Logging:MUST:4
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_detection,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             logging=LoggingConfig(
@@ -520,14 +444,6 @@ class TestFakeToolLogging:
 
         Contract: behaviors:Logging:MUST:4
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_detection,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             logging=LoggingConfig(
@@ -547,14 +463,6 @@ class TestFakeToolLogging:
 
         Contract: provider-protocol:complete:MUST:5
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_retry,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             logging=LoggingConfig(
@@ -573,14 +481,6 @@ class TestFakeToolLogging:
 
         Contract: provider-protocol:complete:MUST:5
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_retry,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             correction_message="Please use structured tool calls",
@@ -599,14 +499,6 @@ class TestFakeToolLogging:
 
         Contract: provider-protocol:complete:MUST:5
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_exhausted,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             logging=LoggingConfig(level_on_exhausted="WARNING"),
@@ -622,14 +514,6 @@ class TestFakeToolLogging:
 
         Contract: provider-protocol:complete:MUST:5
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_success,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             logging=LoggingConfig(level_on_success="INFO"),
@@ -648,14 +532,6 @@ class TestFakeToolLogging:
         Line ~264 in fake_tool_detection.py — branch not taken.
         Contract: behaviors:Logging:MUST:4 — logging is controllable via config.
         """
-        import logging
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            FakeToolDetectionConfig,
-            LoggingConfig,
-            log_retry,
-        )
-
         config = FakeToolDetectionConfig(
             patterns=[],
             correction_message="SECRET_CORRECTION_TEXT",
@@ -682,10 +558,6 @@ class TestTruncateText:
 
         Contract: behaviors:Logging:MUST:4
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            _truncate_text,  # type: ignore[reportPrivateUsage]
-        )
-
         result = _truncate_text("hello", 100)
         assert result == "hello"
 
@@ -694,10 +566,6 @@ class TestTruncateText:
 
         Contract: behaviors:Logging:MUST:4
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            _truncate_text,  # type: ignore[reportPrivateUsage]
-        )
-
         result = _truncate_text("hello", 5)
         assert result == "hello"
 
@@ -706,10 +574,6 @@ class TestTruncateText:
 
         Contract: behaviors:Logging:MUST:4
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            _truncate_text,  # type: ignore[reportPrivateUsage]
-        )
-
         result = _truncate_text("hello world", 5)
         assert result == "hello..."
 
@@ -718,10 +582,6 @@ class TestTruncateText:
 
         Contract: behaviors:Logging:MUST:4
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            _truncate_text,  # type: ignore[reportPrivateUsage]
-        )
-
         result = _truncate_text("hello", 0)
         assert result == "hello"
 
@@ -730,10 +590,6 @@ class TestTruncateText:
 
         Contract: behaviors:Logging:MUST:4
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            _truncate_text,  # type: ignore[reportPrivateUsage]
-        )
-
         result = _truncate_text("hello", -5)
         assert result == "hello"
 
@@ -749,8 +605,6 @@ class TestLoggingConfigDefaults:
 
         Contract: behaviors:Logging:MUST:4
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import LoggingConfig
-
         config = LoggingConfig()
         assert config.log_response_text is False
         assert config.log_tool_calls is False
@@ -763,8 +617,6 @@ class TestLoggingConfigDefaults:
 
         Contract: behaviors:Logging:MUST:4
         """
-        from amplifier_module_provider_github_copilot.fake_tool_detection import LoggingConfig
-
         config = LoggingConfig(
             log_matched_pattern=False, log_response_text=True, level_on_exhausted="ERROR"
         )

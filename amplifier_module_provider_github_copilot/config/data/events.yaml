@@ -88,6 +88,8 @@ event_classifications:
     - session.model_change
     - session.tools_updated
     - session.custom_agents_updated  # CLI binary sends this on session init; no domain value
+    - session.skills_loaded  # SDK SessionSkillsLoadedEvent — Amplifier does not host skills; no domain value
+    - system.message          # SDK SystemMessageEvent — carries system/developer prompt text; not forwarded (no domain value)
     - session.handoff
     - session.resume
     - session.task_complete

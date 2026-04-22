@@ -83,7 +83,7 @@ class EventRouter:
         queue: asyncio.Queue[Any],
         idle_event: asyncio.Event,
         error_holder: list[Exception],
-        usage_holder: list[dict[str, int]],
+        usage_holder: list[dict[str, int | None]],
         capture_handler: ToolCaptureHandler,
         ttft_state: dict[str, Any],
         ttft_threshold_ms: int,

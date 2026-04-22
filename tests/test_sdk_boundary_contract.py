@@ -485,6 +485,8 @@ class TestConfigInvariants:
             "disabled_skills",
             "infinite_sessions",
             "on_event",
+            "enable_config_discovery",
+            "commands",
         }
 
         mock_client = ConfigCapturingMock()
@@ -576,6 +578,144 @@ class TestRuntimeSDKTypeLeak:
             assert handle is not mock_sdk_session, (
                 "session() must not yield the raw SDK session object directly"
             )
+
+
+class TestMinimalModeConfig:
+    """SDK minimal mode settings enforcement.
+
+    Contract: sdk-boundary:MinimalMode:MUST:1-6
+
+    Verifies every MinimalMode MUST clause is reflected in the session config
+    dict sent to create_session(). Each test is independently mutation-detectable:
+    removing the corresponding line in client.py makes exactly that test fail.
+    """
+
+    @pytest.mark.asyncio
+    async def test_infinite_sessions_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:1
+
+        SDK compaction is disabled. Amplifier manages context.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config.get("infinite_sessions") == {"enabled": False}
+
+    @pytest.mark.asyncio
+    async def test_config_discovery_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:2
+
+        SDK config discovery is disabled. Amplifier provides all config.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config.get("enable_config_discovery") is False
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_empty(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:3
+
+        mcp_servers is set to empty dict. Amplifier routes all tools.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config.get("mcp_servers") == {}
+
+    @pytest.mark.asyncio
+    async def test_skill_directories_empty(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:4
+
+        skill_directories is set to empty list. Amplifier has its own skills system.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config.get("skill_directories") == []
+
+    @pytest.mark.asyncio
+    async def test_custom_agents_empty(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:5
+
+        custom_agents is set to empty list. Amplifier orchestrates agents.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config.get("custom_agents") == []
+
+    @pytest.mark.asyncio
+    async def test_commands_empty(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:6
+
+        commands is set to empty list. Amplifier handles slash commands.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config.get("commands") == []
+
+    @pytest.mark.asyncio
+    async def test_minimal_mode_mutation_does_not_leak_between_sessions(self) -> None:
+        """Minimal-mode collections must be copied per session.
+
+        The protection config is cached process-wide. If create_session() or other
+        downstream code mutates the lists/dicts inside session_config, that mutation
+        must not contaminate later sessions.
+        """
+
+        class MutatingClient:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            async def create_session(self, **kwargs: Any) -> object:
+                self.calls.append(
+                    {
+                        "mcp_servers": dict(kwargs["mcp_servers"]),
+                        "skill_directories": list(kwargs["skill_directories"]),
+                        "custom_agents": list(kwargs["custom_agents"]),
+                        "commands": list(kwargs["commands"]),
+                    }
+                )
+                kwargs["mcp_servers"] = {"mutated": True}
+                kwargs["skill_directories"].append("/tmp/mutated-skill")
+                kwargs["custom_agents"].append("mutated-agent")
+                kwargs["commands"].append("/mutated")
+
+                class SessionStub:
+                    session_id = "mutating-session"
+
+                    async def disconnect(self) -> None:
+                        return None
+
+                return SessionStub()
+
+        client = MutatingClient()
+        wrapper = CopilotClientWrapper(sdk_client=client)
+
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        async with wrapper.session(model="gpt-4o"):
+            pass
+
+        second = client.calls[1]
+        assert second["mcp_servers"] == {}
+        assert second["skill_directories"] == []
+        assert second["custom_agents"] == []
+        assert second["commands"] == []
 
 
 class TestSessionEventPattern:
@@ -707,3 +847,98 @@ class TestSessionEventPattern:
             f"Got {type(session.last_prompt).__name__!r}. "
             "Reversion to send(dict) would produce a non-str last_prompt."
         )
+
+
+# ---------------------------------------------------------------------------
+# SessionHandle method coverage (types.py lines 93, 110, 114, 118)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionHandleMethods:
+    """Direct unit tests for SessionHandle façade methods.
+
+    Contract: sdk-boundary:TypeTranslation:MUST:4 — domain handle hides SDK session.
+    These tests verify the façade correctly delegates without leaking SDK types.
+    """
+
+    def test_on_delegates_to_raw_session(self) -> None:
+        """SessionHandle.on() delegates to raw_session.on() and returns its result.
+
+        Contract: sdk-boundary:TypeTranslation:MUST:3 — SessionHandle wraps raw SDK
+        session; raw session must not be directly exposed to callers.
+        Contract: sdk-boundary:Events:MUST:1
+        Mutation check: remove the delegation → handlers never registered, no events.
+        """
+        from unittest.mock import MagicMock
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionHandle
+
+        raw = MagicMock()
+        raw.on.return_value = "unsub-fn"
+        handle = SessionHandle(raw_session=raw, session_id="test-session")
+
+        def handler(event: object) -> None:
+            pass
+
+        result = handle.on(handler)
+        raw.on.assert_called_once_with(handler)
+        assert result == "unsub-fn"
+
+    @pytest.mark.asyncio
+    async def test_send_with_attachments_passes_attachments_kwarg(self) -> None:
+        """SessionHandle.send() with attachments calls raw_session.send(prompt, attachments=...).
+
+        Contract: sdk-boundary:ImagePassthrough:MUST:7
+        Mutation check: swap the `if attachments` branch → attachments always omitted,
+        vision content silently dropped.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionHandle
+
+        raw = MagicMock()
+        raw.send = AsyncMock()
+        handle = SessionHandle(raw_session=raw, session_id="test")
+
+        attachments = [{"type": "blob", "data": "abc123", "mimeType": "image/png"}]
+        await handle.send("Hello", attachments=attachments)
+
+        raw.send.assert_awaited_once_with("Hello", attachments=attachments)
+
+    @pytest.mark.asyncio
+    async def test_send_without_attachments_omits_attachments_kwarg(self) -> None:
+        """SessionHandle.send() without attachments calls raw_session.send(prompt) only.
+
+        Mutation check: always pass attachments kwarg → SDK receives empty list where
+        it expects the kwarg to be absent, may behave differently.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionHandle
+
+        raw = MagicMock()
+        raw.send = AsyncMock()
+        handle = SessionHandle(raw_session=raw, session_id="test")
+
+        await handle.send("Hello")
+
+        raw.send.assert_awaited_once_with("Hello")
+
+    @pytest.mark.asyncio
+    async def test_abort_delegates_to_raw_session(self) -> None:
+        """SessionHandle.abort() delegates to raw_session.abort().
+
+        Contract: sdk-protection:Session:MUST:3 — explicit abort after tool capture.
+        Mutation check: remove the delegation → session never aborted, SDK keeps running.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionHandle
+
+        raw = MagicMock()
+        raw.abort = AsyncMock()
+        handle = SessionHandle(raw_session=raw, session_id="test")
+
+        await handle.abort()
+
+        raw.abort.assert_awaited_once()

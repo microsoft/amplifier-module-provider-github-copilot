@@ -30,11 +30,24 @@ def mock_coordinator() -> MagicMock:
     return coordinator
 
 
+def _make_request(model: str = "claude-opus-4.5") -> MagicMock:
+    """Create a standard mock ChatRequest for hooks emission tests."""
+    request = MagicMock()
+    request.model = model
+    request.messages = [MagicMock(role="user", content="test")]
+    request.tools = None
+    request.max_tokens = None
+    request.temperature = None
+    request.stop = None
+    request.stream = None
+    return request
+
+
 @pytest.fixture
 def provider_config() -> dict[str, Any]:
     """Standard provider config for tests."""
     return {
-        "model": "gpt-4",
+        "model": "claude-opus-4.5",
         "use_streaming": False,
         "debug": False,
     }
@@ -138,7 +151,7 @@ class TestLlmRequestEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -153,7 +166,7 @@ class TestLlmRequestEvent:
 
         await provider.complete(
             sample_request,  # type: ignore[arg-type]
-            model="gpt-4",
+            model="claude-opus-4.5",
         )
 
         # Find llm:request call
@@ -178,7 +191,7 @@ class TestLlmRequestEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -191,7 +204,7 @@ class TestLlmRequestEvent:
 
         await provider.complete(
             sample_request,  # type: ignore[arg-type]
-            model="gpt-4",
+            model="claude-opus-4.5",
         )
 
         # Find llm:request call and validate payload
@@ -238,7 +251,7 @@ class TestLlmResponseEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -251,7 +264,7 @@ class TestLlmResponseEvent:
 
         await provider.complete(
             sample_request,  # type: ignore[arg-type]
-            model="gpt-4",
+            model="claude-opus-4.5",
         )
 
         # Find llm:response call
@@ -276,7 +289,7 @@ class TestLlmResponseEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -289,7 +302,7 @@ class TestLlmResponseEvent:
 
         await provider.complete(
             sample_request,  # type: ignore[arg-type]
-            model="gpt-4",
+            model="claude-opus-4.5",
         )
 
         # Find llm:response call and validate duration_ms
@@ -319,7 +332,7 @@ class TestLlmResponseEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -332,7 +345,7 @@ class TestLlmResponseEvent:
 
         await provider.complete(
             sample_request,  # type: ignore[arg-type]
-            model="gpt-4",
+            model="claude-opus-4.5",
         )
 
         # Find llm:response call and validate status
@@ -377,14 +390,7 @@ class TestLlmResponseEvent:
         )
 
         # Create request
-        request = MagicMock()
-        request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_request()
 
         # Call complete - this uses production path with mock client
         await provider.complete(request)
@@ -439,14 +445,7 @@ class TestLlmResponseEvent:
         )
 
         # Create request
-        request = MagicMock()
-        request.model = "gpt-4"
-        request.messages = [MagicMock(role="user", content="test")]
-        request.tools = None
-        request.max_tokens = None
-        request.temperature = None
-        request.stop = None
-        request.stream = None
+        request = _make_request()
 
         # Call complete - this uses production path with mock client
         await provider.complete(request)
@@ -464,6 +463,191 @@ class TestLlmResponseEvent:
         assert "sdk_pid" in data, "llm:response must include sdk_pid for log correlation"
         # Verify it's the mock PID
         assert data["sdk_pid"] == "12345"
+
+    @pytest.mark.asyncio
+    async def test_llm_response_usage_includes_cache_read_tokens_when_present(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """llm:response usage dict includes cache_read_tokens when SDK provides them.
+
+        Contract: streaming-contract:usage:MUST:2 — forward cache tokens to kernel Usage
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+            await ctx.emit_response_ok(
+                usage_input=67000,
+                usage_output=23,
+                usage_cache_read=62851,
+                usage_cache_write=None,
+                finish_reason="stop",
+                content_blocks=1,
+                tool_calls=0,
+            )
+
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1
+        usage = response_calls[0][0][1]["usage"]
+        assert usage["input"] == 67000
+        assert usage["output"] == 23
+        assert usage["cache_read_tokens"] == 62851
+        assert "cache_write_tokens" not in usage
+
+    @pytest.mark.asyncio
+    async def test_llm_response_usage_omits_cache_tokens_when_none(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """llm:response usage dict omits cache_read/write_tokens when SDK sends None.
+
+        Contract: streaming-contract:usage:MUST:2 — None ≠ 0; absent means not sent
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+            await ctx.emit_response_ok(
+                usage_input=1000,
+                usage_output=50,
+                usage_cache_read=None,
+                usage_cache_write=None,
+                finish_reason="stop",
+                content_blocks=1,
+                tool_calls=0,
+            )
+
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1
+        usage = response_calls[0][0][1]["usage"]
+        assert "cache_read_tokens" not in usage
+        assert "cache_write_tokens" not in usage
+
+    @pytest.mark.asyncio
+    async def test_emit_response_ok_includes_cache_write_tokens_when_present(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """usage_cache_write is not None → included in llm:response usage payload.
+
+        Contract: streaming-contract:usage:MUST:2
+        Mutation check: remove the cache_write branch in emit_response_ok → key absent.
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+            await ctx.emit_response_ok(
+                usage_input=1000,
+                usage_output=50,
+                usage_cache_read=None,
+                usage_cache_write=500,  # Non-None: must appear in payload
+                finish_reason="stop",
+                content_blocks=1,
+                tool_calls=0,
+            )
+
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1
+        usage = response_calls[0][0][1]["usage"]
+        assert usage["cache_write_tokens"] == 500
+
+    @pytest.mark.asyncio
+    async def test_emit_response_ok_uses_tool_use_finish_reason_when_tool_calls_nonzero(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """finish_reason=None with tool_calls>0 → config.finish_reasons.tool_use.
+
+        Contract: observability:Events:MUST:3
+        Mutation check: remove the `if not finish_reason` branch → finish_reason stays
+        None or empty, breaking trace correlation for tool-use turns.
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+            await ctx.emit_response_ok(
+                usage_input=100,
+                usage_output=10,
+                usage_cache_read=None,
+                usage_cache_write=None,
+                finish_reason=None,  # Not provided — must be inferred from tool_calls
+                content_blocks=0,
+                tool_calls=1,  # tool_calls > 0 → finish_reason = tool_use
+            )
+
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1
+        payload = response_calls[0][0][1]
+        assert payload["finish_reason"] == "tool_calls", (
+            f"Expected 'tool_calls' (config.finish_reasons.tool_use) when "
+            f"finish_reason=None and tool_calls=1, got {payload['finish_reason']!r}"
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# llm_lifecycle Orphan Guard Tests
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class TestLlmLifecycleOrphanGuard:
+    """llm_lifecycle auto-emits error response when exception escapes context.
+
+    Contract: observability:Events:MUST:3 — MUST emit llm:response after llm:request.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_emits_error_response_when_exception_escapes(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """If request was emitted but response not yet emitted, auto-emits error response.
+
+        Mutation check: remove the try/except in llm_lifecycle that calls
+        emit_response_error → llm:response is never emitted, leaving an orphaned
+        llm:request event that breaks trace correlation in the telemetry stream.
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        with pytest.raises(RuntimeError, match="sdk failure"):
+            async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+                await ctx.emit_request(
+                    message_count=1,
+                    tool_count=0,
+                    streaming=False,
+                    timeout=30.0,
+                )
+                raise RuntimeError("sdk failure")
+
+        emitted = [call[0][0] for call in mock_coordinator.hooks.emit.call_args_list]
+        assert "llm:request" in emitted, "llm:request must have been emitted"
+        assert "llm:response" in emitted, (
+            "llm:response MUST be auto-emitted when exception escapes context "
+            "to prevent orphaned llm:request events"
+        )
+        response_call = next(
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        )
+        assert response_call[0][1]["status"] in ("error", "aborted"), (
+            f"Auto-emitted llm:response must have error/aborted status, "
+            f"got {response_call[0][1]['status']!r}"
+        )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -491,7 +675,7 @@ class TestEventOrdering:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -504,7 +688,7 @@ class TestEventOrdering:
 
         await provider.complete(
             sample_request,  # type: ignore[arg-type]
-            model="gpt-4",
+            model="claude-opus-4.5",
         )
 
         # Get all emitted event names in order
@@ -556,7 +740,7 @@ class TestProviderRetryEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -577,7 +761,7 @@ class TestProviderRetryEvent:
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await provider.complete(
                 sample_request,  # type: ignore[arg-type]
-                model="gpt-4",
+                model="claude-opus-4.5",
             )
 
         # Find provider:retry call
@@ -609,7 +793,7 @@ class TestProviderRetryEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -629,7 +813,7 @@ class TestProviderRetryEvent:
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await provider.complete(
                 sample_request,  # type: ignore[arg-type]
-                model="gpt-4",
+                model="claude-opus-4.5",
             )
 
         # Find provider:retry call and validate payload
@@ -668,7 +852,7 @@ class TestProviderRetryEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -688,7 +872,7 @@ class TestProviderRetryEvent:
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await provider.complete(
                 sample_request,  # type: ignore[arg-type]
-                model="gpt-4",
+                model="claude-opus-4.5",
             )
 
         retry_calls = [
@@ -725,7 +909,7 @@ class TestProviderRetryEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -745,7 +929,7 @@ class TestProviderRetryEvent:
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await provider.complete(
                 sample_request,  # type: ignore[arg-type]
-                model="gpt-4",
+                model="claude-opus-4.5",
             )
 
         retry_calls = [
@@ -787,7 +971,7 @@ class TestProviderRetryEvent:
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
 
         provider = GitHubCopilotProvider(
-            config={"model": "gpt-4", "use_streaming": False, "debug": False},
+            config={"model": "claude-opus-4.5", "use_streaming": False, "debug": False},
             coordinator=mock_coordinator,
         )
 
@@ -811,7 +995,7 @@ class TestProviderRetryEvent:
         with patch("asyncio.sleep", new_callable=AsyncMock):
             await provider.complete(
                 sample_request,  # type: ignore[arg-type]
-                model="gpt-4",
+                model="claude-opus-4.5",
             )
 
         retry_calls = [

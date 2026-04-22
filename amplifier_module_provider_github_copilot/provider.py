@@ -235,7 +235,7 @@ def _config_float(value: Any, default: float) -> float:
 def _build_retry_config(config: dict[str, Any], defaults: RetryConfig) -> RetryConfig:
     """Build per-instance RetryConfig from provider config dict.
 
-    User-facing keys match the Anthropic gold standard:
+    User-facing keys
     - max_retries:     number of retries (0 = no retry). Stored as max_attempts = retries + 1.
     - min_retry_delay: minimum delay in seconds. Stored internally as base_delay_ms.
     - max_retry_delay: maximum delay in seconds. Stored internally as max_delay_ms.
@@ -709,6 +709,8 @@ class GitHubCopilotProvider:
             await ctx.emit_response_ok(
                 usage_input=response.usage.input_tokens if response.usage else 0,
                 usage_output=response.usage.output_tokens if response.usage else 0,
+                usage_cache_read=response.usage.cache_read_tokens if response.usage else None,
+                usage_cache_write=response.usage.cache_write_tokens if response.usage else None,
                 finish_reason=response.finish_reason,
                 content_blocks=len(response.content) if response.content else 0,
                 tool_calls=response_tool_calls,
@@ -822,7 +824,7 @@ class GitHubCopilotProvider:
                 # Usage holder: captures usage directly to avoid race condition
                 # SDK may send assistant.usage AFTER session.idle
                 # Contract: streaming-contract:usage:MUST:1
-                usage_holder: list[dict[str, int]] = []
+                usage_holder: list[dict[str, int | None]] = []
                 # Use extracted ToolCaptureHandler for tool capture
                 # Contract: sdk-protection:ToolCapture:MUST:1,2
                 tool_capture_handler = ToolCaptureHandler(
@@ -906,8 +908,11 @@ class GitHubCopilotProvider:
                                 )
                             except Exception as e:
                                 # Abort failure is non-critical - log and continue
+                                from .security_redaction import redact_sensitive_text
+
                                 logger.debug(
-                                    "[provider] Session abort failed (non-critical): %s", e
+                                    "[provider] Session abort failed (non-critical): %s",
+                                    redact_sensitive_text(e),
                                 )
 
                     # Now drain remaining events (including TURN_COMPLETE)

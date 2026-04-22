@@ -139,6 +139,18 @@ class Usage:
     input_tokens: int
     output_tokens: int
     total_tokens: int
+    reasoning_tokens: int | None
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+    def __init__(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+        reasoning_tokens: int | None = ...,
+        cache_read_tokens: int | None = ...,
+        cache_write_tokens: int | None = ...,
+    ) -> None: ...
 
 
 @dataclass

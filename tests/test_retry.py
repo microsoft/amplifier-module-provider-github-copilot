@@ -20,6 +20,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from amplifier_core import ChatResponse
 
+
+def _make_request(model: str = "gpt-4o") -> MagicMock:
+    """Create a minimal mock ChatRequest for retry tests."""
+    request = MagicMock()
+    request.model = model
+    request.messages = []
+    request.tools = []
+    return request
+
+
 # ============================================================================
 # Retry Config Tests
 # ============================================================================
@@ -96,11 +106,7 @@ class TestRetryBehavior:
         # Patch the client's session method
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]  # Testing internal state
 
-        # Create a simple request
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
-        request.tools = []
+        request = _make_request()
 
         # Should raise after max_attempts (3)
         from amplifier_module_provider_github_copilot.error_translation import LLMTimeoutError
@@ -145,11 +151,7 @@ class TestRetryBehavior:
         # Patch the client's session method
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]  # Testing internal state
 
-        # Create a simple request
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
-        request.tools = []
+        request = _make_request()
 
         # Should raise immediately without retry
         from amplifier_module_provider_github_copilot.error_translation import AuthenticationError
@@ -208,10 +210,7 @@ class TestRetryBehavior:
 
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]  # Testing internal state
 
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
-        request.tools = []
+        request = _make_request()
 
         # Should eventually raise after exhausting retries
         with pytest.raises(Exception) as exc_info:
@@ -268,10 +267,7 @@ class TestRetryBehavior:
 
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]  # Testing internal state
 
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
-        request.tools = []
+        request = _make_request()
 
         # Should succeed on second attempt
         result = await provider.complete(request)
@@ -379,10 +375,7 @@ class TestRetryAfterHonor:
 
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]  # Testing internal state
 
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
-        request.tools = []
+        request = _make_request()
 
         from amplifier_module_provider_github_copilot.error_translation import (
             RateLimitError as _RateLimitError,
@@ -430,10 +423,7 @@ class TestRawExceptionTranslation:
 
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]
 
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
-        request.tools = []
+        request = _make_request()
 
         # Should translate to ProviderUnavailableError or similar
         from amplifier_module_provider_github_copilot.error_translation import LLMError
@@ -466,10 +456,7 @@ class TestRawExceptionTranslation:
 
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]
 
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
-        request.tools = []
+        request = _make_request()
 
         # TimeoutError translates to LLMTimeoutError which is retryable
         from amplifier_module_provider_github_copilot.error_translation import LLMError
@@ -505,10 +492,7 @@ class TestRawExceptionTranslation:
 
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]
 
-        request = MagicMock()
-        request.model = "invalid_model"
-        request.messages = []
-        request.tools = []
+        request = _make_request(model="invalid_model")
 
         # ValueError translates to ProviderUnavailableError
         from amplifier_module_provider_github_copilot.error_translation import LLMError
@@ -589,9 +573,7 @@ class TestFakeToolCorrectionRetry:
 
         provider._client.session = mock_session_cm  # type: ignore[reportPrivateUsage]
 
-        request = MagicMock()
-        request.model = "gpt-4o"
-        request.messages = []
+        request = _make_request()
         request.tools = [{"name": "bash", "description": "Run bash"}]  # Tools available
 
         result = await provider.complete(request)

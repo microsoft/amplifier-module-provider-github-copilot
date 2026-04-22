@@ -493,6 +493,197 @@ class TestUsageEventHelpers:
             f"total_tokens should be input+output=275, got {result.get('total_tokens')}"
         )
 
+    def test_extract_usage_data_includes_cache_read_tokens_from_dict_event(self) -> None:
+        """Contract: streaming-contract:usage:MUST:2
+
+        When the SDK assistant.usage event carries cacheReadTokens, extract_usage_data
+        MUST return cache_read_tokens as an int in the result dict so the value can be
+        forwarded to the kernel Usage object.
+
+        Evidence: installed SDK session_events.py Data.cache_read_tokens is float|None,
+        populated from obj.get("cacheReadTokens"). The kernel Usage.cache_read_tokens
+        is int|None. Provider must bridge them with int conversion.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {"data": {"input_tokens": 7432, "output_tokens": 500, "cache_read_tokens": 63128}}
+        result = extract_usage_data(event)
+        assert result is not None  # narrowed for pyright
+        assert result["cache_read_tokens"] == 63128, (
+            f"cache_read_tokens should be 63128, got {result.get('cache_read_tokens')}"
+        )
+
+    def test_extract_usage_data_includes_cache_read_tokens_from_object_event(self) -> None:
+        """Contract: streaming-contract:usage:MUST:2
+
+        Object-path (real SDK): extract_usage_data MUST read cache_read_tokens via
+        getattr from the SDK Data object, matching the SDK's Data.cache_read_tokens
+        field (session_events.py, float|None).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        class MockData:
+            input_tokens = 7432
+            output_tokens = 500
+            cache_read_tokens = 63128.0  # SDK sends float
+            cache_write_tokens = None  # SDK does not currently populate this
+
+        class MockEvent:
+            data = MockData()
+
+        result = extract_usage_data(MockEvent())
+        assert result is not None  # narrowed for pyright
+        assert result["cache_read_tokens"] == 63128, (
+            f"Expected cache_read_tokens=63128 (int), got {result.get('cache_read_tokens')}"
+        )
+        assert result["cache_write_tokens"] is None, (
+            f"Expected cache_write_tokens=None (SDK does not populate this field currently), "
+            f"got {result.get('cache_write_tokens')}"
+        )
+
+    def test_extract_usage_data_cache_tokens_none_when_absent(self) -> None:
+        """Contract: streaming-contract:usage:MUST:2
+
+        When cache_read_tokens and cache_write_tokens are absent from the SDK event,
+        extract_usage_data MUST return None for each — not zero. None is semantically
+        distinct from 0: None means the SDK did not report the field; 0 means the SDK
+        reported a confirmed zero. Conflating them hides whether caching occurred.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {"data": {"input_tokens": 100, "output_tokens": 50}}
+        result = extract_usage_data(event)
+        assert result is not None  # narrowed for pyright
+        assert result["cache_read_tokens"] is None, (
+            "cache_read_tokens absent from event must be None, not 0"
+        )
+        assert result["cache_write_tokens"] is None, (
+            "cache_write_tokens absent from event must be None, not 0"
+        )
+
+    def test_stream_accumulator_build_response_passes_cache_tokens_to_usage(self) -> None:
+        """Contract: streaming-contract:usage:MUST:2
+
+        StreamAccumulator.build_response() MUST pass cache_read_tokens and
+        cache_write_tokens from the usage dict to the kernel Usage constructor,
+        so the values appear in the ChatResponse returned to Amplifier.
+
+        Mutation check: if build_response() omits cache_read_tokens from the Usage()
+        call, this assertion turns red because result.usage.cache_read_tokens is None.
+        """
+        from amplifier_core import Usage
+
+        from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
+
+        acc = StreamingAccumulator()
+        acc.usage = {
+            "input_tokens": 7432,
+            "output_tokens": 500,
+            "total_tokens": 7932,
+            "cache_read_tokens": 63128,
+            "cache_write_tokens": None,
+        }
+
+        response = acc.to_chat_response()
+        assert response.usage is not None  # narrowed for pyright
+        assert isinstance(response.usage, Usage)
+        assert response.usage.cache_read_tokens == 63128, (
+            f"Expected cache_read_tokens=63128 in kernel Usage, "
+            f"got {response.usage.cache_read_tokens}"
+        )
+        assert response.usage.cache_write_tokens is None, (
+            "Expected cache_write_tokens=None "
+            "(SDK does not currently populate this field for cache writes), "
+            f"got {response.usage.cache_write_tokens}"
+        )
+
+    def test_extract_usage_data_input_tokens_is_fresh_only_when_cache_hit_dict(self) -> None:
+        """Contract: streaming-contract:usage:MUST:3
+
+        When the SDK sends input_tokens=70436 (billing total = fresh + cached) and
+        cache_read_tokens=63128, extract_usage_data MUST set input_tokens to the fresh
+        portion only (70436 - 63128 = 7308). The streaming UI convention is that
+        input_tokens = uncacheable/fresh portion; it adds cache_read separately to
+        compute the display total. Passing the billing total causes the UI to double-
+        count cache_read and display 133K instead of 70K.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {
+            "data": {
+                "input_tokens": 70436,
+                "output_tokens": 23,
+                "cache_read_tokens": 63128,
+            }
+        }
+        result = extract_usage_data(event)
+        assert result is not None  # narrowed for pyright
+        assert result["input_tokens"] == 7308, (
+            f"input_tokens must be fresh-only (70436 - 63128 = 7308), "
+            f"got {result.get('input_tokens')} — "
+            "provider is double-counting cache_read in input_tokens"
+        )
+        assert result["total_tokens"] == 7308 + 23, (
+            f"total_tokens must be fresh + output = 7331, got {result.get('total_tokens')}"
+        )
+        assert result["cache_read_tokens"] == 63128
+
+    def test_extract_usage_data_input_tokens_is_fresh_only_when_cache_hit_object(self) -> None:
+        """Contract: streaming-contract:usage:MUST:3
+
+        Object-path (real SDK): same fresh-only requirement on the object event path.
+        SDK Data object has input_tokens=70436 (billing total) and
+        cache_read_tokens=63128.0 (float). Provider must compute 70436 - 63128 = 7308.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        class MockData:
+            input_tokens = 70436
+            output_tokens = 23
+            cache_read_tokens = 63128.0  # SDK sends float
+            cache_write_tokens = None
+
+        class MockEvent:
+            data = MockData()
+
+        result = extract_usage_data(MockEvent())
+        assert result is not None  # narrowed for pyright
+        assert result["input_tokens"] == 7308, (
+            f"input_tokens must be fresh-only (70436 - 63128 = 7308), "
+            f"got {result.get('input_tokens')}"
+        )
+        assert result["total_tokens"] == 7308 + 23, (
+            f"total_tokens must be fresh + output = 7331, got {result.get('total_tokens')}"
+        )
+
+    def test_extract_usage_data_input_tokens_unchanged_when_no_cache(self) -> None:
+        """Contract: streaming-contract:usage:MUST:3
+
+        When no cache activity (cache_read_tokens is None), input_tokens = sdk value
+        unchanged (cold cache — sdk value IS the fresh portion).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {"data": {"input_tokens": 100, "output_tokens": 50}}
+        result = extract_usage_data(event)
+        assert result is not None  # narrowed for pyright
+        assert result["input_tokens"] == 100, (
+            "When no cache, input_tokens should equal sdk value (no subtraction)"
+        )
+        assert result["total_tokens"] == 150
+
 
 class TestValidateNoClassificationOverlapValidator:
     """Direct unit tests for every raise path in _validate_no_classification_overlap.
@@ -649,3 +840,76 @@ class TestEmptyIdleEventsRaises:
 
         with pytest.raises(ConfigurationError, match="session_lifecycle.idle_events"):
             load_event_config(config_path=config_file)
+
+
+class TestNoisySdkEventsClassifiedWithoutWarning:
+    """SDK events observed in live runs that must be classified silently.
+
+    Contract: event-vocabulary:Drop:MUST:2
+    Both event types are current SDK SessionEventType enum members (SDK snapshot
+    2026-04-02). They emit during normal session init and produce WARNING logs when
+    absent from events.yaml. They have no domain value for Amplifier.
+    """
+
+    def test_session_skills_loaded_classified_as_drop_without_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """session.skills_loaded must be DROP and must not emit an Unknown warning.
+
+        Contract: event-vocabulary:Drop:MUST:2
+
+        The skill.* wildcard in events.yaml does NOT match session.skills_loaded
+        (fnmatch requires the prefix to match). Without an explicit entry the event
+        falls through to the logger.warning() branch, producing noise in every live
+        session. The entry must silence it.
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+        )
+
+        config = load_event_config()
+        streaming_logger = "amplifier_module_provider_github_copilot.streaming"
+
+        with caplog.at_level(logging.WARNING, logger=streaming_logger):
+            result = classify_event("session.skills_loaded", config)
+
+        assert result == EventClassification.DROP, (
+            f"session.skills_loaded must be DROP, got {result}"
+        )
+        assert "Unknown SDK event type" not in caplog.text, (
+            "session.skills_loaded must not produce an Unknown SDK event type warning"
+        )
+
+    def test_system_message_classified_as_drop_without_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """system.message must be DROP and must not emit an Unknown warning.
+
+        Contract: event-vocabulary:Drop:MUST:2
+
+        system.message is SDK SystemMessageEvent — carries system/developer prompt
+        text injected into the conversation. It has no domain value for Amplifier
+        and must not be forwarded or logged (contains prompt content).
+        system.notification is already in consume; system.message is a distinct
+        event type and does not match the consume entry.
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            EventClassification,
+            classify_event,
+        )
+
+        config = load_event_config()
+        streaming_logger = "amplifier_module_provider_github_copilot.streaming"
+
+        with caplog.at_level(logging.WARNING, logger=streaming_logger):
+            result = classify_event("system.message", config)
+
+        assert result == EventClassification.DROP, f"system.message must be DROP, got {result}"
+        assert "Unknown SDK event type" not in caplog.text, (
+            "system.message must not produce an Unknown SDK event type warning"
+        )

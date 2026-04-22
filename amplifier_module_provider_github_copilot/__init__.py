@@ -73,6 +73,7 @@ if not _SKIP_SDK_CHECK:  # pragma: no cover
 
 # E402: These imports are intentionally after SDK check - we verify SDK
 # installation before importing modules that depend on it (Three-Medium).
+import logging  # noqa: E402
 from collections.abc import Awaitable, Callable  # noqa: E402
 from typing import Any, NoReturn  # noqa: E402
 
@@ -82,7 +83,7 @@ from .config_loader import load_sdk_protection_config  # noqa: E402
 from .provider import GitHubCopilotProvider  # noqa: E402
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
-from .sdk_adapter import CopilotClientWrapper  # noqa: E402
+from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
 __version__ = "2.0.0"
 
@@ -224,6 +225,26 @@ async def _release_shared_client() -> None:
             )
 
 
+def _log_auth_source(logger: logging.Logger) -> None:
+    """Emit a single INFO line identifying the active auth source at mount time.
+
+    Resolution priority mirrors the SDK's token resolver. If no env var is
+    present, the SDK defers to the logged-in user's cached OAuth (VS Code /
+    gh CLI login), so this path is still valid — we just surface it.
+
+    Never logs token values. Only names (env var) or a fixed fallback label.
+    """
+    for var in AUTH_ENV_VARS:
+        if _os.environ.get(var):
+            logger.info("[MOUNT] Auth source: %s (env var)", var)
+            return
+    logger.info(
+        "[MOUNT] Auth source: no auth env var set; SDK will attempt cached OAuth"
+        " / logged-in user auth (checked %s)",
+        ", ".join(AUTH_ENV_VARS),
+    )
+
+
 async def mount(
     coordinator: ModuleCoordinator,
     config: dict[str, Any] | None = None,
@@ -255,6 +276,17 @@ async def mount(
     import logging
 
     logger = logging.getLogger(__name__)
+
+    # Eager auth-source resolution: emit one INFO line naming the active auth
+    # source at mount time. Absence of all env vars is still a valid path
+    # because the SDK falls back to the logged-in user's cached OAuth
+    # (copilot-sdk sets use_logged_in_user = not bool(github_token)),
+    # so we surface the active source rather than bailing.
+    # Guarded: a logging failure on any platform must never block mount.
+    try:
+        _log_auth_source(logger)
+    except Exception:  # pragma: no cover  # diagnostic only — never propagate out of mount()
+        pass
 
     shared_client: CopilotClientWrapper | None = None
     try:
