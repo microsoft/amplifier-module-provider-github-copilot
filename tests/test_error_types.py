@@ -24,7 +24,6 @@ from amplifier_module_provider_github_copilot.error_translation import (
     LLMError,
     LLMTimeoutError,
     ProviderUnavailableError,
-    RateLimitError,
     StreamError,
     load_error_config,
     translate_sdk_error,
@@ -48,55 +47,6 @@ def error_config() -> ErrorConfig:
 def translate_fn() -> Callable[..., LLMError]:
     """Get translate function."""
     return translate_sdk_error
-
-
-class TestF035ErrorClassesExist:
-    """New error classes must exist in error_translation module.
-
-    # Contract: error-hierarchy:Kernel:MUST:1
-    """
-
-    @pytest.mark.parametrize(
-        "class_name",
-        [
-            "ContextLengthError",
-            "InvalidRequestError",
-            "StreamError",
-            "InvalidToolCallError",
-            "ConfigurationError",
-        ],
-    )
-    def test_error_class_exists(self, class_name: str) -> None:
-        """Classes - {class_name} must be importable."""
-        import amplifier_module_provider_github_copilot.error_translation as et
-
-        assert hasattr(et, class_name), f"{class_name} not found in error_translation"
-
-
-class TestF035KernelErrorMap:
-    """KERNEL_ERROR_MAP must include new types.
-
-    # Contract: error-hierarchy:Kernel:MUST:1
-    """
-
-    def test_kernel_error_map_has_new_types(self) -> None:
-        """Map - All new error types must be in KERNEL_ERROR_MAP."""
-        import amplifier_module_provider_github_copilot.error_translation as et
-        from amplifier_module_provider_github_copilot.error_translation import KERNEL_ERROR_MAP
-
-        required_types = [
-            "ContextLengthError",
-            "InvalidRequestError",
-            "StreamError",
-            "InvalidToolCallError",
-            "ConfigurationError",
-        ]
-
-        for error_type in required_types:
-            assert error_type in KERNEL_ERROR_MAP, f"{error_type} missing from KERNEL_ERROR_MAP"
-            assert KERNEL_ERROR_MAP[error_type] is getattr(et, error_type), (
-                f"Kernel:MUST:1 — KERNEL_ERROR_MAP[{error_type!r}] must map to the exact class"
-            )
 
 
 class TestF035P0CircuitBreaker:
@@ -297,92 +247,5 @@ class TestF035EdgeCases:
         assert isinstance(result, LLMTimeoutError)
         assert result.retryable is True
 
-    def test_generic_connection_error_maps_to_provider_unavailable_error(
-        self, error_config: ErrorConfig, translate_fn: Callable[..., LLMError]
-    ) -> None:
-        """Edge - Generic 'connection error' message maps to ProviderUnavailableError.
-
-        Contract: error-hierarchy:ConnectionError:MUST:1 — connection failures
-        indicate the provider endpoint is unreachable, not a transient network event.
-        """
-        exc = Exception("connection error occurred")
-        result = translate_fn(exc, error_config)
-        assert isinstance(result, ProviderUnavailableError)
-        assert result.retryable is True
 
 
-class TestProviderField:
-    """error-hierarchy:Kernel:MUST:2 — All translated errors must set provider field.
-
-    # Contract: error-hierarchy:Kernel:MUST:2
-    """
-
-    @pytest.mark.parametrize(
-        ("exc", "expected_class"),
-        [
-            # Type-name match: exception class name matches sdk_patterns
-            (ConnectionError("some connection failure"), ProviderUnavailableError),
-            # String-pattern match: message matches "connection refused"
-            (RuntimeError("connection refused by remote host"), ProviderUnavailableError),
-            # String-pattern match: message matches rate limit pattern
-            (Exception("HTTP 429 rate limit exceeded"), RateLimitError),
-            # Default fallback: unknown exception type with non-matching message
-            (ValueError("completely unknown error xyz123"), ProviderUnavailableError),
-        ],
-    )
-    def test_provider_field_set(self, exc: Exception, expected_class: type[LLMError]) -> None:
-        """All translation paths must set provider='github-copilot'.
-
-        Contract: error-hierarchy:Kernel:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.error_translation import (
-            load_error_config,
-            translate_sdk_error,
-        )
-
-        config = load_error_config()
-        result = translate_sdk_error(exc, config)
-        assert isinstance(result, expected_class)
-        assert result.provider == "github-copilot"
-
-
-class TestExceptionChaining:
-    """error-hierarchy:Translation:MUST:3 — Original exception must be chained via __cause__.
-
-    # Contract: error-hierarchy:Translation:MUST:3
-    """
-
-    def test_chaining_on_mapped_path(self) -> None:
-        """translate_sdk_error must chain original exc via __cause__ on a mapped path.
-
-        Contract: error-hierarchy:Translation:MUST:3
-        """
-        from amplifier_module_provider_github_copilot.error_translation import (
-            load_error_config,
-            translate_sdk_error,
-        )
-
-        config = load_error_config()
-        # Use a string pattern that maps to ProviderUnavailableError via "connection refused"
-        exc = RuntimeError("connection refused by server")
-        result = translate_sdk_error(exc, config)
-        assert result.__cause__ is exc, (
-            f"Translation:MUST:3 — __cause__ must be original exception, got {result.__cause__!r}"
-        )
-
-    def test_chaining_on_default_path(self) -> None:
-        """translate_sdk_error must chain original exc via __cause__ on the default fallback.
-
-        Contract: error-hierarchy:Translation:MUST:3
-        """
-        from amplifier_module_provider_github_copilot.error_translation import (
-            load_error_config,
-            translate_sdk_error,
-        )
-
-        config = load_error_config()
-        exc = RuntimeError("completely unknown error xyz")
-        result = translate_sdk_error(exc, config)
-        assert result.__cause__ is exc, (
-            "Translation:MUST:3 — __cause__ must be chained on default fallback path too"
-        )

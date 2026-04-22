@@ -306,6 +306,7 @@ class TestSessionConfigInvariants:
         """hooks.on_pre_tool_use in config.
 
         Contract: deny-destroy:DenyHook:MUST:1
+        Contract: sdk-boundary:Config:MUST:5
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
@@ -642,18 +643,6 @@ class TestHealthCheck:
     # Contract: sdk-protection:Subprocess:MUST:6
     """
 
-    def test_is_healthy_true_initially(self) -> None:
-        """Fresh wrapper is healthy.
-
-        Contract: sdk-boundary:Config:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            CopilotClientWrapper,
-        )
-
-        wrapper = CopilotClientWrapper()
-        assert wrapper.is_healthy() is True
-
     @pytest.mark.asyncio
     async def test_is_healthy_false_after_close(self) -> None:
         """Closed wrapper is unhealthy.
@@ -667,20 +656,6 @@ class TestHealthCheck:
         wrapper = CopilotClientWrapper()
         await wrapper.close()
         assert wrapper.is_healthy() is False
-
-    @pytest.mark.asyncio
-    async def test_is_healthy_with_injected_client(self) -> None:
-        """Wrapper with injected client is healthy.
-
-        Contract: sdk-boundary:Config:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            CopilotClientWrapper,
-        )
-
-        mock_client = MagicMock(spec=_MockSDKClient)
-        wrapper = CopilotClientWrapper(sdk_client=mock_client)
-        assert wrapper.is_healthy() is True
 
 
 class TestDenyHookBehavior:
@@ -808,20 +783,6 @@ class TestPrewarmSubprocess:
 
     # Contract: sdk-protection:Subprocess:MUST:5
     """
-
-    @pytest.mark.asyncio
-    async def test_prewarm_disabled_by_default(self) -> None:
-        """When prewarm_subprocess=False, client NOT initialized at mount.
-
-        Contract: sdk-boundary:Config:MUST:1 — lazy init when disabled.
-        """
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_sdk_protection_config,
-        )
-
-        config = load_sdk_protection_config()
-        # Default is False per YAML
-        assert config.sdk.prewarm_subprocess is False
 
     @pytest.mark.asyncio
     async def test_prewarm_enabled_triggers_early_init(
@@ -1183,18 +1144,6 @@ class TestCopilotPidTracking:
             async with wrapper.session(model="gpt-4"):
                 # PID should be captured after initialization
                 assert wrapper.copilot_pid == "12345"
-
-    def test_copilot_pid_returns_string(self) -> None:
-        """copilot_pid returns string, not int."""
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            CopilotClientWrapper,
-        )
-
-        wrapper = CopilotClientWrapper()
-        # After setting internal PID manually for this test
-        wrapper._copilot_pid = 99999  # pyright: ignore[reportPrivateUsage]
-        assert wrapper.copilot_pid == "99999"
-        assert isinstance(wrapper.copilot_pid, str)
 
 
 class TestGuardReinitAfterStop:

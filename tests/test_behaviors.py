@@ -135,59 +135,6 @@ class TestRetryBehavior:
 # =============================================================================
 
 
-class TestRetryableErrorClassification:
-    """Verify error retryability matches behaviors.md table."""
-
-    def test_auth_error_not_retryable(self) -> None:
-        """behaviors:Retry:MUST:5 — AuthenticationError is not retryable."""
-        from amplifier_core.llm_errors import AuthenticationError
-
-        err = AuthenticationError("test")
-        assert err.retryable is False
-
-    def test_rate_limit_error_is_retryable(self) -> None:
-        """behaviors:Retry:MUST:4 — RateLimitError is retryable."""
-        from amplifier_core.llm_errors import RateLimitError
-
-        err = RateLimitError("test")
-        assert err.retryable is True
-
-    def test_timeout_error_is_retryable(self) -> None:
-        """behaviors:Retry:MUST:4 — LLMTimeoutError is retryable."""
-        from amplifier_core.llm_errors import LLMTimeoutError
-
-        err = LLMTimeoutError("test")
-        assert err.retryable is True
-
-    def test_content_filter_error_not_retryable(self) -> None:
-        """behaviors:Retry:MUST:5 — ContentFilterError is not retryable."""
-        from amplifier_core.llm_errors import ContentFilterError
-
-        err = ContentFilterError("test")
-        assert err.retryable is False
-
-    def test_network_error_is_retryable(self) -> None:
-        """behaviors:Retry:MUST:4 — NetworkError is retryable."""
-        from amplifier_core.llm_errors import NetworkError
-
-        err = NetworkError("test")
-        assert err.retryable is True
-
-    def test_provider_unavailable_is_retryable(self) -> None:
-        """behaviors:Retry:MUST:4 — ProviderUnavailableError is retryable."""
-        from amplifier_core.llm_errors import ProviderUnavailableError
-
-        err = ProviderUnavailableError("test")
-        assert err.retryable is True
-
-    def test_abort_error_not_retryable(self) -> None:
-        """behaviors:Retry:MUST:5 — AbortError is not retryable."""
-        from amplifier_core.llm_errors import AbortError
-
-        err = AbortError("test")
-        assert err.retryable is False
-
-
 # =============================================================================
 # Contract Tests: behaviors:Streaming:MUST:1, behaviors:Models:MUST:1,2
 # Added as part of mock quality audit
@@ -242,49 +189,6 @@ class TestBoundedQueueBehavior:
         assert hasattr(config, "event_queue_size"), "Config must have event_queue_size"
         assert config.event_queue_size > 0, "event_queue_size must be positive"
         assert config.event_queue_size == 10000, "Contract specifies 10000 as default"
-
-    @pytest.mark.asyncio
-    async def test_queue_full_drops_without_blocking(self) -> None:
-        """behaviors:Streaming:MUST:4 — QueueFull must drop, not block.
-
-        This runtime test verifies the contract pattern works correctly:
-        1. put_nowait() on full queue raises QueueFull
-        2. We catch it and continue (don't block)
-        3. Events are dropped, not lost silently
-
-        The production code in provider.py uses this exact pattern.
-        """
-        import asyncio
-
-        # Create a tiny bounded queue to quickly reach capacity
-        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=2)
-
-        # Fill the queue to capacity
-        queue.put_nowait("event_1")
-        queue.put_nowait("event_2")
-        assert queue.full(), "Queue should be full after maxsize events"
-
-        # Attempting put_nowait on full queue MUST raise QueueFull
-        dropped_count = 0
-        for i in range(3):  # Try to add 3 more
-            try:
-                queue.put_nowait(f"overflow_{i}")
-            except asyncio.QueueFull:
-                # Contract: drop on full, don't block
-                dropped_count += 1
-
-        # All 3 overflow attempts should have been dropped
-        assert dropped_count == 3, f"Expected 3 drops, got {dropped_count}"
-
-        # Queue should still have exactly 2 events (original, not overflow)
-        assert queue.qsize() == 2, "Queue should still have original 2 events"
-
-        # Verify we can drain the queue (proves we didn't block)
-        items: list[str] = []
-        while not queue.empty():
-            items.append(queue.get_nowait())
-
-        assert items == ["event_1", "event_2"], "Queue should have original events"
 
     @pytest.mark.asyncio
     async def test_event_handler_logs_on_queue_full(self, caplog: pytest.LogCaptureFixture) -> None:

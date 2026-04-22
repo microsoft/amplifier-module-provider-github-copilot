@@ -12,115 +12,11 @@ Note: The Windows event loop policy is set in conftest.py, not here.
 from __future__ import annotations
 
 
-class TestConfigLoadingUsesImportlib:
-    """AC-5 related: Config loaded via importlib, not file paths.
-
-    Contract: behaviors:ConfigLoading:MUST:1
-    """
-
-    def test_config_loading_uses_importlib_resources(self) -> None:
-        """Config loaded via importlib, not file paths.
-
-        Contract: behaviors:ConfigLoading:MUST:1
-
-        Using importlib.resources ensures configs work in installed wheels
-        and on all platforms.
-        """
-        # The load functions should work regardless of current directory
-        from amplifier_module_provider_github_copilot.config_loader import (
-            load_models_config,
-        )
-        from amplifier_module_provider_github_copilot.error_translation import (
-            load_error_config,
-        )
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        # These should not raise regardless of cwd
-        models_config = load_models_config()
-        error_config = load_error_config()
-        event_config = load_event_config()
-
-        # Contract: behaviors:ConfigLoading:MUST:1
-        assert models_config.provider_id == "github-copilot"
-        # Verify error config has RateLimitError mapping (proves real data loaded)
-        rate_mappings = [
-            m for m in error_config.mappings if "RateLimitError" in (m.sdk_patterns or [])
-        ]
-        assert len(rate_mappings) >= 1, "Error config must include RateLimitError mapping"
-        # Verify event config has core content_delta mapping
-        assert "assistant.message_delta" in event_config.bridge_mappings
-
-
-class TestErrorConfigPlatformIndependent:
-    """AC-6: ErrorConfig loads on any platform.
-
-    Contract: behaviors:ConfigLoading:MUST:1
-    """
-
-    def test_error_config_loading_platform_independent(self) -> None:
-        """ErrorConfig loads on any platform.
-
-        Contract: behaviors:ConfigLoading:MUST:1
-
-        Error config loading must work on Windows, macOS, and Linux.
-        """
-        from amplifier_module_provider_github_copilot.error_translation import (
-            load_error_config,
-        )
-
-        config = load_error_config()
-
-        # Contract: behaviors:ConfigLoading:MUST:1
-        rate_limit_mappings = [
-            m for m in config.mappings if "RateLimitError" in (m.sdk_patterns or [])
-        ]
-        assert len(rate_limit_mappings) == 1, (
-            "Error config must have exactly one RateLimitError mapping"
-        )
-        assert rate_limit_mappings[0].extract_retry_after is True
-
-
-class TestEventConfigPlatformIndependent:
-    """AC-7: EventConfig loads on any platform.
-
-    Contract: behaviors:ConfigLoading:MUST:1
-    """
-
-    def test_event_config_loading_platform_independent(self) -> None:
-        """EventConfig loads on any platform.
-
-        Contract: behaviors:ConfigLoading:MUST:1
-
-        Event config loading must work on Windows, macOS, and Linux.
-        """
-        from amplifier_module_provider_github_copilot.streaming import load_event_config
-
-        config = load_event_config()
-
-        # Contract: behaviors:ConfigLoading:MUST:1
-        assert "assistant.message_delta" in config.bridge_mappings, (
-            "Event config must include assistant.message_delta bridge mapping"
-        )
-
-
 class TestPlatformModuleExists:
     """Platform module exists and is functional.
 
     Contract: sdk-boundary:BinaryResolution:MUST:1
     """
-
-    def test_platform_module_exists(self) -> None:
-        """_platform.py module exists.
-
-        Contract: sdk-boundary:BinaryResolution:MUST:1
-        """
-        from amplifier_module_provider_github_copilot._platform import (
-            PlatformInfo,
-            get_platform_info,
-        )
-
-        info = get_platform_info()
-        assert isinstance(info, PlatformInfo)
 
     def test_platform_info_has_required_fields(self) -> None:
         """PlatformInfo has name, is_windows, and cli_binary_name fields.

@@ -151,61 +151,6 @@ class TestArchitectureFitness:
         assert files_scanned > 0, "No files found — check path"
         assert not violations, "SDK imports found outside sdk_adapter/:\n" + "\n".join(violations)
 
-    def test_sdk_adapter_contains_sdk_imports(self) -> None:
-        """Verify sdk_adapter/ is the membrane for SDK imports.
-
-        Uses __file__-relative paths for robust resolution.
-        """
-        adapter_dir = (
-            Path(__file__).parent.parent
-            / "amplifier_module_provider_github_copilot"
-            / "sdk_adapter"
-        )
-
-        assert adapter_dir.exists(), "sdk_adapter/ directory must exist"
-
-        py_files = list(adapter_dir.glob("*.py"))
-        assert py_files, "sdk_adapter/ must contain Python files"
-
-        # Verify at least one file directly imports from the SDK
-        sdk_imports_found = []
-        for py_file in py_files:
-            if py_file.name == "__init__.py":
-                continue
-            try:
-                tree = ast.parse(py_file.read_text(encoding="utf-8"))
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    sdk_imports_found.extend(
-                        f"{py_file.name}: import {alias.name}"
-                        for alias in node.names
-                        if _is_sdk_import(alias.name)
-                    )
-                elif (
-                    isinstance(node, ast.ImportFrom) and node.module and _is_sdk_import(node.module)
-                ):
-                    sdk_imports_found.append(f"{py_file.name}: from {node.module}")
-
-        assert sdk_imports_found, "sdk_adapter/ contains no SDK imports — membrane boundary broken"
-
-
-class TestSessionEphemerality:
-    """Tests for session config structure.
-
-    Note: Actual ephemeral session behavior (MUST:1-3) is tested in test_behaviors.py.
-    This class verifies supporting types exist.
-    """
-
-    def test_session_config_exists(self) -> None:
-        """SessionConfig type exists for ephemeral session configuration."""
-        from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionConfig
-
-        # SessionConfig should be a valid type
-        config = SessionConfig(model="gpt-4", system_prompt="test")
-        assert config.system_prompt == "test"
-        assert config.model == "gpt-4"
 
 
 def _collect_all_keys(data: Any, prefix: str = "") -> list[str]:

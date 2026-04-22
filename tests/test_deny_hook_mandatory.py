@@ -137,44 +137,49 @@ class TestDenyHookMandatoryClient:
 class TestMakeDenyHookConfig:
     """Unit tests for _make_deny_hook_config() standalone function."""
 
-    def test_returns_on_pre_tool_use_key(self) -> None:
-        """deny-destroy:DenyHook:MUST:1 — config has 'on_pre_tool_use' key."""
+    def test_hook_denies(self) -> None:
+        """deny-destroy:DenyHook:MUST:1,2 — hook is present, callable, and denies tool execution."""
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             _make_deny_hook_config,  # pyright: ignore[reportPrivateUsage]
         )
 
         config = _make_deny_hook_config()
         assert "on_pre_tool_use" in config
-
-    def test_hook_is_callable(self) -> None:
-        """deny-destroy:DenyHook:MUST:1 — hook value must be callable."""
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            _make_deny_hook_config,  # pyright: ignore[reportPrivateUsage]
-        )
-
-        config = _make_deny_hook_config()
         assert callable(config["on_pre_tool_use"])
-
-    def test_hook_denies(self) -> None:
-        """deny-destroy:DenyHook:MUST:2 — function-level: hook denies tool execution."""
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            _make_deny_hook_config,  # pyright: ignore[reportPrivateUsage]
-        )
-
-        config = _make_deny_hook_config()
-        result = config["on_pre_tool_use"]({"toolName": "bash"}, None)
+        result: Any = config["on_pre_tool_use"]({"toolName": "bash"}, None)
         assert result["permissionDecision"] == "deny"
 
+    def test_deny_hook_fail_closed_on_malformed_input(self) -> None:
+        """deny-destroy:DenyHook:MUST:1 — hook denies even with malformed/empty input.
 
-class TestDenyAllConstant:
-    """deny-destroy:DenyHook:MUST:2 — DENY_ALL constant correctness."""
+        Contract: deny-destroy:DenyHook:MUST:1 (defense-in-depth)
 
-    def test_deny_all_decision_is_deny(self) -> None:
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import DENY_ALL
+        The deny hook MUST fail closed: even if input_data is malformed,
+        missing keys, empty, or None-ish, the hook must still return
+        permissionDecision="deny". This is a security defense-in-depth measure.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            _make_deny_hook_config,  # pyright: ignore[reportPrivateUsage]
+        )
 
-        assert DENY_ALL["permissionDecision"] == "deny"
+        config = _make_deny_hook_config()
+        deny_hook = config["on_pre_tool_use"]
 
-    def test_deny_all_suppresses_output(self) -> None:
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import DENY_ALL
+        # Test various malformed inputs — all MUST result in deny
+        malformed_inputs: list[dict[str, Any]] = [
+            {},  # Empty dict
+            {"toolName": None},  # None tool name
+            {"toolName": ""},  # Empty string tool name
+            {"something_else": "value"},  # Missing toolName key
+            {"TOOLNAME": "bash"},  # Wrong case key
+        ]
 
-        assert DENY_ALL.get("suppressOutput") is True
+        for input_data in malformed_inputs:
+            result = deny_hook(input_data, None)
+            assert result.get("permissionDecision") == "deny", (
+                f"DenyHook:MUST:1 — malformed input {input_data!r} must still be denied, "
+                f"got {result}"
+            )
+            assert result.get("suppressOutput") is True, (
+                "DenyHook:MUST:1 — malformed input must still suppress output"
+            )

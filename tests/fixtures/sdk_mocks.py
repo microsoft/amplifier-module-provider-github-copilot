@@ -289,14 +289,6 @@ def text_delta_event(text: str) -> SessionEvent:
     )
 
 
-def message_complete_event(finish_reason: str = "stop") -> SessionEvent:
-    """Create message complete event."""
-    return SessionEvent(
-        type=SessionEventType.ASSISTANT_MESSAGE,
-        data=SessionEventData(finish_reason=finish_reason),
-    )
-
-
 def error_event(message: str) -> SessionEvent:
     """Create error event."""
     return SessionEvent(

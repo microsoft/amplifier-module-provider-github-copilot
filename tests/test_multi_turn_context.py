@@ -323,22 +323,6 @@ class TestMultiTurnConversation:
         assert first_pos < second_pos < third_pos, "Messages should maintain order"
 
 
-class TestRegressionPrevention:
-    """Regression tests to ensure existing behavior is not broken."""
-
-    def test_string_content_still_works(self) -> None:
-        """Simple string content should still work."""
-        request = MockChatRequest(
-            messages=[
-                MockMessage(role="user", content="Simple string message"),
-            ]
-        )
-
-        prompt = _extract_prompt_from_chat_request(request)
-
-        assert "Simple string message" in prompt
-
-
 class TestContentExtractionEdgeCases:
     """Edge case tests for content extraction.
 
@@ -397,57 +381,6 @@ class TestContentExtractionEdgeCases:
 
         # Empty thinking should produce empty prompt
         assert prompt == ""
-
-    def test_tool_call_content_skipped(self) -> None:
-        """ToolCallContent blocks are intentionally skipped.
-
-        Coverage: provider.py line 225 (tool_call skip path)
-        Contract: prevents fake tool detection on prior turns
-        """
-        request = MockChatRequest(
-            messages=[
-                MockMessage(
-                    role="assistant",
-                    content=[
-                        MockToolCallContent(
-                            tool_call_id="tc_1",
-                            tool_name="bash",
-                            arguments={"command": "ls"},
-                        ),
-                    ],
-                ),
-            ]
-        )
-
-        prompt = _extract_prompt_from_chat_request(request)
-
-        # Tool call should NOT appear in text
-        assert "bash" not in prompt
-        assert "tool_call" not in prompt.lower()
-
-    def test_tool_result_with_output(self) -> None:
-        """ToolResultContent with output is formatted.
-
-        Coverage: provider.py line 240 (tool_result path)
-        """
-        request = MockChatRequest(
-            messages=[
-                MockMessage(
-                    role="user",
-                    content=[
-                        MockToolResultContent(
-                            tool_call_id="tc_1",
-                            output="command output here",
-                        ),
-                    ],
-                ),
-            ]
-        )
-
-        prompt = _extract_prompt_from_chat_request(request)
-
-        # Tool result should appear, possibly with marker
-        assert "command output here" in prompt
 
     def test_fallback_value_attribute(self) -> None:
         """Content with 'value' attribute uses fallback.

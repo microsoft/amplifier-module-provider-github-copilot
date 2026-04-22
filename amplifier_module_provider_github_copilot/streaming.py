@@ -251,14 +251,27 @@ class StreamingAccumulator:
             self.is_complete = True
 
     def get_result(self) -> AccumulatedResponse:
-        """Get accumulated response."""
+        """Get accumulated response.
+
+        Applies the same finish_reason normalization as to_chat_response() so that
+        callers of either method see canonical values per streaming-contract:FinishReason:MUST:5.
+        """
+        # streaming-contract:FinishReason:MUST:5 — normalize to lowercase canonical values
+        if self.tool_calls:
+            # Tool calls always override SDK finish_reason (deny/capture flow)
+            normalized_finish_reason: str | None = "tool_calls"
+        elif self.finish_reason:
+            normalized_finish_reason = self.finish_reason.lower()
+        else:
+            normalized_finish_reason = self.finish_reason
+
         return AccumulatedResponse(
             text_content=self.text_content,
             thinking_content=self.thinking_content,
             reasoning_opaque=self.reasoning_opaque,
             tool_calls=self.tool_calls,
             usage=self.usage,
-            finish_reason=self.finish_reason,
+            finish_reason=normalized_finish_reason,
             error=self.error,
             is_complete=self.is_complete,
         )
@@ -381,8 +394,11 @@ class StreamingAccumulator:
             # Use "stop" per amplifier-core proto (not "end_turn" which is an SDK input key)
             normalized_finish_reason = "stop"
         else:
-            # No tool calls but SDK provided finish_reason: preserve it
-            normalized_finish_reason = self.finish_reason
+            # No tool calls but SDK provided finish_reason: normalize to lowercase
+            # streaming-contract:FinishReason:MUST:5 — finish_reason MUST be lowercase
+            # Defense-in-depth: translate_event() applies finish_reason_map first, but
+            # the accumulator normalizes here in case raw SDK values pass through directly.
+            normalized_finish_reason = self.finish_reason.lower()
 
         # Contract: content_blocks is None when empty (not empty list)
         # streaming-contract:StreamingResponse:MUST:4

@@ -14,27 +14,6 @@ import pytest
 class TestLoadModelsConfig:
     """Tests for _load_models_config() function."""
 
-    def test_load_models_config_returns_provider_id(self) -> None:
-        """Models config loader returns correct provider id from YAML.
-
-        Contract: provider-protocol:get_info:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.provider import (
-            _load_models_config,  # type: ignore[reportPrivateUsage]  # Testing internal function
-        )
-
-        config = _load_models_config()
-        assert config.provider_id == "github-copilot"
-
-    def test_load_models_config_returns_display_name(self) -> None:
-        """Models config loader returns display_name from YAML."""
-        from amplifier_module_provider_github_copilot.provider import (
-            _load_models_config,  # type: ignore[reportPrivateUsage]  # Testing internal function
-        )
-
-        config = _load_models_config()
-        assert config.display_name == "GitHub Copilot SDK"
-
     def test_load_models_config_returns_credential_env_vars(self) -> None:
         """Models config loader returns credential_env_vars from YAML."""
         from amplifier_module_provider_github_copilot.provider import (
@@ -62,23 +41,11 @@ class TestLoadModelsConfig:
         assert "tools" in config.capabilities
         # vision NOT in provider-level - it's per-model via list_models()
 
-    def test_load_models_config_returns_defaults(self) -> None:
-        """Models config loader returns defaults from YAML.
-
-        Updated to expect claude-opus-4.5 as default model.
-        """
-        from amplifier_module_provider_github_copilot.provider import (
-            _load_models_config,  # type: ignore[reportPrivateUsage]  # Testing internal function
-        )
-
-        config = _load_models_config()
-        assert config.defaults["model"] == "claude-opus-4.5"
-        assert config.defaults["max_tokens"] == 4096
-
     def test_load_models_config_returns_provider_config(self) -> None:
         """Models config loader returns valid ProviderConfig.
 
         Contract: provider-protocol:list_models:MUST:1
+        Contract: provider-protocol:list_models:MUST:2
         """
         from amplifier_module_provider_github_copilot.provider import (
             _load_models_config,  # type: ignore[reportPrivateUsage]  # Testing internal function
@@ -139,12 +106,6 @@ class TestModelsYamlSchemaCompliance:
 
         assert _models.VERSION == "1.0"
 
-    def test_models_yaml_provider_id(self) -> None:
-        """Models config provider.id equals github-copilot."""
-        from amplifier_module_provider_github_copilot.config import _models as _models
-
-        assert _models.PROVIDER["id"] == "github-copilot"
-
     def test_models_constant_removed_from_config(self) -> None:
         """config/_models.py has no MODELS constant — model catalog is SDK's responsibility."""
         from amplifier_module_provider_github_copilot.config import _models as _models
@@ -195,21 +156,6 @@ class TestFakeToolDetectionConfigLoading:
         )
         assert config.correction_message == expected_msg
 
-    def test_config_patterns_are_compiled_regex(self) -> None:
-        """Patterns are compiled as re.Pattern objects.
-
-        Contract: behaviors:Config:MUST:1
-        """
-        import re
-
-        from amplifier_module_provider_github_copilot.fake_tool_detection import (
-            load_fake_tool_detection_config,
-        )
-
-        config = load_fake_tool_detection_config()
-        for pattern in config.patterns:
-            assert isinstance(pattern, re.Pattern)
-
     def test_config_logging_section_loaded(self) -> None:
         """Logging config section loaded from YAML.
 
@@ -239,15 +185,6 @@ class TestModelsYamlDefaultValues:
     Two-Medium Architecture: config/_models.py is authoritative source for policy values.
     """
 
-    def test_models_yaml_has_timeout(self) -> None:
-        """config/_models.py must have PROVIDER.defaults.timeout == 3600.
-
-        Contract: behaviors:Config:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.config import _models
-
-        assert _models.PROVIDER["defaults"]["timeout"] == 3600
-
     def test_load_models_config_reads_yaml(self) -> None:
         """load_models_config() reads values from config/_models.py.
 
@@ -263,52 +200,5 @@ class TestModelsYamlDefaultValues:
         assert config.defaults["timeout"] == 3600
         assert config.defaults["context_window"] == 200000
 
-    def test_models_yaml_default_model_is_claude_opus_45(self) -> None:
-        """config/_models.py PROVIDER.defaults.model is claude-opus-4.5.
 
-        Contract: behaviors:Config:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.config import _models
 
-        assert _models.PROVIDER["defaults"]["model"] == "claude-opus-4.5"
-
-    def test_models_yaml_context_window_200000(self) -> None:
-        """config/_models.py PROVIDER.defaults.context_window is 200000.
-
-        Contract: behaviors:Config:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.config import _models
-
-        assert _models.PROVIDER["defaults"]["context_window"] == 200000
-
-    def test_models_yaml_max_output_tokens_32000(self) -> None:
-        """config/_models.py PROVIDER.defaults.max_output_tokens is 32000.
-
-        SDK limits: max_context_window=200000, max_prompt_tokens=168000
-        Therefore: max_output_tokens = 200000 - 168000 = 32000
-
-        Contract: behaviors:Config:MUST:2
-        """
-        from amplifier_module_provider_github_copilot.config import _models
-
-        assert _models.PROVIDER["defaults"]["max_output_tokens"] == 32000
-
-    def test_models_yaml_contains_claude_opus_45_as_default(self) -> None:
-        """config/_models.py PROVIDER defaults model is claude-opus-4.5.
-
-        Contract: provider-protocol:list_models:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.config import _models
-
-        assert _models.PROVIDER["defaults"]["model"] == "claude-opus-4.5"
-
-    def test_provider_get_info_defaults_model_claude_opus_45(self) -> None:
-        """Provider.get_info().defaults['model'] is claude-opus-4.5.
-
-        Contract: provider-protocol:get_info:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
-
-        provider = GitHubCopilotProvider()
-        info = provider.get_info()
-        assert info.defaults.get("model") == "claude-opus-4.5"

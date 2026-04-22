@@ -12,7 +12,6 @@ from .sdk_mocks import (
     SessionEventType,
     error_event,
     idle_event,
-    message_complete_event,
     text_delta_event,
     usage_event,
 )
@@ -33,7 +32,6 @@ __all__ = [
     "SessionEventType",
     "idle_event",
     "text_delta_event",
-    "message_complete_event",
     "error_event",
     "usage_event",
     # SDK response fixtures

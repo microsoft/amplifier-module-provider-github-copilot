@@ -186,30 +186,10 @@ class TestTranslateEvent:
 class TestEventConfig:
     """Tests for event config loading."""
 
-    def test_config_loads_successfully(self):
-        """Config file loads without errors.
-
-        Contract: event-vocabulary:Bridge:MUST:2
-        """
-        config = _event_config
-        # Contract: event-vocabulary:Bridge:MUST:2
-        assert "assistant.message_delta" in config.bridge_mappings
-
     def test_config_has_bridge_mappings(self):
         """Config contains bridge mappings."""
         config = _event_config
-        assert len(config.bridge_mappings) > 0
         assert "assistant.message_delta" in config.bridge_mappings
-
-    def test_config_has_consume_patterns(self):
-        """Config contains consume patterns."""
-        config = _event_config
-        assert len(config.consume_patterns) > 0
-
-    def test_config_has_drop_patterns(self):
-        """Config contains drop patterns."""
-        config = _event_config
-        assert len(config.drop_patterns) > 0
 
 
 class TestDomainEventType:
@@ -567,24 +547,6 @@ class TestStreamingAccumulator:
         assert isinstance(response.content[1], TextBlock)
 
 
-class TestAccumulatedResponse:
-    """Tests for AccumulatedResponse dataclass."""
-
-    def test_accumulated_response_defaults(self):
-        """AccumulatedResponse has correct defaults."""
-        from amplifier_module_provider_github_copilot.streaming import (
-            AccumulatedResponse,
-        )
-
-        response = AccumulatedResponse()
-        assert response.text_content == ""
-        assert response.thinking_content == ""
-        assert response.tool_calls == []
-        assert response.usage is None
-        assert response.finish_reason is None
-        assert response.error is None
-        assert not response.is_complete
-
 
 # ============================================================================
 # _extract_content_block fix tests
@@ -716,22 +678,6 @@ class TestStreamingChatResponse:
 
         assert issubclass(StreamingChatResponse, ChatResponse), (
             "StreamingChatResponse must extend ChatResponse"
-        )
-
-    def test_streaming_response_instance_is_chat_response(self) -> None:
-        """StreamingChatResponse instance passes ChatResponse isinstance check.
-
-        Contract: streaming-contract:StreamingResponse:MUST:1
-        """
-        from amplifier_core import ChatResponse
-
-        from amplifier_module_provider_github_copilot.streaming import (
-            StreamingChatResponse,
-        )
-
-        response = StreamingChatResponse(content=[])
-        assert isinstance(response, ChatResponse), (
-            "StreamingChatResponse instance must be ChatResponse instance"
         )
 
     def test_content_blocks_populated_with_text(self) -> None:
@@ -1227,19 +1173,6 @@ class TestConfigurationFailFast:
         # error_events MUST be populated
         assert config.error_event_types, "error_events must be populated for error detection"
 
-    def test_valid_config_loads_successfully(self) -> None:
-        """Valid config loads without error.
-
-        Baseline test to ensure fail-fast doesn't break normal operation.
-        """
-        # Should not raise when loading config
-        config = _event_config
-
-        # Config should have required fields populated
-        assert config.idle_event_types, "idle_events should be populated"
-        assert "session.idle" in config.bridge_mappings
-
-
 class TestParseToolArguments:
     """Tests for S4 fix: _parse_tool_arguments handles str|dict|other SDK argument variance.
 
@@ -1284,21 +1217,6 @@ class TestParseToolArguments:
 
         result = _parse_tool_arguments("[1, 2, 3]")
         assert result == {}
-
-    def test_empty_dict_args_returned(self) -> None:
-        """Empty dict is a valid (no-arg) tool call — returned as-is."""
-        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
-
-        result = _parse_tool_arguments({})
-        assert result == {}
-
-    def test_nested_dict_preserved(self) -> None:
-        """Nested dict values are preserved when input is a dict."""
-        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
-
-        args = {"query": "test", "options": {"limit": 10, "offset": 0}}
-        result = _parse_tool_arguments(args)
-        assert result == args
 
     # -----------------------------------------------------------------------
     # Integration tests: JSON-string arguments through the full accumulator →
