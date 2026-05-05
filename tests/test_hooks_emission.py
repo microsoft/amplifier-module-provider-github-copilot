@@ -415,8 +415,8 @@ class TestLlmResponseEvent:
         ]
         assert len(response_calls) == 1
         usage = response_calls[0][0][1]["usage"]
-        assert usage["input"] == 67000
-        assert usage["output"] == 23
+        assert usage["input_tokens"] == 67000
+        assert usage["output_tokens"] == 23
         assert usage["cache_read_tokens"] == 62851
         assert "cache_write_tokens" not in usage
 
