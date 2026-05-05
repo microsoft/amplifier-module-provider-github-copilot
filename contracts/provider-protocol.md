@@ -322,8 +322,8 @@ await self._emit_event("llm:response", {
     "status": "ok",
     "duration_ms": elapsed_ms,
     "usage": {
-        "input": response.usage.input_tokens,
-        "output": response.usage.output_tokens,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
     },
     # Per amplifier-core proto: "stop", "tool_calls", "length", "content_filter"
     # Not "end_turn" which is an SDK-specific input value

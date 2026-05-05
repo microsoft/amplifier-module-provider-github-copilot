@@ -217,8 +217,8 @@ class LlmLifecycleContext:
             )
 
         usage_payload: dict[str, Any] = {
-            "input": usage_input,
-            "output": usage_output,
+            "input_tokens": usage_input,
+            "output_tokens": usage_output,
         }
         if usage_cache_read is not None:
             usage_payload["cache_read_tokens"] = usage_cache_read
