@@ -205,6 +205,14 @@ class LlmLifecycleContext:
         Contract: observability:Events:MUST:3
         Contract: observability:Events:SHOULD:3 — sdk_pid for log correlation
         Contract: observability:Verbosity:MUST:1 — raw flag controls inclusion
+        Contract: provider-protocol:hooks:llm_response:MUST:4 — usage payload
+            uses canonical kernel keys (`input_tokens`, `output_tokens`); MUST
+            NOT use `"input"`, `"output"`, `"input_tokens_used"`,
+            `"completion_tokens"`, or `"prompt_tokens"`.
+            Source of truth: amplifier_core.message_models.Usage.
+        Contract: provider-protocol:hooks:llm_response:MUST:5 — `total_tokens`
+            MUST be included (= `input_tokens` + `output_tokens`); kernel
+            `Usage.total_tokens: int` is non-optional — omitting breaks consumers.
         """
         elapsed_ms = int((time.time() - self.start_time) * 1000)
 
@@ -216,9 +224,11 @@ class LlmLifecycleContext:
                 else self.config.finish_reasons.end_turn
             )
 
+        # Canonical kernel keys — see contract anchors above.
         usage_payload: dict[str, Any] = {
             "input_tokens": usage_input,
             "output_tokens": usage_output,
+            "total_tokens": usage_input + usage_output,
         }
         if usage_cache_read is not None:
             usage_payload["cache_read_tokens"] = usage_cache_read

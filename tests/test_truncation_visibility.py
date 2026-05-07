@@ -197,6 +197,7 @@ class TestSessionForwardsMaxTokens:
     async def test_session_passes_model_capabilities_when_max_tokens_set(
         self, fake_sdk_capability_types: tuple[type, type]
     ) -> None:
+        """Contract: provider-protocol:complete:MUST:10"""
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
@@ -233,6 +234,7 @@ class TestSessionForwardsMaxTokens:
     async def test_session_omits_model_capabilities_when_max_tokens_none(
         self,
     ) -> None:
+        """Contract: provider-protocol:complete:MUST:10 (negative case)"""
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )

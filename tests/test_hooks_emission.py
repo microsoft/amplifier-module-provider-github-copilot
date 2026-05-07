@@ -415,6 +415,7 @@ class TestLlmResponseEvent:
         ]
         assert len(response_calls) == 1
         usage = response_calls[0][0][1]["usage"]
+        # Contract: provider-protocol:hooks:llm_response:MUST:4 — canonical kernel keys
         assert usage["input_tokens"] == 67000
         assert usage["output_tokens"] == 23
         assert usage["cache_read_tokens"] == 62851
@@ -483,6 +484,147 @@ class TestLlmResponseEvent:
         assert len(response_calls) == 1
         usage = response_calls[0][0][1]["usage"]
         assert usage["cache_write_tokens"] == 500
+
+    @pytest.mark.asyncio
+    async def test_llm_response_usage_uses_canonical_input_output_token_keys(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """llm:response.usage MUST use canonical kernel keys, not legacy short forms.
+
+        Contract: provider-protocol:hooks:llm_response:MUST:4
+        Source of truth: amplifier_core.message_models.Usage (kernel) — keys
+        `input_tokens` and `output_tokens` are normative; `"input"` / `"output"` /
+        `"input_tokens_used"` / `"completion_tokens"` are explicitly forbidden because
+        they break consumers (e.g. hooks-streaming-ui, cost-viewer) silently.
+
+        Mutation check: rename `"input_tokens"` back to `"input"` in
+        emit_response_ok → both the canonical-key assertion and the anti-pattern
+        guard turn red.
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+            await ctx.emit_response_ok(
+                usage_input=4321,
+                usage_output=87,
+                usage_cache_read=None,
+                usage_cache_write=None,
+                finish_reason="stop",
+                content_blocks=1,
+                tool_calls=0,
+            )
+
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1
+        usage = response_calls[0][0][1]["usage"]
+
+        # Canonical keys MUST be present with exact int values from the fixture.
+        assert usage["input_tokens"] == 4321
+        assert usage["output_tokens"] == 87
+
+        # Anti-pattern keys MUST NOT be present (Schneier regression guard).
+        # If any of these reappear, kernel consumers reading
+        # `event["usage"]["input_tokens"]` get KeyError silently.
+        # "prompt_tokens" included: SDK live-test evidence shows it may appear
+        # in some SDK contexts (see test_live_smoke.py:380 hasattr fallback).
+        forbidden_keys = (
+            "input", "output", "input_tokens_used", "completion_tokens", "prompt_tokens"
+        )
+        for forbidden in forbidden_keys:
+            assert forbidden not in usage, (
+                f"llm:response.usage MUST NOT contain forbidden key {forbidden!r}; "
+                f"found in payload: {sorted(usage.keys())}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_llm_response_usage_includes_total_tokens_equal_to_input_plus_output(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """llm:response.usage MUST include total_tokens = input_tokens + output_tokens.
+
+        Contract: provider-protocol:hooks:llm_response:MUST:5
+        Rationale: kernel `Usage` model has `total_tokens: int` as required, not
+        Optional. Omitting it from the event payload breaks consumers that read
+        it from there (per amplifier-core PR #69).
+
+        Mutation check: drop the `total_tokens` key from emit_response_ok's
+        usage_payload -> KeyError; change the sum to `usage_input - usage_output`
+        -> exact-value assertion fails.
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+            await ctx.emit_response_ok(
+                usage_input=1000,
+                usage_output=250,
+                usage_cache_read=None,
+                usage_cache_write=None,
+                finish_reason="stop",
+                content_blocks=1,
+                tool_calls=0,
+            )
+
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1
+        usage = response_calls[0][0][1]["usage"]
+
+        assert usage["total_tokens"] == 1250
+        assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
+
+    @pytest.mark.asyncio
+    async def test_llm_response_usage_zero_tokens_still_emits_all_required_keys(
+        self,
+        mock_coordinator: MagicMock,
+    ) -> None:
+        """llm:response.usage MUST include all three required keys even when token counts are zero.
+
+        Contract: provider-protocol:hooks:llm_response:MUST:4, MUST:5
+        Rationale: When response.usage is None (SDK returned no usage event),
+        provider.py passes usage_input=0, usage_output=0. The emitted payload
+        must still contain all required keys — consumers must not get KeyError
+        and must be able to distinguish "SDK reported zero tokens" from
+        "key was omitted" (which would be a bug).
+
+        Mutation check: add `if usage_input or usage_output:` guard before
+        usage_payload construction → all three keys absent when both are 0
+        → KeyError on `usage["input_tokens"]`.
+        """
+        from amplifier_module_provider_github_copilot.observability import llm_lifecycle
+
+        async with llm_lifecycle(mock_coordinator, "claude-opus-4.5") as ctx:
+            await ctx.emit_response_ok(
+                usage_input=0,
+                usage_output=0,
+                usage_cache_read=None,
+                usage_cache_write=None,
+                finish_reason="stop",
+                content_blocks=0,
+                tool_calls=0,
+            )
+
+        response_calls = [
+            call
+            for call in mock_coordinator.hooks.emit.call_args_list
+            if call[0][0] == "llm:response"
+        ]
+        assert len(response_calls) == 1
+        usage = response_calls[0][0][1]["usage"]
+
+        # All three required keys MUST be present even when values are zero.
+        assert usage["input_tokens"] == 0
+        assert usage["output_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
 
     @pytest.mark.asyncio
     async def test_emit_response_ok_uses_tool_use_finish_reason_when_tool_calls_nonzero(

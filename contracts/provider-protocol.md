@@ -314,25 +314,60 @@ await self._emit_event("llm:request", {
 
 **MUST** emit after SDK response with status and timing.
 
+##### `usage` Payload Schema (Normative)
+
+The `usage` dict's key names are normative — derived from the kernel `Usage`
+struct (`amplifier_core.message_models.Usage`, mirroring
+`crates/amplifier-core/src/messages.rs`). They MUST NOT be changed.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `input_tokens` | `int` | **MUST** | Fresh (non-cached) input tokens only — the SDK billing total minus `cache_read_tokens` and `cache_write_tokens`. This provider strips cache buckets per `streaming-contract:usage:MUST:3` so the streaming UI can reconstruct the billing total as `input_tokens + cache_read_tokens + cache_write_tokens` without double-counting. Do NOT emit the SDK billing gross total here. |
+| `output_tokens` | `int` | **MUST** | Total output tokens generated |
+| `total_tokens` | `int` | **MUST** | `input_tokens + output_tokens` (fresh + output, per `streaming-contract:usage:MUST:3`). Required by the kernel `Usage` model (`total_tokens: int`, non-optional) — omitting it from the event payload breaks consumers that read it from there. |
+| `cache_read_tokens` | `int` | **SHOULD** (when non-zero) | Tokens served from prompt cache |
+| `cache_write_tokens` | `int` | **SHOULD** (when non-zero) | Tokens written to prompt cache (billed on top of gross) |
+
+**DO NOT use:** `"input"`, `"output"`, `"input_tokens_used"`, `"completion_tokens"`, `"prompt_tokens"`,
+or any other variant. These break consumers silently
+(e.g. `hooks-streaming-ui`, `cost-viewer`).
+
+Source of truth: amplifier-core `llm:response.usage` schema (PR microsoft/amplifier-core#69).
+
 ```python
-# Success
-await self._emit_event("llm:response", {
+# Build ChatResponse from accumulator FIRST, then emit using its typed Usage fields.
+# Contract: streaming-contract:usage:MUST:3 — input_tokens is fresh only.
+response = accumulator.to_chat_response()  # Usage.input_tokens = fresh (non-cached) only
+
+event_usage: dict[str, Any] = {
+    "input_tokens": response.usage.input_tokens,    # fresh only — NOT SDK billing gross
+    "output_tokens": response.usage.output_tokens,
+    "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+}
+if response.usage.cache_read_tokens is not None:
+    event_usage["cache_read_tokens"] = response.usage.cache_read_tokens
+if response.usage.cache_write_tokens is not None:
+    event_usage["cache_write_tokens"] = response.usage.cache_write_tokens
+
+# finish_reason normalization: None + tool_calls > 0 → "tool_calls"; None + no tools → "stop".
+# Contract: observability:Events:MUST:3 — finish_reason must not be None or empty.
+# Note: "end_turn" is an SDK-specific input value; valid output values per amplifier-core
+# proto are: "stop", "tool_calls", "length", "content_filter".
+tool_call_count = len(response.tool_calls) if response.tool_calls else 0
+normalized_finish = response.finish_reason or ("tool_calls" if tool_call_count else "stop")
+
+await coordinator.hooks.emit("llm:response", {
     "provider": self.name,
     "model": model,
     "status": "ok",
     "duration_ms": elapsed_ms,
-    "usage": {
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
-    },
-    # Per amplifier-core proto: "stop", "tool_calls", "length", "content_filter"
-    # Not "end_turn" which is an SDK-specific input value
-    "finish_reason": response.finish_reason or "stop",
-    "tool_calls": len(response.tool_calls) if response.tool_calls else 0,
+    "usage": event_usage,
+    "finish_reason": normalized_finish,
+    "tool_calls": tool_call_count,
 })
 
 # Error
-await self._emit_event("llm:response", {
+await coordinator.hooks.emit("llm:response", {
     "provider": self.name,
     "model": model,
     "status": "error",
@@ -348,6 +383,8 @@ await self._emit_event("llm:response", {
 | `provider-protocol:hooks:llm_response:MUST:1` | Emits after SDK response |
 | `provider-protocol:hooks:llm_response:MUST:2` | Includes duration_ms timing |
 | `provider-protocol:hooks:llm_response:MUST:3` | Uses status "ok" or "error" |
+| `provider-protocol:hooks:llm_response:MUST:4` | `usage` payload uses canonical kernel keys (`input_tokens`, `output_tokens`); MUST NOT use `"input"`, `"output"`, `"input_tokens_used"`, `"completion_tokens"`, or `"prompt_tokens"` |
+| `provider-protocol:hooks:llm_response:MUST:5` | `usage` payload includes `total_tokens` equal to `input_tokens + output_tokens`; kernel `Usage.total_tokens: int` is non-optional — omitting breaks consumers |
 
 #### PROVIDER_RETRY (provider:retry)
 
