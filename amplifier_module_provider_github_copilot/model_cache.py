@@ -95,6 +95,13 @@ def write_cache(
         cache_file: Optional path override (for testing). Uses default if None.
     """
     if cache_file is None:
+        # Refuse default-path writes from inside pytest — the default path
+        # resolves to the user's real cache directory, and a test that forgets
+        # to stub write_cache would otherwise pollute it (observed: test
+        # fixture id "sdk-unique-model-xyz" leaking into ~/.cache).
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            logger.debug("Skipping default-path cache write inside pytest")
+            return
         cache_file = get_cache_file_path()
 
     # Create parent directories if needed

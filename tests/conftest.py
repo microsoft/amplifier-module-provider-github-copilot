@@ -56,6 +56,31 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
+def isolate_model_cache(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sandbox the on-disk model cache for every test.
+
+    Redirects ``get_cache_file_path`` to a per-test ``tmp_path`` so any code
+    path (test or production-under-test) that writes the disk cache lands
+    inside the throwaway directory instead of the developer's real
+    ``~/.cache/amplifier/...`` (XDG_CACHE_HOME), ``%LOCALAPPDATA%``, or
+    ``~/Library/Caches`` location.
+
+    Why: a previous regression had ``test_provider_list_models_calls_fetch_models``
+    patch ``fetch_and_map_models`` but not ``write_cache``, allowing the test
+    fixture id ``sdk-unique-model-xyz`` to be written into the user's real cache
+    and later returned by ``amplifier provider models`` as a fallback.
+    """
+    fake_cache_file = tmp_path / "models_cache.json"
+    monkeypatch.setattr(
+        "amplifier_module_provider_github_copilot.model_cache.get_cache_file_path",
+        lambda: fake_cache_file,
+    )
+
+
+@pytest.fixture(autouse=True)
 def clear_config_caches() -> None:
     """Clear LRU caches on config loaders between tests.
 
