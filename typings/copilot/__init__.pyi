@@ -1,10 +1,10 @@
 """Type stubs for github-copilot-sdk (imported as ``copilot``).
 
-Mirrors the public API surface of github-copilot-sdk v0.3.0. Only the symbols
+Mirrors the public API surface of github-copilot-sdk v1.0.0b4. Only the symbols
 the provider actually uses are stubbed in detail; everything else is typed as
 ``Any`` to keep the stub small without losing pyright coverage on imports.
 
-Verified against `inspect.signature(...)` against the live SDK on 2026-05-12.
+Verified against `inspect.signature(...)` against the live SDK on 2026-05-17.
 """
 
 from collections.abc import Awaitable, Callable

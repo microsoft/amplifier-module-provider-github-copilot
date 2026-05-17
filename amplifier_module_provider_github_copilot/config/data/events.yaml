@@ -59,6 +59,7 @@ event_classifications:
 
   consume:
     - assistant.turn_start  # SDK v0.1.33 - turn lifecycle, consume internally
+    - assistant.message_start  # SDK v1.0.0b4 - turn-boundary marker, consume internally
     - assistant.reasoning  # SDK v0.1.33 - final reasoning summary, consume internally
     - assistant.intent  # SDK v0.2.0 - intent report echo, consume internally
     - tool.execution_start
@@ -121,6 +122,15 @@ event_classifications:
     - pending_messages.*
     - abort
     - unknown
+    # SDK v1.0.0b4 — schedule lifecycle markers (no domain value; same pattern
+    # as session.task_complete / session.handoff above).
+    - session.schedule_created
+    - session.schedule_cancelled
+    # SDK v1.0.0b4 — per-model upstream failure notification. Provider relies on
+    # the existing session.error → ERROR bridge to surface user-visible errors;
+    # this enum member duplicates that signal at a lower granularity. Dropped
+    # to avoid double-emitting ERROR events from the same failure.
+    - model.call_failure
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:

@@ -202,7 +202,7 @@ class TestSDKVersionCheck:
     """
 
     def test_old_sdk_version_raises_import_error(self) -> None:
-        """_check_sdk_version MUST raise ImportError for SDK < 0.3.0.
+        """_check_sdk_version MUST raise ImportError for SDK < 1.0.0b4.
 
         Contract: sdk-boundary:Membrane:MUST:5
         """
@@ -210,19 +210,23 @@ class TestSDKVersionCheck:
             _check_sdk_version,  # type: ignore[reportPrivateUsage]
         )
 
-        for old_ver in ("0.1.0", "0.1.28", "0.0.1", "0.1.99", "0.2.0", "0.2.1", "0.2.99"):
+        for old_ver in (
+            "0.1.0", "0.1.28", "0.0.1", "0.1.99",
+            "0.2.0", "0.2.1", "0.2.99",
+            "0.3.0", "0.3.1", "0.3.99",
+        ):
             with pytest.raises(ImportError, match="github-copilot-sdk"):
                 _check_sdk_version(old_ver)
 
         # Correct versions — must NOT raise
-        for good_ver in ("0.3.0", "0.3.1", "0.3.99", "1.0.0"):
+        for good_ver in ("1.0.0", "1.0.1", "1.0.99", "1.1.0", "2.0.0"):
             _check_sdk_version(good_ver)  # no exception
 
     def test_correct_sdk_version_installed(self) -> None:
-        """SDK installed in the test environment MUST be >= 0.3.0.
+        """SDK installed in the test environment MUST be >= 1.0.0b4.
 
         If this fails, the test environment has a stale SDK. Upgrade with:
-            pip install 'github-copilot-sdk>=0.3.0'
+            pip install 'github-copilot-sdk==1.0.0b4'
 
         SKIP_SDK_CHECK bypasses the SDK subprocess at runtime but never exempts
         the test environment from having the correct SDK package installed.
@@ -233,9 +237,9 @@ class TestSDKVersionCheck:
 
         version = importlib.metadata.version("github-copilot-sdk")
         parts = tuple(int(x) for x in version.split(".")[:2] if x.isdigit())
-        assert parts >= (0, 3), (
-            f"Test environment has SDK {version} which is < 0.3.0. "
-            "Install 'github-copilot-sdk>=0.3.0' to run these tests."
+        assert parts >= (1, 0), (
+            f"Test environment has SDK {version} which is < 1.0.0b4. "
+            "Install 'github-copilot-sdk==1.0.0b4' to run these tests."
         )
 
     def test_version_check_error_message_is_actionable(self) -> None:
@@ -253,7 +257,7 @@ class TestSDKVersionCheck:
 
         error_msg = str(exc_info.value)
         assert "0.1.28" in error_msg, "Error must include the installed version"
-        assert "0.3.0" in error_msg, "Error must state the required version"
+        assert "1.0.0b4" in error_msg, "Error must state the required version"
         assert "github-copilot-sdk" in error_msg, "Error must name the package"
         assert "amplifier provider install" in error_msg, (
             "Error must include the amplifier provider install command"
@@ -270,10 +274,10 @@ class TestSDKVersionCheck:
         )
 
         # These have no valid semver minor → treated as (0, 0) → raise ImportError
-        # "0.2.0b1" → ver_parts = (0, 2), which is < (0, 3) → raises
-        for weird_ver in ("", "unknown", "0.1.0rc1", "0.2.0b1"):
+        # "0.2.0b1" → ver_parts = (0, 2), which is < (1, 0) → raises
+        for weird_ver in ("", "unknown", "0.1.0rc1", "0.2.0b1", "0.3.0b1"):
             with pytest.raises(ImportError):
                 _check_sdk_version(weird_ver)
 
-        # "0.3.0b1" → "0" and "3" are digits → ver_parts = (0, 3) → does NOT raise
-        _check_sdk_version("0.3.0b1")
+        # "1.0.0b4" → "1" and "0" are digits → ver_parts = (1, 0) → does NOT raise
+        _check_sdk_version("1.0.0b4")

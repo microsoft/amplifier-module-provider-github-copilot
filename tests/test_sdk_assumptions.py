@@ -178,6 +178,111 @@ class TestSDKImportAssumptions:
 
 
 @pytest.mark.sdk_assumption
+class TestModelBillingServerShapeTolerance:
+    """Pin that ``ModelBilling.from_dict`` tolerates the live GitHub server
+    shape — a ``billing`` payload that has ``restricted_to`` and
+    ``token_prices`` but NO ``multiplier``.
+
+    GitHub no longer emits ``multiplier`` in the upstream ``billing``
+    payload. SDK v0.3.0 hard-required it and raised
+    ``ValueError("Missing required field 'multiplier' in ModelBilling")``,
+    which aborted the entire ``list_models()`` batch and broke
+    ``amplifier init`` / ``amplifier provider models`` for fresh
+    installs. SDK v1.0.0b4 made the field nullable and the parser
+    tolerant.
+
+    This test pins the tolerance at the SDK boundary so any future SDK
+    that re-tightens the parser fails loudly here BEFORE shipping to
+    users.
+
+    Contract: sdk-boundary:SDKSurface:MUST:3
+    """
+
+    def test_model_billing_tolerates_server_shape_without_multiplier(
+        self, sdk_module: Any
+    ) -> None:
+        """The exact GitHub server-shape payload MUST parse without raising.
+
+        Reproduces the live GitHub server-shape payload that aborted SDK
+        v0.3.0's parser: a ``billing`` block with ``restricted_to`` and
+        ``token_prices`` but no ``multiplier``. v1.0.0b4+ returns a
+        ``ModelBilling`` with ``multiplier`` absent or ``None``.
+        """
+        from copilot.client import ModelBilling  # type: ignore[import-untyped]
+
+        # Exact shape captured from live `models.list` JSON-RPC response.
+        live_server_shape = {
+            "restricted_to": [
+                "pro", "pro_plus", "individual_trial",
+                "business", "enterprise", "max",
+            ],
+            "token_prices": {
+                "batch_size": 1_000_000,
+                "cache_price": 30_000_000_000,
+                "input_price": 300_000_000_000,
+                "output_price": 1_500_000_000_000,
+            },
+        }
+
+        # MUST NOT raise — the whole point of the v1.0.0b4 fix.
+        billing = ModelBilling.from_dict(live_server_shape)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
+        # Multiplier MUST be absent / None (not invented as 0.0 or 1.0).
+        multiplier = getattr(billing, "multiplier", None)  # pyright: ignore[reportUnknownArgumentType]
+        assert multiplier is None, (
+            f"ModelBilling.multiplier={multiplier!r} expected None "
+            "when the server payload omits 'multiplier'. SDK must not "
+            "invent a default — that would silently mis-bill consumers."
+        )
+
+    def test_model_info_from_dict_survives_billing_without_multiplier(
+        self, sdk_module: Any
+    ) -> None:
+        """End-to-end: a full ``ModelInfo`` payload with the new billing
+        shape must parse — proving ``list_models()`` will not abort on
+        the first billing-having model in the batch.
+        """
+        from copilot.client import ModelInfo  # type: ignore[import-untyped]
+
+        live_model_payload = {
+            "id": "claude-sonnet-4.6",
+            "name": "Claude Sonnet 4.6",
+            "capabilities": {
+                "family": "claude",
+                "type": "chat",
+                "tokenizer": "claude",
+                "limits": {
+                    "max_context_window_tokens": 200_000,
+                    "max_output_tokens": 16_384,
+                    "max_prompt_tokens": 200_000,
+                },
+                "supports": {
+                    "streaming": True,
+                    "tool_calls": True,
+                    "parallel_tool_calls": True,
+                },
+            },
+            "billing": {
+                "restricted_to": ["pro", "business", "enterprise"],
+                "token_prices": {
+                    "batch_size": 1_000_000,
+                    "cache_price": 30_000_000_000,
+                    "input_price": 300_000_000_000,
+                    "output_price": 1_500_000_000_000,
+                },
+            },
+        }
+
+        # MUST NOT raise — this is the exact path list_models() walks.
+        model = ModelInfo.from_dict(live_model_payload)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        model_id: str = getattr(model, "id", "")  # pyright: ignore[reportUnknownArgumentType]
+        billing = getattr(model, "billing", None)  # pyright: ignore[reportUnknownArgumentType]
+        assert model_id == "claude-sonnet-4.6"
+        assert billing is not None
+        assert getattr(billing, "multiplier", None) is None  # pyright: ignore[reportUnknownArgumentType]
+
+
+@pytest.mark.sdk_assumption
 class TestPermissionRequestResultV030Schema:
     """SDK v0.3.0 introduced a breaking change to PermissionRequestResult.
 

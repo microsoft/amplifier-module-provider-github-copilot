@@ -37,7 +37,7 @@ _SKIP_SDK_CHECK = _os.environ.get("SKIP_SDK_CHECK") and is_pytest_running()
 
 
 def _check_sdk_version(version_str: str) -> None:
-    """Raise ImportError if SDK version does not satisfy >=0.3.0.
+    """Raise ImportError if SDK version does not satisfy >=1.0.0b4.
 
     Extracted for testability — module-level code that runs under SKIP_SDK_CHECK
     cannot be reached by unit tests; this function can be imported and tested
@@ -49,10 +49,10 @@ def _check_sdk_version(version_str: str) -> None:
         ver_parts = tuple(int(x) for x in version_str.split(".")[:2] if x.isdigit())
     except (ValueError, TypeError):  # pragma: no cover — malformed version string
         ver_parts = (0, 0)
-    if ver_parts < (0, 3):
+    if ver_parts < (1, 0):
         raise ImportError(
-            f"github-copilot-sdk=={version_str} is installed but >=0.3.0 is required. "
-            "Upgrade with: pip install 'github-copilot-sdk>=0.3.0,<0.4.0' "
+            f"github-copilot-sdk=={version_str} is installed but ==1.0.0b4 is required. "
+            "Upgrade with: pip install 'github-copilot-sdk==1.0.0b4' "
             "or reinstall the provider: amplifier provider install --force github-copilot"
         )
 
@@ -64,7 +64,7 @@ if not _SKIP_SDK_CHECK:  # pragma: no cover
         # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
-            "Install with:  pip install 'github-copilot-sdk>=0.3.0,<0.4.0'"
+            "Install with:  pip install 'github-copilot-sdk==1.0.0b4'"
         ) from _e
     # Contract: sdk-boundary:Membrane:MUST:5 — fail at import time on wrong version.
     # Presence-only check passes silently for SDK 0.1.x which lacks SubprocessConfig,
