@@ -87,7 +87,7 @@ from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
 # Contract: provider-protocol:public_api:MUST:1 — must match pyproject.toml [project].version
 # Verified by tests/test_behaviors.py::TestPackageVersionConsistency
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"

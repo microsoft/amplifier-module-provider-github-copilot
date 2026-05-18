@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "2.1.0"
+version = "2.1.1"
 description = "GitHub Copilot provider for Amplifier - Three-Medium Architecture"
 readme = "README.md"
 requires-python = ">=3.11"
