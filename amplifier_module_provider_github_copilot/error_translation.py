@@ -45,6 +45,8 @@ from amplifier_core.llm_errors import (
     StreamError,
 )
 
+from ._identity import PROVIDER_ID
+
 logger = logging.getLogger(__name__)
 
 # Re-export kernel error types for use by other modules in this package
@@ -438,7 +440,7 @@ def translate_sdk_error(
     exc: Exception,
     config: ErrorConfig,
     *,
-    provider: str = "github-copilot",
+    provider: str = PROVIDER_ID,
     model: str | None = None,
 ) -> LLMError:
     """Translate SDK exception to kernel LLMError.

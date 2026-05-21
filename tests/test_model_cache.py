@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -62,40 +61,34 @@ def make_cache_data(model_id: str = "claude-sonnet-4-5") -> dict[str, Any]:
 
 
 class TestCacheDirectory:
-    """Test cross-platform cache directory resolution.
+    """Cache directory delegates to filesystem-layout V1.0.
 
-    Contract: behaviors:ModelCache:SHOULD:1
-    - SHOULD cache SDK models to disk for session persistence
+    Contract: filesystem-layout:Wiring:MUST:4
+    Platform-specific resolution rows live in test_filesystem_cache_wiring.py.
     """
 
     def test_get_cache_dir_returns_path(self) -> None:
         """get_cache_dir() MUST return a Path object."""
         result = get_cache_dir()
-
         assert isinstance(result, Path)
 
-    def test_get_cache_dir_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """On Windows, cache dir MUST be in LOCALAPPDATA."""
-        monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local")
-        result = get_cache_dir()
+    def test_get_cache_dir_delegates_to_load_provider_paths(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """get_cache_dir() MUST return load_provider_paths().cache_home verbatim
+        (Wiring:MUST:4 — no module synthesizes its own cache base).
+        """
+        from amplifier_module_provider_github_copilot.config._paths import ProviderPaths
 
-        assert "amplifier" in str(result).lower()
-
-    def test_get_cache_dir_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """On Linux, cache dir MUST follow XDG_CACHE_HOME or ~/.cache."""
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setenv("XDG_CACHE_HOME", "/custom/cache")
-        result = get_cache_dir()
-
-        assert "amplifier" in str(result).lower()
-
-    def test_get_cache_dir_macos(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """On macOS, cache dir MUST be in ~/Library/Caches."""
-        monkeypatch.setattr(sys, "platform", "darwin")
-        result = get_cache_dir()
-
-        assert "amplifier" in str(result).lower()
+        sentinel = ProviderPaths(
+            provider_home=tmp_path / "data",
+            cache_home=tmp_path / "cache-sentinel-xyz",
+        )
+        monkeypatch.setattr(
+            "amplifier_module_provider_github_copilot.model_cache.load_provider_paths",
+            lambda: sentinel,
+        )
+        assert get_cache_dir() == sentinel.cache_home
 
 
 # =============================================================================
@@ -306,6 +299,117 @@ class TestCachePolicy:
 
         assert ttl >= 3600, "TTL should be at least 1 hour"
         assert ttl <= 604800, "TTL should be at most 7 days"
+
+    def test_default_ttl_is_jittered_within_factor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Contract: behaviors:ModelCache:SHOULD:4
+
+        When the caller omits ``max_age_seconds``, the effective TTL
+        boundary is multiplied by the ``_jitter`` seam. With a known
+        multiplier the boundary becomes deterministic; an item whose
+        age sits inside the jittered window is fresh, an item just
+        outside it is stale.
+        """
+        from amplifier_module_provider_github_copilot import model_cache as mc
+
+        nominal_ttl = get_cache_ttl_seconds()
+        # Pin jitter to its lower bound so the effective TTL is the
+        # smallest the contract permits — gives a deterministic edge
+        # for the boundary assertions below.
+        cfg = load_cache_config()
+        low_multiplier = 1.0 - cfg.disk_ttl_jitter_factor
+        monkeypatch.setattr(mc, "_jitter", lambda: low_multiplier)
+        effective_ttl = int(nominal_ttl * low_multiplier)
+
+        # Item one second inside the jittered window: fresh.
+        fresh_age = effective_ttl - 1
+        fresh_data: dict[str, Any] = {
+            "version": "1.0",
+            "timestamp": time.time() - fresh_age,
+            "models": [
+                {
+                    "id": "m",
+                    "name": "M",
+                    "context_window": 1000,
+                    "max_output_tokens": 100,
+                    "supports_vision": False,
+                    "supports_reasoning_effort": False,
+                    "supported_reasoning_efforts": [],
+                    "default_reasoning_effort": None,
+                }
+            ],
+        }
+        fresh_file = tmp_path / "fresh.json"
+        fresh_file.write_text(json.dumps(fresh_data), encoding="utf-8")
+        assert read_cache(fresh_file) is not None
+
+        # Item two seconds outside the jittered window: stale.
+        stale_data = dict(fresh_data)
+        stale_data["timestamp"] = time.time() - (effective_ttl + 2)
+        stale_file = tmp_path / "stale.json"
+        stale_file.write_text(json.dumps(stale_data), encoding="utf-8")
+        assert read_cache(stale_file) is None
+
+    def test_explicit_max_age_seconds_bypasses_jitter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Contract: behaviors:ModelCache:SHOULD:4
+
+        Tests that pin ``max_age_seconds`` MUST get an unjittered
+        boundary so unit tests stay deterministic. We force the
+        ``_jitter`` seam to a value that would shift any default-path
+        boundary; an explicit ``max_age_seconds`` MUST still apply
+        verbatim.
+        """
+        from amplifier_module_provider_github_copilot import model_cache as mc
+
+        # Jitter that would make any default-path TTL 10x larger if
+        # consulted. If the explicit max_age is honored, this is
+        # ignored.
+        monkeypatch.setattr(mc, "_jitter", lambda: 10.0)
+
+        data: dict[str, Any] = {
+            "version": "1.0",
+            "timestamp": time.time() - 7200,  # 2 hours ago
+            "models": [
+                {
+                    "id": "m",
+                    "name": "M",
+                    "context_window": 1000,
+                    "max_output_tokens": 100,
+                    "supports_vision": False,
+                    "supports_reasoning_effort": False,
+                    "supported_reasoning_efforts": [],
+                    "default_reasoning_effort": None,
+                }
+            ],
+        }
+        cache_file = tmp_path / "explicit.json"
+        cache_file.write_text(json.dumps(data), encoding="utf-8")
+
+        # Explicit 1-hour boundary — 2-hour-old entry must be stale,
+        # regardless of jitter seam.
+        assert read_cache(cache_file, max_age_seconds=3600) is None
+
+    def test_default_jitter_returns_value_in_factor_range(self) -> None:
+        """Contract: behaviors:ModelCache:SHOULD:4
+
+        The default ``_jitter`` callable MUST produce a multiplier
+        within ``[1 - factor, 1 + factor]``. Sampled enough times to
+        catch a sign or off-by-one error in either bound.
+        """
+        from amplifier_module_provider_github_copilot.model_cache import (
+            _default_jitter,
+        )
+
+        cfg = load_cache_config()
+        low = 1.0 - cfg.disk_ttl_jitter_factor
+        high = 1.0 + cfg.disk_ttl_jitter_factor
+        samples = [_default_jitter() for _ in range(200)]
+        assert all(low <= s <= high for s in samples)
+        # Guard against a constant-returning bug — variance must be > 0.
+        assert min(samples) < max(samples)
 
 
 # =============================================================================

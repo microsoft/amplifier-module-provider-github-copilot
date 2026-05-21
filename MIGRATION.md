@@ -305,3 +305,83 @@ them as DROP (no domain action) so existing event handlers are unaffected:
 - `session.mcp_server_status_changed` / `session.remote_steerable_changed`
 
 No caller action required.
+
+---
+
+# Migration Guide: v2.1.x → v2.2.0 (filesystem-layout V1.0)
+
+## Overview
+
+v2.2.0 introduces an explicit, contract-anchored filesystem layout for the
+provider (see `contracts/filesystem-layout.md`). Two user-visible changes:
+
+1. **Provider home is now provider-owned** — SDK subprocess state
+   (`session-store.db`, `session-state/`, `config.json`, `logs/`) is written
+   under a provider-owned directory instead of the default `~/.copilot/`.
+2. **Cache directory was renamed** to a single flat distribution-name segment.
+
+Existing files under `~/.copilot/` are not deleted, but the new provider
+does not read them — prior session, auth, and CLI logs effectively start
+fresh under the new `provider_home`. Users authenticated via the
+documented `GITHUB_TOKEN` flow are unaffected; users who relied on
+undocumented `~/.copilot/` state should re-authenticate on first call
+(`export GITHUB_TOKEN=$(gh auth token)`). Auto-migration is forbidden
+by the contract (`Lifecycle:MUST:4`); the legacy directories may be
+deleted at the user's leisure.
+
+## Cache directory rename
+
+| OS      | v2.1.x (old)                                                | v2.2.0 (new)                                          |
+|---------|-------------------------------------------------------------|-------------------------------------------------------|
+| Linux   | `~/.cache/amplifier/provider-github-copilot/`               | `~/.cache/amplifier-provider-github-copilot/`         |
+| macOS   | `~/Library/Caches/amplifier/provider-github-copilot/`       | `~/Library/Caches/amplifier-provider-github-copilot/` |
+| Windows | `%LOCALAPPDATA%\amplifier\provider-github-copilot\`         | `%LOCALAPPDATA%\amplifier-provider-github-copilot\Cache\` |
+
+**Behavior on upgrade:** the only file written here is `models_cache.json`
+(regenerable from `provider.list_models()` on first call). First call after
+upgrade will repopulate the new path; the old path is orphaned but harmless.
+
+**Optional cleanup** (Linux example):
+
+```bash
+rm -rf ~/.cache/amplifier/provider-github-copilot
+```
+
+## Provider home introduction
+
+SDK state previously written to `~/.copilot/` is now written under a
+provider-owned `provider_home`. The V1.0 contract (`filesystem-layout.md`
+§Paths:MUST:1) defines a **platform-uniform** resolution chain — there is no
+per-OS branching for the fallback:
+
+1. `${AMPLIFIER_PROVIDER_GITHUB_COPILOT_HOME}` if set, non-empty, and
+   absolute after `Path.expanduser()`.
+2. `${XDG_DATA_HOME}/amplifier-provider-github-copilot/` if `XDG_DATA_HOME`
+   is set, non-empty, and absolute.
+3. `~/.amplifier-provider-github-copilot/` (dot-prefixed directory under
+   the user's home, on **all** platforms — Linux, macOS, Windows).
+
+Examples of resolved paths:
+
+| Scenario                           | Resolved `provider_home`                                |
+|------------------------------------|---------------------------------------------------------|
+| Override env set                   | the absolute override path                              |
+| Linux with `XDG_DATA_HOME` set     | `$XDG_DATA_HOME/amplifier-provider-github-copilot/`     |
+| Linux without `XDG_DATA_HOME`      | `~/.amplifier-provider-github-copilot/`                 |
+| macOS (default)                    | `~/.amplifier-provider-github-copilot/`                 |
+| Windows (default)                  | `~\.amplifier-provider-github-copilot\`                 |
+
+Note that `cache_home` follows a different (platform-aware) chain — see
+`contracts/filesystem-layout.md` §Paths:MUST:2 for the full table.
+
+**Behavior on upgrade:** any session state previously stored at `~/.copilot/`
+remains in place but is not read by this provider. Users who relied on that
+state (rare — `session-store.db` is per-bundle and regenerates) may delete it
+or re-authenticate via `GITHUB_TOKEN` (the documented auth flow since v2.0.0).
+
+## What did NOT change
+
+- Authentication (`GITHUB_TOKEN`) flow.
+- Public API symbols.
+- Cache schema or `models_cache.json` format.
+- Cache TTL or invalidation policy.

@@ -26,6 +26,8 @@ import threading
 from importlib.metadata import PackageNotFoundError as _PkgNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from ._identity import PROVIDER_ID
+
 # Single source of truth for pytest detection — defined in _platform.py.
 # Both __init__.py and sdk_adapter/_imports.py import from there.
 from ._platform import is_pytest_running  # noqa: E402 (before SDK check block)
@@ -87,7 +89,7 @@ from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
 # Contract: provider-protocol:public_api:MUST:1 — must match pyproject.toml [project].version
 # Verified by tests/test_behaviors.py::TestPackageVersionConsistency
-__version__ = "2.1.1"
+__version__ = "2.2.0"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"
@@ -343,7 +345,7 @@ async def mount(
         logger.info(f"[MOUNT] Provider created: {provider.name}")
 
         logger.info("[MOUNT] Mounting to coordinator...")
-        await coordinator.mount("providers", provider, name="github-copilot")
+        await coordinator.mount("providers", provider, name=PROVIDER_ID)
         logger.info("[MOUNT] Provider mounted successfully")
 
         async def cleanup() -> None:

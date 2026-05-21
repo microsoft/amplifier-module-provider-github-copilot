@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ._identity import PROVIDER_ID
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -41,7 +43,7 @@ except ImportError:  # pragma: no cover
     class ProviderUnavailableError(Exception):  # type: ignore[no-redef]
         """Fallback when amplifier_core unavailable."""
 
-        def __init__(self, message: str, *, provider: str = "github-copilot") -> None:
+        def __init__(self, message: str, *, provider: str = PROVIDER_ID) -> None:
             super().__init__(message)
             self.provider = provider
 
@@ -169,7 +171,7 @@ async def fetch_models(client: Any) -> list[CopilotModelInfo]:
         raise ProviderUnavailableError(
             f"Failed to fetch models from SDK: {redact_sensitive_text(exc)}. "
             "SDK connection unavailable, no cached models available.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         ) from exc
 
 

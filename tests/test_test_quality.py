@@ -28,9 +28,17 @@ from amplifier_core import ModuleCoordinator
 class MockSubprocessConfig:
     """Mock SubprocessConfig that accepts github_token."""
 
-    def __init__(self, github_token: str | None = None, log_level: str = "info") -> None:
+    def __init__(
+        self,
+        github_token: str | None = None,
+        log_level: str = "info",
+        copilot_home: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self.github_token = github_token
         self.log_level = log_level
+        self.copilot_home = copilot_home
+        self.env = env
 
 
 class TestMountFailurePath:

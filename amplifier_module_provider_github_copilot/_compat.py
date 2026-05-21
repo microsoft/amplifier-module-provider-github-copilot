@@ -12,6 +12,8 @@ Contract: sdk-boundary:Membrane:MUST:1 — Single import point for runtime depen
 
 from __future__ import annotations
 
+from ._identity import PROVIDER_ID
+
 __all__ = ["ConfigurationError"]
 
 
@@ -38,7 +40,7 @@ except ImportError:  # pragma: no cover
             self,
             message: str,
             *,
-            provider: str = "github-copilot",
+            provider: str = PROVIDER_ID,
             **kwargs: object,
         ) -> None:
             super().__init__(message)

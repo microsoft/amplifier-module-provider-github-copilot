@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from amplifier_core.llm_errors import ConfigurationError, ProviderUnavailableError
 
+from .._identity import PROVIDER_ID
 from .._permissions import ensure_executable
 from .._platform import get_platform_info, locate_cli_binary
 from ..config_loader import load_sdk_protection_config
@@ -211,6 +212,7 @@ class CopilotClientWrapper:
         self,
         *,
         sdk_client: Any = None,
+        provider_paths: Any = None,
         _translate_error: Any = None,
         _safe_log: Any = None,
     ) -> None:
@@ -218,6 +220,8 @@ class CopilotClientWrapper:
 
         Args:
             sdk_client: Pre-existing SDK client (injected for testing).
+            provider_paths: Optional `ProviderPaths` to inject; bypasses env
+                resolution. Contract: filesystem-layout:Isolation:MUST:3.
             _translate_error: Error translation callable (exc, config) -> Exception.
                               Defaults to translate_sdk_error from error_translation.
                               Override in tests to verify translator call sites.
@@ -228,6 +232,7 @@ class CopilotClientWrapper:
         self._sdk_client: Any = sdk_client
         self._owned_client: Any = None  # Only set when we created the client ourselves
         self._error_config: Any = None
+        self._provider_paths: Any = provider_paths
         # Lock prevents race conditions on lazy init
         self._client_lock: asyncio.Lock = asyncio.Lock()
         self._disconnect_failures: int = 0  # Track disconnect failures for escalation
@@ -326,18 +331,39 @@ class CopilotClientWrapper:
                 return client
 
             try:
+                from ..config._paths import ensure_paths_exist, load_provider_paths
                 from ._imports import CopilotClient, SubprocessConfig
 
                 token = _resolve_token()
                 log_level = _resolve_sdk_log_level()
 
+                # filesystem-layout:Isolation:MUST:3 — injected ProviderPaths win.
+                resolved_paths = self._provider_paths or load_provider_paths()
+                # Lifecycle:MUST:1/2 — materialize lazily before SDK launch.
+                ensure_paths_exist(resolved_paths)
+                copilot_home_str = str(resolved_paths.provider_home)
+                # Wiring:MUST:5 — explicit env, COPILOT_HOME + COPILOT_CLI_PATH scrubbed.
+                scrubbed_env = dict(os.environ)
+                scrubbed_env.pop("COPILOT_HOME", None)
+                scrubbed_env.pop("COPILOT_CLI_PATH", None)
+
                 # SDK v0.3.0: SubprocessConfig replaces the v0.2.x options dict
                 if SubprocessConfig is not None and token:
-                    config = SubprocessConfig(github_token=token, log_level=log_level)
+                    # Wiring:MUST:1 — token branch passes copilot_home.
+                    config = SubprocessConfig(
+                        github_token=token,
+                        log_level=log_level,
+                        copilot_home=copilot_home_str,
+                        env=scrubbed_env,
+                    )
                     self._owned_client = CopilotClient(config)
                 elif SubprocessConfig is not None and not token:
-                    # No token but SubprocessConfig available - use with log_level only
-                    config = SubprocessConfig(log_level=log_level)
+                    # Wiring:MUST:2 — no-token branch agrees on copilot_home.
+                    config = SubprocessConfig(
+                        log_level=log_level,
+                        copilot_home=copilot_home_str,
+                        env=scrubbed_env,
+                    )
                     self._owned_client = CopilotClient(config)
                 elif token and SubprocessConfig is None:
                     # Security P1-6: Fail closed when explicit token cannot be applied.
@@ -349,10 +375,17 @@ class CopilotClientWrapper:
                         "Explicit GitHub token provided via environment variable, but SDK's "
                         "SubprocessConfig is unavailable (SDK version mismatch). Cannot apply "
                         "token - failing closed to prevent unintended default authentication.",
-                        provider="github-copilot",
+                        provider=PROVIDER_ID,
                     )
                 else:
-                    # No token, no SubprocessConfig - use SDK default authentication
+                    # No token, no SubprocessConfig: only reachable under
+                    # SKIP_SDK_CHECK=1 (pytest). Production code with the
+                    # pinned SDK >= 1.0.0b4 always has SubprocessConfig.
+                    if CopilotClient is None:
+                        raise RuntimeError(
+                            "SubprocessConfig and CopilotClient unavailable. "
+                            "Production code requires github-copilot-sdk >= 1.0.0b4."
+                        )
                     self._owned_client = CopilotClient()
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
@@ -396,7 +429,7 @@ class CopilotClientWrapper:
                         )
                     raise ProviderUnavailableError(
                         f"Cannot set execute permission on Copilot binary at {binary_path}. {hint}",
-                        provider="github-copilot",
+                        provider=PROVIDER_ID,
                     )
 
                 # Start client - clear on failure for retry
@@ -419,7 +452,7 @@ class CopilotClientWrapper:
 
                 raise ProviderUnavailableError(
                     f"Copilot SDK not installed: {redact_sensitive_text(e)}",
-                    provider="github-copilot",
+                    provider=PROVIDER_ID,
                 ) from e
             except (ProviderUnavailableError, ConfigurationError):
                 # Already a typed amplifier-core error with intentional semantics:

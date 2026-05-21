@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any
 # This is a protocol constant, not a policy value - must match kernel
 from amplifier_core.events import PROVIDER_RETRY
 
+from ._identity import PROVIDER_ID
+
 if TYPE_CHECKING:
     from amplifier_core import ModuleCoordinator
 
@@ -80,7 +82,7 @@ class FinishReasons:
 class ObservabilityConfig:
     """Observability policy. Defaults are the production values."""
 
-    provider_name: str = "github-copilot"
+    provider_name: str = PROVIDER_ID
     event_names: EventNames = field(default_factory=EventNames)
     status: StatusValues = field(default_factory=StatusValues)
     finish_reasons: FinishReasons = field(default_factory=FinishReasons)

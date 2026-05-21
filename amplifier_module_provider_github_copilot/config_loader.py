@@ -27,6 +27,8 @@ from typing import Any
 # Contract: sdk-boundary:Membrane:MUST:1 — Single import point for runtime dependencies
 from amplifier_module_provider_github_copilot._compat import ConfigurationError
 
+from ._identity import PROVIDER_ID
+
 # Retry/streaming policy (hardcoded defaults — lives in config/_policy.py)
 from .config._policy import RetryPolicy as RetryConfig  # Public alias preserved
 from .config._policy import StreamingConfig, load_retry_config, load_streaming_config
@@ -102,7 +104,7 @@ def load_models_config() -> ProviderConfig:
         raise ConfigurationError(
             "config/_models.py not found — broken installation. "
             "Package is missing required configuration module: config/_models.py",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         ) from e
 
     # Three-Medium: Validate required keys exist (fail-fast)
@@ -110,20 +112,20 @@ def load_models_config() -> ProviderConfig:
     if not p:
         raise ConfigurationError(
             "Config validation failed: config/models.py missing 'PROVIDER' definition.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     defaults = p.get("defaults")
     if not defaults or "model" not in defaults:
         raise ConfigurationError(
             "Config validation failed: config/models.py missing 'PROVIDER[defaults][model]'.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     if "timeout" not in defaults:
         raise ConfigurationError(
             "Config validation failed: config/models.py missing 'PROVIDER[defaults][timeout]'.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     # All required keys validated - use direct access

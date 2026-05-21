@@ -1,6 +1,7 @@
 """Model cache for disk persistence.
 
-Contract: contracts/behaviors.md (ModelCache section)
+Contract: contracts/filesystem-layout.md:Wiring:MUST:4 (binds to cache_home)
+Contract: contracts/behaviors.md (ModelCache section — TTL policy)
 
 TTL policy values come from config/policy.py (CacheConfig dataclass).
 Philosophy: Fail clearly rather than fail silently with stale data.
@@ -11,11 +12,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
+import random
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .config._paths import load_provider_paths
 from .config._policy import load_cache_config
 
 if TYPE_CHECKING:
@@ -26,6 +29,24 @@ logger = logging.getLogger(__name__)
 # Supported cache schema version (S8 Fix: version was written but never checked on read).
 # Old caches without a version field are treated as "1.0" (backward compat).
 _SUPPORTED_CACHE_VERSION = "1.0"
+
+
+def _default_jitter() -> float:
+    """Return a random TTL multiplier in [1 - factor, 1 + factor].
+
+    Contract: behaviors:ModelCache:SHOULD:4 — applied per-call inside
+    `load_models_from_cache` when the caller does not pin
+    `max_age_seconds`. Spreads the cache-refresh herd across coexisting
+    host processes.
+
+    Test seam: monkeypatch `_jitter` (not this function and not
+    `random.uniform`) to a `lambda: <constant>` for determinism.
+    """
+    factor = load_cache_config().disk_ttl_jitter_factor
+    return random.uniform(1.0 - factor, 1.0 + factor)
+
+
+_jitter: Callable[[], float] = _default_jitter
 
 
 def get_cache_ttl_seconds() -> int:
@@ -41,33 +62,14 @@ def get_cache_filename() -> str:
     return load_cache_config().cache_filename
 
 
-# =============================================================================
-# Cross-Platform Cache Directory
-# Contract: behaviors:ModelCache:SHOULD:1, Cross-platform requirements
-# =============================================================================
-
-
 def get_cache_dir() -> Path:
-    """Get cross-platform cache directory.
+    """Return the provider's cache directory.
 
-    Follows platform conventions:
-    - Windows: %LOCALAPPDATA%/amplifier/provider-github-copilot/
-    - macOS: ~/Library/Caches/amplifier/provider-github-copilot/
-    - Linux: $XDG_CACHE_HOME/amplifier/provider-github-copilot/ or ~/.cache/...
-
-    Contract: behaviors:ModelCache:SHOULD:1
-
-    Returns:
-        Path to cache directory (may not exist yet).
+    Contract: filesystem-layout:Wiring:MUST:4 — every cache path resolves
+    through `load_provider_paths().cache_home`. This module MUST NOT
+    synthesize platform-specific paths; that policy lives in `config/_paths.py`.
     """
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Caches"
-    else:  # Linux/BSD
-        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-
-    return base / "amplifier" / "provider-github-copilot"
+    return load_provider_paths().cache_home
 
 
 def get_cache_file_path() -> Path:
@@ -203,8 +205,12 @@ def read_cache(
         return None
 
     # Check timestamp / TTL
+    nominal_ttl = get_cache_ttl_seconds()
     if max_age_seconds is None:
-        max_age_seconds = get_cache_ttl_seconds()
+        # behaviors:ModelCache:SHOULD:4 — apply per-call jitter to spread
+        # the refresh herd across coexisting host processes. Skipped when
+        # the caller pins an explicit `max_age_seconds` (test path).
+        max_age_seconds = max(0, int(nominal_ttl * _jitter()))
 
     # P1 Fix: Handle null timestamp. dict.get() returns None if key exists with null value.
     # Using `or 0` handles both missing key and explicit null.
@@ -212,7 +218,11 @@ def read_cache(
     age = time.time() - timestamp
 
     if age > max_age_seconds:
-        logger.debug("Cache stale: age=%.0f seconds, max=%d", age, max_age_seconds)
+        # Schneier amendment: log nominal TTL, not the jittered effective
+        # max — keeps process-level RNG entropy out of debug output.
+        logger.debug(
+            "Cache stale: age=%.0f seconds, nominal_ttl=%d", age, nominal_ttl
+        )
         return None
 
     # Parse models per-entry: preserves valid entries even when some are malformed.

@@ -62,21 +62,30 @@ def isolate_model_cache(
 ) -> None:
     """Sandbox the on-disk model cache for every test.
 
-    Redirects ``get_cache_file_path`` to a per-test ``tmp_path`` so any code
-    path (test or production-under-test) that writes the disk cache lands
-    inside the throwaway directory instead of the developer's real
-    ``~/.cache/amplifier/...`` (XDG_CACHE_HOME), ``%LOCALAPPDATA%``, or
-    ``~/Library/Caches`` location.
+    Contract: filesystem-layout:Wiring:MUST:4 — every test must use a
+    tmp `cache_home` instead of the developer's real cache. We patch
+    `load_provider_paths` at the upstream binding so any code path that
+    asks for `cache_home` (model_cache, future modules) lands in tmp.
 
     Why: a previous regression had ``test_provider_list_models_calls_fetch_models``
     patch ``fetch_and_map_models`` but not ``write_cache``, allowing the test
     fixture id ``sdk-unique-model-xyz`` to be written into the user's real cache
     and later returned by ``amplifier provider models`` as a fallback.
     """
-    fake_cache_file = tmp_path / "models_cache.json"
+    from amplifier_module_provider_github_copilot.config._paths import ProviderPaths
+
+    sandbox = ProviderPaths(
+        provider_home=tmp_path / "provider-home",
+        cache_home=tmp_path / "cache-home",
+    )
+    # Patch every binding site so neither leaf nor upstream callers escape.
     monkeypatch.setattr(
-        "amplifier_module_provider_github_copilot.model_cache.get_cache_file_path",
-        lambda: fake_cache_file,
+        "amplifier_module_provider_github_copilot.config._paths.load_provider_paths",
+        lambda: sandbox,
+    )
+    monkeypatch.setattr(
+        "amplifier_module_provider_github_copilot.model_cache.load_provider_paths",
+        lambda: sandbox,
     )
 
 

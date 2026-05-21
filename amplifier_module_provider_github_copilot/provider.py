@@ -36,6 +36,7 @@ from amplifier_core import (
     ToolCall,
 )
 
+from ._identity import PROVIDER_ID
 from .config_loader import (
     ProviderConfig,
     RetryConfig,
@@ -381,7 +382,7 @@ class GitHubCopilotProvider:
 
         Contract: provider-protocol:name:MUST:1
         """
-        return "github-copilot"
+        return PROVIDER_ID
 
     def get_info(self) -> ProviderInfo:
         """Return provider metadata.
@@ -466,7 +467,7 @@ class GitHubCopilotProvider:
         raise ProviderUnavailableError(
             "Failed to fetch models from SDK and no cached models available. "
             "Check network connectivity and SDK authentication.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     async def complete(
@@ -605,7 +606,7 @@ class GitHubCopilotProvider:
                     # Bare `except Exception` misses it.  Translate to AbortError
                     # so the kernel receives a typed, non-retryable kernel error.
                     # Contract: error-hierarchy:AbortError:MUST:1
-                    abort = AbortError("Request cancelled", provider="github-copilot")
+                    abort = AbortError("Request cancelled", provider=PROVIDER_ID)
                     await ctx.emit_response_error(
                         error_type=type(abort).__name__,
                         error_message=str(abort),
@@ -615,7 +616,7 @@ class GitHubCopilotProvider:
                 except Exception as e:
                     error_config_for_err = load_error_config()
                     translated = translate_sdk_error(
-                        e, error_config_for_err, provider="github-copilot", model=model
+                        e, error_config_for_err, provider=PROVIDER_ID, model=model
                     )
 
                     if not is_retryable_error(translated):
@@ -715,7 +716,7 @@ class GitHubCopilotProvider:
                 except asyncio.CancelledError:
                     # C-2: Same guard for the fake-tool correction path.
                     # Contract: error-hierarchy:AbortError:MUST:1
-                    abort = AbortError("Request cancelled", provider="github-copilot")
+                    abort = AbortError("Request cancelled", provider=PROVIDER_ID)
                     log_exhausted(ftd_config, correction_attempt + 1)
                     await ctx.emit_response_error(
                         error_type=type(abort).__name__,
@@ -733,7 +734,7 @@ class GitHubCopilotProvider:
                     # The correction path must use the same error translation as the main path.
                     error_config_for_correction = load_error_config()
                     translated = translate_sdk_error(
-                        e, error_config_for_correction, provider="github-copilot", model=model
+                        e, error_config_for_correction, provider=PROVIDER_ID, model=model
                     )
                     log_exhausted(ftd_config, correction_attempt + 1)
                     await ctx.emit_response_error(

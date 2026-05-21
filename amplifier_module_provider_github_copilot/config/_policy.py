@@ -58,7 +58,7 @@ class StreamingConfig:
 class CacheConfig:
     """Model cache policy configuration.
 
-    Contract: behaviors:ModelCache:SHOULD:2
+    Contract: behaviors:ModelCache:SHOULD:2, SHOULD:4
 
     Note: max_stale_seconds is defined in the contract but not currently
     read by any caller. Included for contract compliance.
@@ -67,6 +67,14 @@ class CacheConfig:
     disk_ttl_seconds: int = 86400  # 24 hours
     max_stale_seconds: int = 604800  # 7 days
     cache_filename: str = "models_cache.json"
+    # behaviors:ModelCache:SHOULD:4 — random factor in [-jitter, +jitter]
+    # multiplied into the default TTL on each cache read to spread refresh
+    # work across coexisting host processes. 0.0 disables. Caution: values
+    # approaching 1.0 collapse the effective TTL toward zero (the lower
+    # bound 1 - factor → 0; `int(nominal_ttl * _jitter())` is then clamped
+    # at 0 via `max(0, ...)`, so every read becomes stale and degenerates
+    # into a refresh storm). Recommended range: [0.0, 0.5].
+    disk_ttl_jitter_factor: float = 0.1
 
 
 @functools.lru_cache(maxsize=1)

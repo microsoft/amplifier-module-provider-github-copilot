@@ -42,7 +42,7 @@ This contract defines observability policy for provider instrumentation. Observa
 
 1. **SHOULD** include correlation IDs for tracing
 2. **SHOULD** include model ID in all events
-3. **SHOULD** include `sdk_pid` in `llm:response` for SDK log file correlation (`~/.copilot/logs/process-*-{pid}.log`)
+3. **SHOULD** include `sdk_pid` in `llm:response` for SDK log file correlation (`<provider_home>/logs/process-*-{pid}.log`; `provider_home` is governed by `filesystem-layout:Paths:MUST:1`, defaulting to `~/.amplifier-provider-github-copilot/`)
 
 ---
 
@@ -108,7 +108,7 @@ The `raw` flag is set in the provider's `config:` block (Amplifier provider YAML
 separate observability config file. No `observability.yaml` exists.
 
 ```yaml
-# Example: ~/.amplifier/.../providers/github-copilot.yaml
+# Example (provider config block in the Amplifier bundle YAML)
 provider: github-copilot
 config:
   raw: true   # NEVER commit — debug only

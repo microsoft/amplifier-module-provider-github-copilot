@@ -20,6 +20,7 @@ from typing import Any, cast
 # Single canonical import for ConfigurationError. Convention from config_loader.py
 # / models.py / streaming.py: top-level only, never re-imported in function bodies.
 from ._compat import ConfigurationError
+from ._identity import PROVIDER_ID
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import CompletionRequest, CopilotModelInfo, extract_attachments_from_chat_request
@@ -280,7 +281,7 @@ def convert_chat_request(
         raise ConfigurationError(
             f"reasoning_effort must be str or None; got "
             f"{type(raw_reasoning_effort).__name__}.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     return CompletionRequest(
@@ -368,7 +369,7 @@ def validate_reasoning_effort(
         raise ConfigurationError(
             f"reasoning_effort={safe} for model {model_id!r} is not in the "
             f"SDK literal allowlist (case-sensitive). Allowed values: {allowed}.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     if model_info is None:
@@ -389,7 +390,7 @@ def validate_reasoning_effort(
             f"Caller passed reasoning_effort={safe}; remove the "
             f"field or pick a model whose capability descriptor advertises "
             f"supports_reasoning_effort=True.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     allowlist = model_info.supported_reasoning_efforts
@@ -398,7 +399,7 @@ def validate_reasoning_effort(
         raise ConfigurationError(
             f"Model {model_id!r} does not support "
             f"reasoning_effort={safe}. Allowed values: {allowed}.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     return reasoning_effort

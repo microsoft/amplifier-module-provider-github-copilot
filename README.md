@@ -127,7 +127,7 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current set as of SDK 0.3.0; run `amplifier provider models github-copilot` for the live list.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current set as of SDK 1.0.0b4; run `amplifier provider models github-copilot` for the live list.
 
 **Anthropic:**
 
@@ -478,7 +478,7 @@ python -m pytest tests/ -m live -v --tb=short
 | `Copilot SDK not installed` | Provider module not installed | Run `amplifier provider install github-copilot` |
 | `Not authenticated to GitHub Copilot` | Token not set | **Linux/macOS:** `export GITHUB_TOKEN=$(gh auth token)` **Windows:** `$env:GITHUB_TOKEN = (gh auth token)` |
 | `gh: command not found` | GitHub CLI missing | [Install gh CLI](https://cli.github.com/) |
-| Stale or wrong model list | Cached models | Delete `%LOCALAPPDATA%\amplifier\provider-github-copilot\models_cache.json` (Windows), `~/Library/Caches/amplifier/provider-github-copilot/models_cache.json` (macOS), or `~/.cache/amplifier/provider-github-copilot/models_cache.json` (Linux) |
+| Stale or wrong model list | Cached models | Delete `models_cache.json` from your cache directory: `%LOCALAPPDATA%\amplifier-provider-github-copilot\Cache\` (Windows), `~/Library/Caches/amplifier-provider-github-copilot/` (macOS), or `~/.cache/amplifier-provider-github-copilot/` (Linux). |
 | `Permission denied` on SDK binary | `uv` stripped execute bits | Provider auto-repairs on startup; if it fails, run `chmod +x <path-to-copilot-binary>` (Linux/macOS only) |
 
 ### Common Mistake
@@ -504,7 +504,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk>=0.3.0,<0.4.0`
+- `github-copilot-sdk==1.0.0b4`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize

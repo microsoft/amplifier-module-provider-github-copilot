@@ -23,6 +23,7 @@ from amplifier_core import (
 
 # Use _compat.py for consistent ConfigurationError import (W-03 code review)
 from ._compat import ConfigurationError
+from ._identity import PROVIDER_ID
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import extract_event_fields
@@ -478,7 +479,7 @@ def _validate_no_classification_overlap(
             raise ConfigurationError(
                 f"Event classification overlap: '{pattern}' is in both BRIDGE and CONSUME. "
                 "Each event type must have exactly one classification.",
-                provider="github-copilot",
+                provider=PROVIDER_ID,
             )
 
     # Check bridge vs drop (exact match)
@@ -487,7 +488,7 @@ def _validate_no_classification_overlap(
             raise ConfigurationError(
                 f"Event classification overlap: '{pattern}' is in both BRIDGE and DROP. "
                 "Each event type must have exactly one classification.",
-                provider="github-copilot",
+                provider=PROVIDER_ID,
             )
 
     # Check consume vs drop (exact match)
@@ -497,7 +498,7 @@ def _validate_no_classification_overlap(
             raise ConfigurationError(
                 f"Event classification overlap: '{pattern}' is in both CONSUME and DROP. "
                 "Each event type must have exactly one classification.",
-                provider="github-copilot",
+                provider=PROVIDER_ID,
             )
 
     # Check wildcard patterns against explicit types
@@ -509,7 +510,7 @@ def _validate_no_classification_overlap(
                     f"Event classification overlap: BRIDGE type '{bridge_type}' "
                     f"matches DROP wildcard pattern '{pattern}'. "
                     "Each event type must have exactly one classification.",
-                    provider="github-copilot",
+                    provider=PROVIDER_ID,
                 )
         for pattern in consume_patterns:
             if "*" in pattern and fnmatch.fnmatch(bridge_type, pattern):
@@ -517,7 +518,7 @@ def _validate_no_classification_overlap(
                     f"Event classification overlap: BRIDGE type '{bridge_type}' "
                     f"matches CONSUME wildcard pattern '{pattern}'. "
                     "Each event type must have exactly one classification.",
-                    provider="github-copilot",
+                    provider=PROVIDER_ID,
                 )
 
     # Consume explicit entries vs drop wildcards
@@ -529,7 +530,7 @@ def _validate_no_classification_overlap(
                         f"Event classification overlap: CONSUME entry '{consume_entry}' "
                         f"matches DROP wildcard pattern '{drop_pattern}'. "
                         "Each event type must have exactly one classification.",
-                        provider="github-copilot",
+                        provider=PROVIDER_ID,
                     )
 
     # Drop explicit entries vs consume wildcards
@@ -541,7 +542,7 @@ def _validate_no_classification_overlap(
                         f"Event classification overlap: DROP entry '{drop_entry}' "
                         f"matches CONSUME wildcard pattern '{consume_pattern}'. "
                         "Each event type must have exactly one classification.",
-                        provider="github-copilot",
+                        provider=PROVIDER_ID,
                     )
 
 
@@ -588,7 +589,7 @@ def _load_event_config_cached(config_path_str: str) -> EventConfig:
             # Re-raise as ConfigurationError with context
             raise ConfigurationError(
                 f"Invalid event config in events.yaml: {e}",
-                provider="github-copilot",
+                provider=PROVIDER_ID,
             ) from e
 
     # Load finish_reason_map
@@ -623,7 +624,7 @@ def _load_event_config_cached(config_path_str: str) -> EventConfig:
             "session_lifecycle.idle_events is empty or missing in events.yaml. "
             "Provider cannot detect session completion without this configuration. "
             "Expected: ['session.idle', 'idle'] or similar.",
-            provider="github-copilot",
+            provider=PROVIDER_ID,
         )
 
     # Validate no overlap between BRIDGE, CONSUME, and DROP categories

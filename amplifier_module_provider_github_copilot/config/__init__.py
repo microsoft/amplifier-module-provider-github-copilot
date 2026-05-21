@@ -15,4 +15,4 @@ External callers import policy through config_loader.py, not these modules direc
 #   from .config import _models
 #   from .config._sdk_protection import ...
 # without needing __init__.py to be empty.
-from . import _models, _policy, _sdk_protection  # noqa: F401
+from . import _models, _paths, _policy, _sdk_protection  # noqa: F401

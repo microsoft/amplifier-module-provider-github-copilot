@@ -299,9 +299,10 @@ The provider SHOULD cache SDK model information to disk for persistence across s
 version: "1.0"
 
 cache:
-  disk_ttl_seconds: 86400     # 24 hours
-  max_stale_seconds: 604800   # 7 days
+  disk_ttl_seconds: 86400        # 24 hours
+  max_stale_seconds: 604800      # 7 days
   background_refresh: true
+  disk_ttl_jitter_factor: 0.1    # ±10% per-call jitter on the default TTL
 ```
 
 ### SHOULD Constraints
@@ -309,14 +310,19 @@ cache:
 1. **SHOULD** cache SDK models to disk for session persistence
 2. **SHOULD** respect TTL from `config/model_cache.yaml`
 3. **SHOULD** invalidate cache when stale (exceeds max_stale_seconds)
+4. **SHOULD** apply a per-call random multiplier in
+   `[1 - disk_ttl_jitter_factor, 1 + disk_ttl_jitter_factor]` to the
+   effective TTL when the caller does not specify `max_age_seconds`,
+   to spread cache-refresh work across coexisting host processes that
+   share a `cache_home`. The nominal `disk_ttl_seconds` MUST NOT be
+   exposed to callers as a fixed boundary; jitter MAY be disabled by
+   setting `disk_ttl_jitter_factor: 0.0`.
 
-### Cross-Platform Cache Directory
+### Cache Directory
 
-| Platform | Directory |
-|----------|-----------|
-| Windows | `%LOCALAPPDATA%/amplifier/provider-github-copilot/` |
-| macOS | `~/Library/Caches/amplifier/provider-github-copilot/` |
-| Linux | `$XDG_CACHE_HOME/amplifier/provider-github-copilot/` |
+The on-disk cache directory is governed by `filesystem-layout:Paths:MUST:2`
+and the cross-package resolution rule in `filesystem-layout:Wiring:MUST:4`.
+This section MUST NOT restate path layout.
 
 ### Test Anchors
 
@@ -325,6 +331,7 @@ cache:
 | `behaviors:ModelCache:SHOULD:1` | Persists to disk | `test_model_cache.py::test_write_cache_creates_file` |
 | `behaviors:ModelCache:SHOULD:2` | Respects TTL | `test_model_cache.py::test_read_cache_returns_none_when_stale` |
 | `behaviors:ModelCache:SHOULD:3` | Invalidates when stale | `test_model_cache.py::test_read_cache_respects_max_stale` |
+| `behaviors:ModelCache:SHOULD:4` | Jittered default TTL | `test_model_cache.py::test_default_ttl_is_jittered_within_factor`; `test_model_cache.py::test_explicit_max_age_seconds_bypasses_jitter` |
 
 ---
 
