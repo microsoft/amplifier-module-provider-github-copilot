@@ -31,6 +31,7 @@ from .sdk_adapter import (
 )
 
 if TYPE_CHECKING:
+    from .provider import _StreamingContext
     from .streaming import EventConfig
 
 logger = logging.getLogger(__name__)
@@ -42,24 +43,34 @@ def _extract_delta_text(sdk_event: Any) -> str | None:
     Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
 
     Handles SDK v0.3.0 nested data structure:
-    - event.data.delta_content for text deltas
+    - event.data.delta_content for text deltas (object-style SDK events)
+    - event["data"]["delta_content"] for dict-style events (tests and some SDK variants)
     - Direct string content as fallback
 
     Args:
-        sdk_event: SDK SessionEvent object
+        sdk_event: SDK SessionEvent object or dict
 
     Returns:
         Extracted text delta or None if not found
     """
-    # Try nested data structure first (SDK v0.3.0)
+    # Try nested data structure first (SDK v0.3.0 object-style)
     sdk_data = getattr(sdk_event, "data", None)
+    if sdk_data is None and isinstance(sdk_event, dict):
+        # Also handle dict-style events (used in tests and some SDK variants)
+        sdk_data = sdk_event.get("data")  # type: ignore[union-attr]
     if sdk_data is not None:
+        # Try attribute access (SDK objects)
         delta_content = getattr(sdk_data, "delta_content", None)
+        if delta_content is None and isinstance(sdk_data, dict):
+            # Also handle dict-style nested data
+            delta_content = sdk_data.get("delta_content")  # type: ignore[union-attr]
         if delta_content and isinstance(delta_content, str):
             return delta_content
 
     # Fallback: check direct delta_content attribute
     delta_content = getattr(sdk_event, "delta_content", None)
+    if delta_content is None and isinstance(sdk_event, dict):
+        delta_content = sdk_event.get("delta_content")  # type: ignore[union-attr]
     if delta_content and isinstance(delta_content, str):
         return delta_content
 
@@ -88,7 +99,8 @@ class EventRouter:
         ttft_state: dict[str, Any],
         ttft_threshold_ms: int,
         event_config: EventConfig,
-        emit_streaming_content: Callable[[Any], None],
+        emit_streaming_content: Callable[[Any], None] | None = None,
+        stream_ctx: _StreamingContext | None = None,
     ) -> None:
         """Initialize event router with all required dependencies.
 
@@ -101,7 +113,10 @@ class EventRouter:
             ttft_state: Mutable dict for TTFT tracking
             ttft_threshold_ms: TTFT warning threshold
             event_config: Event classification config
-            emit_streaming_content: Callback for progressive streaming
+            emit_streaming_content: Deprecated legacy callback. Prefer stream_ctx.
+            stream_ctx: Per-call streaming context for the five-event contract.
+                        If provided, stream events are routed here. If None, falls
+                        back to emit_streaming_content (legacy path).
         """
         self._queue = queue
         self._idle = idle_event
@@ -112,6 +127,7 @@ class EventRouter:
         self._ttft_threshold_ms = ttft_threshold_ms
         self._config = event_config
         self._emit_streaming = emit_streaming_content
+        self._stream_ctx = stream_ctx
 
     def __call__(self, sdk_event: Any) -> None:
         """Handle incoming SDK event.
@@ -269,17 +285,35 @@ class EventRouter:
         """Emit content deltas for real-time UI updates.
 
         Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+        Contract: provider-streaming-contract.md (five-event contract)
+
+        When stream_ctx is set, routes through the per-call _StreamingContext queue
+        which guarantees block_start -> deltas -> block_end ordering via a single
+        async consumer. When stream_ctx is None (non-streaming path or legacy tests),
+        falls back to the emit_streaming_content callback if available.
         """
-        if event_type in self._config.text_content_types:
-            delta_text = _extract_delta_text(sdk_event)
-            if delta_text:
-                from amplifier_core import TextContent
+        if self._stream_ctx is not None:
+            # New five-event contract path: put events into the ordered queue
+            if event_type in self._config.text_content_types:
+                delta_text = _extract_delta_text(sdk_event)
+                if delta_text:
+                    self._stream_ctx.handle_delta(delta_text, "text")
+            elif event_type in self._config.thinking_content_types:
+                delta_text = _extract_delta_text(sdk_event)
+                if delta_text:
+                    self._stream_ctx.handle_delta(delta_text, "thinking")
+        elif self._emit_streaming is not None:
+            # Legacy path: kept for backward compat with existing tests
+            if event_type in self._config.text_content_types:
+                delta_text = _extract_delta_text(sdk_event)
+                if delta_text:
+                    from amplifier_core import TextContent
 
-                self._emit_streaming(TextContent(text=delta_text))
-        elif event_type in self._config.thinking_content_types:  # pragma: no cover
-            # Thinking content only emitted by models with extended thinking
-            delta_text = _extract_delta_text(sdk_event)
-            if delta_text:
-                from amplifier_core import ThinkingContent
+                    self._emit_streaming(TextContent(text=delta_text))
+            elif event_type in self._config.thinking_content_types:  # pragma: no cover
+                # Thinking content only emitted by models with extended thinking
+                delta_text = _extract_delta_text(sdk_event)
+                if delta_text:
+                    from amplifier_core import ThinkingContent
 
-                self._emit_streaming(ThinkingContent(text=delta_text))
+                    self._emit_streaming(ThinkingContent(text=delta_text))

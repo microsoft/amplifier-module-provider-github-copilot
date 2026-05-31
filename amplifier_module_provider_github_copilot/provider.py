@@ -24,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 from amplifier_core import (
@@ -311,6 +313,149 @@ def _build_retry_config(config: dict[str, Any], defaults: RetryConfig) -> RetryC
         )
 
 
+# =============================================================================
+# Per-Call Streaming State — Provider Streaming Contract
+# Contract: provider-streaming-contract.md
+# =============================================================================
+
+
+@dataclass
+class _StreamingContext:
+    """Per-call streaming state for the five-event streaming contract.
+
+    Lifecycle: one instance per _execute_sdk_completion call (not per self).
+    Concurrent calls each get their own context — no shared state on the provider.
+
+    Ordering guarantee: all events are put into _queue in call order via
+    handle_delta() and close_current_block(). A single consumer coroutine
+    (_run_stream_consumer) drains the queue sequentially, awaiting each emit.
+    This guarantees block_start → deltas → block_end ordering even though the
+    SDK fires synchronous callbacks.
+
+    Contract: provider-streaming-contract.md
+    """
+
+    request_id: str
+    block_index: int = -1
+    current_block_type: str | None = None  # "text" | "thinking" | None (no open block)
+    block_seq: int = 0
+    partial_emitted: bool = False  # True after first block_start
+    _queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = field(default_factory=asyncio.Queue)
+
+    def handle_delta(self, text: str, block_type: str) -> None:
+        """Handle one streaming delta token.
+
+        On first token of a new block_type: emit block_end for any open block,
+        then emit block_start for the new block. Then emit the appropriate delta.
+
+        All values are captured synchronously — safe to call from an SDK callback.
+        """
+        if not text:
+            return  # contract: empty fragments never emitted
+
+        if self.current_block_type != block_type:
+            # Close previous block if one is open
+            if self.current_block_type is not None:
+                self._put(
+                    "llm:stream_block_end",
+                    {
+                        "request_id": self.request_id,
+                        "block_index": self.block_index,
+                        "block_type": self.current_block_type,
+                    },
+                )
+            # Open the new block
+            self.block_index += 1
+            self.block_seq = 0
+            self.current_block_type = block_type
+            self._put(
+                "llm:stream_block_start",
+                {
+                    "request_id": self.request_id,
+                    "block_index": self.block_index,
+                    "block_type": block_type,
+                },
+            )
+            self.partial_emitted = True
+
+        # Emit the delta event
+        seq = self.block_seq  # capture by value before incrementing
+        self.block_seq += 1
+        event_name = (
+            "llm:stream_thinking_delta" if block_type == "thinking" else "llm:stream_block_delta"
+        )
+        self._put(
+            event_name,
+            {
+                "request_id": self.request_id,
+                "block_index": self.block_index,
+                "sequence": seq,
+                "text": text,
+            },
+        )
+
+    def close_current_block(self) -> None:
+        """Emit block_end for the currently open block, if any.
+
+        Call this after TURN_COMPLETE or on content-type transition at the call
+        site (not in handle_delta, since transition end is emitted there already).
+        """
+        if self.current_block_type is not None:
+            self._put(
+                "llm:stream_block_end",
+                {
+                    "request_id": self.request_id,
+                    "block_index": self.block_index,
+                    "block_type": self.current_block_type,
+                },
+            )
+            self.current_block_type = None
+
+    def signal_done(self) -> None:
+        """Put the None sentinel. Consumer stops after draining remaining events."""
+        self._queue.put_nowait(None)
+
+    def _put(self, event_name: str, payload: dict[str, Any]) -> None:
+        """Enqueue one event synchronously. Safe from SDK callback context."""
+        self._queue.put_nowait((event_name, payload))
+
+
+async def _run_stream_consumer(
+    stream_ctx: _StreamingContext,
+    coordinator: Any,
+) -> None:
+    """Ordered async consumer for the streaming event queue.
+
+    Drains stream_ctx._queue one event at a time, awaiting each
+    coordinator.hooks.emit() call. Stopping on the None sentinel guarantees
+    that every event enqueued before signal_done() is delivered in order.
+
+    Ordering guarantee: FIFO queue + single awaiting consumer = strict ordering.
+    No lock needed — asyncio is single-threaded.
+
+    Args:
+        stream_ctx: The per-call streaming context with the event queue.
+        coordinator: Amplifier ModuleCoordinator (or None for no-op).
+    """
+    hooks_available = coordinator is not None and hasattr(coordinator, "hooks")
+    while True:
+        item = await stream_ctx._queue.get()
+        if item is None:
+            break
+        if hooks_available:
+            event_name, payload = item
+            try:
+                await coordinator.hooks.emit(event_name, payload)
+            except Exception as e:
+                from .security_redaction import redact_sensitive_text
+
+                logger.debug(
+                    "[PROVIDER] Stream event '%s' emit failed: %s",
+                    event_name,
+                    redact_sensitive_text(e),
+                )
+
+
 class GitHubCopilotProvider:
     """Provider Protocol implementation for GitHub Copilot.
 
@@ -531,11 +676,22 @@ class GitHubCopilotProvider:
             retry_config = self._retry_config
 
             # Emit llm:request event (contract: observability:Events:MUST:2)
-            use_streaming = self.config.get("use_streaming", True)
+            # Contract: provider-streaming-contract.md — use_streaming config + metadata override
+            use_streaming: bool = self.config.get("use_streaming", True)
+            _meta = getattr(request, "metadata", None)
+            _use_streaming: bool = use_streaming
+            if isinstance(_meta, dict) and _meta.get("stream") is False:
+                # Identity check per contract: `is False` not `==False`
+                _use_streaming = False
+
+            # One request_id per complete() call — shared across all retries
+            # Contract: provider-streaming-contract.md — all five events share request_id
+            request_id = str(uuid.uuid4())
+
             await ctx.emit_request(
                 message_count=len(getattr(request, "messages", [])),
                 tool_count=len(internal_request.tools) if internal_request.tools else 0,
-                streaming=use_streaming,
+                streaming=_use_streaming,
                 timeout=timeout_seconds,
                 raw_request=build_request_payload_for_observability(
                     model=model,
@@ -565,6 +721,8 @@ class GitHubCopilotProvider:
                         system_message=internal_request.system_message,
                         max_tokens=internal_request.max_tokens,
                         reasoning_effort=validated_reasoning_effort,
+                        request_id=request_id,
+                        use_streaming=_use_streaming,
                     )
                     break  # Success
 
@@ -712,6 +870,8 @@ class GitHubCopilotProvider:
                         # so reasoning posture is uniform across the turn;
                         # the contract explicitly mandates BOTH call sites.
                         reasoning_effort=validated_reasoning_effort,
+                        request_id=request_id,
+                        use_streaming=_use_streaming,
                     )
                 except asyncio.CancelledError:
                     # C-2: Same guard for the fake-tool correction path.
@@ -861,6 +1021,8 @@ class GitHubCopilotProvider:
         system_message: str | None = None,
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        request_id: str | None = None,
+        use_streaming: bool = True,
     ) -> None:
         """Execute a single SDK completion, draining events to accumulator.
 
@@ -873,6 +1035,7 @@ class GitHubCopilotProvider:
         Contract: sdk-protection:ToolCapture:MUST:1,2 (first_turn_only, deduplicate)
         Contract: sdk-protection:Session:MUST:3,4 (explicit_abort, abort_timeout)
         Contract: behaviors:Streaming:MUST:1 (TTFT warning)
+        Contract: provider-streaming-contract.md (five-event streaming)
         """
         # DEBUG: Log entry point with key parameters
         logger.debug(
@@ -927,6 +1090,20 @@ class GitHubCopilotProvider:
                     config=sdk_protection.tool_capture,
                 )
 
+                # Create per-call streaming context (NOT on self — concurrent calls safe)
+                # Contract: provider-streaming-contract.md
+                stream_ctx: _StreamingContext | None = None
+                consumer_task: asyncio.Task[None] | None = None
+                if use_streaming and request_id:
+                    stream_ctx = _StreamingContext(request_id=request_id)
+                    # Start the ordered consumer BEFORE any SDK events arrive.
+                    # The consumer awaits items from stream_ctx._queue sequentially,
+                    # guaranteeing block_start → deltas → block_end ordering.
+                    consumer_task = asyncio.get_running_loop().create_task(
+                        _run_stream_consumer(stream_ctx, self.coordinator),
+                        name=f"stream_consumer_{request_id[:8]}",
+                    )
+
                 # Create EventRouter for SDK event handling
                 # Extracted from inline closure per Comprehensive Review P1.6
                 # Contract: streaming-contract:abort-on-capture:MUST:1
@@ -940,7 +1117,7 @@ class GitHubCopilotProvider:
                     ttft_state=ttft_state,
                     ttft_threshold_ms=streaming_config.ttft_warning_ms,
                     event_config=event_config,
-                    emit_streaming_content=self._emit_streaming_content,
+                    stream_ctx=stream_ctx,
                 )
 
                 unsubscribe = sdk_session.on(event_handler)
@@ -969,6 +1146,24 @@ class GitHubCopilotProvider:
                     logger.debug("[SDK_COMPLETION] idle_event received, draining queue...")
 
                     if error_holder:
+                        # Error path: emit stream_aborted if we already started streaming
+                        # Contract: provider-streaming-contract.md — aborted ONLY after partial emit
+                        if stream_ctx is not None and stream_ctx.partial_emitted:
+                            err = error_holder[0]
+                            stream_ctx._put(
+                                "llm:stream_aborted",
+                                {
+                                    "request_id": stream_ctx.request_id,
+                                    "error": {
+                                        "type": type(err).__name__,
+                                        "msg": str(err),
+                                    },
+                                },
+                            )
+                        if stream_ctx is not None:
+                            stream_ctx.signal_done()
+                            if consumer_task is not None:
+                                await consumer_task
                         raise error_holder[0]
 
                     # Add captured tools to accumulator FIRST, before draining event_queue
@@ -1049,6 +1244,13 @@ class GitHubCopilotProvider:
                         accumulator.usage,
                         accumulator.finish_reason,
                     )
+                    # Success path: close open block, flush consumer
+                    # Contract: provider-streaming-contract.md — block_end before flush
+                    if stream_ctx is not None:
+                        stream_ctx.close_current_block()
+                        stream_ctx.signal_done()
+                        if consumer_task is not None:
+                            await consumer_task
                 finally:
                     unsubscribe()
 

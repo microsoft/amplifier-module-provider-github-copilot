@@ -569,41 +569,51 @@ class TestThinkingDeltaNotEmittedPerToken:
     Granularity is controlled by events.yaml thinking_content_types.
     """
 
-    def test_thinking_content_types_empty_in_events_yaml(self) -> None:
-        """streaming-contract:ProgressiveStreaming:SHOULD:5.
+    def test_thinking_content_types_enabled_for_streaming_contract(self) -> None:
+        """provider-streaming-contract: reasoning_delta must be in thinking_content_types.
 
-        events.yaml must suppress per-token thinking emission.
-        The events.yaml streaming_emission.thinking_content_types MUST be empty
-        so that EventRouter._emit_progressive_content never emits ThinkingContent
-        per delta. Verified by loading real EventConfig from events.yaml.
+        The five-event streaming contract requires per-token llm:stream_thinking_delta
+        emission. events.yaml streaming_emission.thinking_content_types MUST include
+        assistant.reasoning_delta so EventRouter routes thinking deltas through
+        stream_ctx.handle_delta(text, "thinking") when stream_ctx is provided.
+
+        This replaces the old SHOULD:5 empty-set test which suppressed per-token
+        ThinkingContent emission. With the new contract, thinking deltas are routed
+        through the ordered consumer as stream_thinking_delta events, not ThinkingContent.
         """
         from amplifier_module_provider_github_copilot.streaming import load_event_config
 
         event_config = load_event_config()
 
-        assert event_config.thinking_content_types == set(), (
-            "streaming_emission.thinking_content_types must be empty in events.yaml "
-            "to prevent per-token ThinkingContent emission (SHOULD:5). "
+        assert "assistant.reasoning_delta" in event_config.thinking_content_types, (
+            "assistant.reasoning_delta must be in streaming_emission.thinking_content_types "
+            "in events.yaml for the five-event streaming contract. "
             f"Got: {event_config.thinking_content_types}"
         )
 
-    def test_thinking_delta_does_not_trigger_emit_callback(self) -> None:
-        """streaming-contract:ProgressiveStreaming:SHOULD:5 — reasoning delta must not call emit.
+    def test_thinking_delta_routes_to_stream_ctx_not_legacy_callback(self) -> None:
+        """provider-streaming-contract: reasoning delta routes to stream_ctx, not legacy callback.
 
-        When EventRouter receives an assistant.reasoning_delta event and
-        thinking_content_types is empty (per events.yaml policy), the
-        emit_streaming_content callback MUST NOT be called.
+        When EventRouter is given a stream_ctx (new streaming contract path),
+        reasoning deltas MUST go through stream_ctx.handle_delta(text, "thinking")
+        and must NOT call emit_streaming_content (the legacy callback).
+
+        This verifies the contract boundary: stream_ctx present -> new path.
+        emit_streaming_content absent when stream_ctx is used.
         """
         import asyncio
 
         from amplifier_module_provider_github_copilot.event_router import EventRouter
+        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
         )
         from amplifier_module_provider_github_copilot.streaming import load_event_config
 
-        emitted: list[Any] = []
-        event_config = load_event_config()  # real config — thinking_content_types must be empty
+        legacy_emitted: list[Any] = []
+        event_config = load_event_config()  # real config — thinking_content_types now populated
+
+        stream_ctx = _StreamingContext(request_id="test-req")
 
         router = EventRouter(
             queue=asyncio.Queue(maxsize=256),
@@ -614,20 +624,31 @@ class TestThinkingDeltaNotEmittedPerToken:
             ttft_state={"checked": False, "start_time": 0.0},
             ttft_threshold_ms=500,
             event_config=event_config,
-            emit_streaming_content=emitted.append,
+            emit_streaming_content=legacy_emitted.append,  # should NOT be called
+            stream_ctx=stream_ctx,  # new path — thinking goes here
         )
 
-        # Simulate a reasoning delta — the per-token thinking chunk the SDK sends
+        # Simulate a reasoning delta
         reasoning_event: dict[str, Any] = {
             "type": "assistant.reasoning_delta",
             "data": {"delta_content": "The"},
         }
         router(reasoning_event)
 
-        assert emitted == [], (
-            "emit_streaming_content must NOT be called for reasoning deltas "
-            "when thinking_content_types is empty (SHOULD:5). "
-            f"Got {len(emitted)} emission(s)."
+        # Legacy callback must NOT be called when stream_ctx is provided
+        assert legacy_emitted == [], (
+            "emit_streaming_content (legacy) must NOT be called when stream_ctx is present. "
+            f"Got {len(legacy_emitted)} legacy emission(s)."
+        )
+
+        # stream_ctx must have received the thinking delta
+        events: list[Any] = []
+        while not stream_ctx._queue.empty():  # type: ignore[attr-defined]
+            events.append(stream_ctx._queue.get_nowait())  # type: ignore[attr-defined]
+
+        thinking_deltas = [e for e in events if e[0] == "llm:stream_thinking_delta"]
+        assert len(thinking_deltas) >= 1, (
+            f"stream_ctx must receive llm:stream_thinking_delta. Got events: {[e[0] for e in events]}"
         )
 
 

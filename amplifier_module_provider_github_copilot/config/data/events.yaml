@@ -18,11 +18,13 @@ streaming_emission:
   text_content_types:
     - assistant.message_delta
     - assistant.streaming_delta
-  # thinking_content_types is intentionally empty: per-token ThinkingContent emission suppressed.
-  # Per-delta emission renders one 🧠 box per streaming chunk in the CLI.
-  # Full consolidated ThinkingContent is present in StreamingChatResponse.content_blocks.
-  # Contract: streaming-contract:ProgressiveStreaming:SHOULD:5
-  thinking_content_types: []
+  # thinking_content_types: enabled for provider-streaming-contract compliance.
+  # EventRouter uses these types to call stream_ctx.handle_delta(text, "thinking"),
+  # emitting llm:stream_thinking_delta per token.
+  # The old per-token ThinkingContent (llm:content_block) is retired.
+  # Contract: provider-streaming-contract:llm:stream_thinking_delta
+  thinking_content_types:
+    - assistant.reasoning_delta
 
 event_classifications:
   bridge:
