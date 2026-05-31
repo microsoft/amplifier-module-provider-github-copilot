@@ -127,7 +127,13 @@ class TestStreamingContext:
 
         ctx._queue.get_nowait()  # discard block_start  # type: ignore[attr-defined]
         delta_payload = ctx._queue.get_nowait()[1]  # type: ignore[attr-defined]
-        assert delta_payload == {"request_id": "r1", "block_index": 0, "sequence": 0, "text": "Hi"}
+        assert delta_payload == {
+            "request_id": "r1",
+            "block_index": 0,
+            "block_type": "text",
+            "sequence": 0,
+            "text": "Hi",
+        }
 
     def test_per_block_sequence_increments(self) -> None:
         """Sequence counter increments within a block."""
@@ -160,11 +166,14 @@ class TestStreamingContext:
         while not ctx._queue.empty():  # type: ignore[attr-defined]
             events.append(ctx._queue.get_nowait())  # type: ignore[attr-defined]
 
-        text_delta = next(e for e in events if e[0] == "llm:stream_block_delta")
+        text_delta = next(
+            e for e in events
+            if e[0] == "llm:stream_block_delta" and e[1].get("block_type") == "text"
+        )
         assert text_delta[1]["sequence"] == 0
 
     def test_thinking_delta_event_name(self) -> None:
-        """Thinking deltas use llm:stream_thinking_delta."""
+        """Thinking deltas use llm:stream_block_delta with block_type='thinking'."""
         from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
 
         ctx = _StreamingContext(request_id="r1")
@@ -174,8 +183,10 @@ class TestStreamingContext:
         while not ctx._queue.empty():  # type: ignore[attr-defined]
             events.append(ctx._queue.get_nowait())  # type: ignore[attr-defined]
 
-        delta_names = [e[0] for e in events if "delta" in e[0]]
-        assert delta_names == ["llm:stream_thinking_delta"]
+        delta_events = [e for e in events if "delta" in e[0]]
+        assert len(delta_events) == 1
+        assert delta_events[0][0] == "llm:stream_block_delta"
+        assert delta_events[0][1]["block_type"] == "thinking"
 
     def test_transition_emits_block_end_then_new_block_start(self) -> None:
         """Transitioning from thinking to text emits block_end, block_start."""
@@ -190,12 +201,15 @@ class TestStreamingContext:
             events.append(ctx._queue.get_nowait())  # type: ignore[attr-defined]
 
         names = [e[0] for e in events]
-        # thinking_start, thinking_delta, thinking_end, text_start, text_delta
+        payloads = [e[1] for e in events]
+        # thinking_start, block_delta(thinking), thinking_end, text_start, block_delta(text)
         assert names[0] == "llm:stream_block_start"
-        assert names[1] == "llm:stream_thinking_delta"
+        assert names[1] == "llm:stream_block_delta"
+        assert payloads[1]["block_type"] == "thinking"
         assert names[2] == "llm:stream_block_end"
         assert names[3] == "llm:stream_block_start"
         assert names[4] == "llm:stream_block_delta"
+        assert payloads[4]["block_type"] == "text"
 
     def test_block_end_payload(self) -> None:
         """block_end payload has request_id, block_index, block_type."""
@@ -374,7 +388,7 @@ class TestEventRouterStreamingIntegration:
 
     @pytest.mark.asyncio
     async def test_thinking_delta_queues_thinking_events(self) -> None:
-        """SDK reasoning delta -> EventRouter -> stream_block_start(thinking), stream_thinking_delta."""
+        """SDK reasoning delta -> EventRouter -> stream_block_start(thinking), stream_block_delta(thinking)."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
             _StreamingContext,
             _run_stream_consumer,
@@ -393,7 +407,10 @@ class TestEventRouterStreamingIntegration:
 
         names = _emitted_names(coordinator)
         payloads = _emitted_payloads(coordinator)
-        assert "llm:stream_thinking_delta" in names
+        assert "llm:stream_block_delta" in names
+        # The delta carries block_type="thinking"
+        thinking_delta = next(p for n, p in zip(names, payloads) if n == "llm:stream_block_delta")
+        assert thinking_delta["block_type"] == "thinking"
         start = next(p for n, p in zip(names, payloads) if n == "llm:stream_block_start")
         assert start["block_type"] == "thinking"
 
@@ -514,14 +531,18 @@ class TestEventRouterStreamingIntegration:
         await _run_stream_consumer(ctx, coordinator)
 
         names = _emitted_names(coordinator)
+        payloads = _emitted_payloads(coordinator)
         assert names == [
             "llm:stream_block_start",
-            "llm:stream_thinking_delta",
+            "llm:stream_block_delta",   # thinking block — block_type="thinking"
             "llm:stream_block_end",
             "llm:stream_block_start",
-            "llm:stream_block_delta",
+            "llm:stream_block_delta",   # text block — block_type="text"
             "llm:stream_block_end",
         ]
+        deltas = [(n, p) for n, p in zip(names, payloads) if n == "llm:stream_block_delta"]
+        assert deltas[0][1]["block_type"] == "thinking"
+        assert deltas[1][1]["block_type"] == "text"
 
 
 # ---------------------------------------------------------------------------
@@ -689,8 +710,8 @@ class TestEventsYamlThinkingTypes:
     def test_reasoning_delta_in_thinking_content_types(self) -> None:
         """assistant.reasoning_delta must appear in thinking_content_types.
 
-        The new streaming contract emits llm:stream_thinking_delta for each
-        reasoning delta. Previously this set was empty (old ThinkingContent
+        The new streaming contract emits llm:stream_block_delta with block_type="thinking"
+        for each reasoning delta. Previously this set was empty (old ThinkingContent
         per-token was suppressed); now it must be populated.
         """
         from amplifier_module_provider_github_copilot.streaming import load_event_config
@@ -698,5 +719,5 @@ class TestEventsYamlThinkingTypes:
         event_config = load_event_config()
         assert "assistant.reasoning_delta" in event_config.thinking_content_types, (
             "assistant.reasoning_delta must be in thinking_content_types to enable "
-            "per-token llm:stream_thinking_delta emission."
+            "per-token llm:stream_block_delta(block_type=thinking) emission."
         )

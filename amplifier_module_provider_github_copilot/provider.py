@@ -381,14 +381,15 @@ class _StreamingContext:
         # Emit the delta event
         seq = self.block_seq  # capture by value before incrementing
         self.block_seq += 1
-        event_name = (
-            "llm:stream_thinking_delta" if block_type == "thinking" else "llm:stream_block_delta"
-        )
+        # block_type is the function argument — captured by value into the payload dict.
+        # Do NOT use self.current_block_type here; it is a mutable shared field that may
+        # change before the FIFO consumer task processes this queue item.
         self._put(
-            event_name,
+            "llm:stream_block_delta",
             {
                 "request_id": self.request_id,
                 "block_index": self.block_index,
+                "block_type": block_type,
                 "sequence": seq,
                 "text": text,
             },

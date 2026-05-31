@@ -20,9 +20,9 @@ streaming_emission:
     - assistant.streaming_delta
   # thinking_content_types: enabled for provider-streaming-contract compliance.
   # EventRouter uses these types to call stream_ctx.handle_delta(text, "thinking"),
-  # emitting llm:stream_thinking_delta per token.
+  # emitting llm:stream_block_delta with block_type="thinking" per token.
   # The old per-token ThinkingContent (llm:content_block) is retired.
-  # Contract: provider-streaming-contract:llm:stream_thinking_delta
+  # Contract: provider-streaming-contract:llm:stream_block_delta
   thinking_content_types:
     - assistant.reasoning_delta
 

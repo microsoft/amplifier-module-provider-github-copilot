@@ -572,14 +572,15 @@ class TestThinkingDeltaNotEmittedPerToken:
     def test_thinking_content_types_enabled_for_streaming_contract(self) -> None:
         """provider-streaming-contract: reasoning_delta must be in thinking_content_types.
 
-        The five-event streaming contract requires per-token llm:stream_thinking_delta
-        emission. events.yaml streaming_emission.thinking_content_types MUST include
-        assistant.reasoning_delta so EventRouter routes thinking deltas through
+        The four-event streaming contract requires per-token llm:stream_block_delta
+        with block_type="thinking" emission. events.yaml streaming_emission.thinking_content_types
+        MUST include assistant.reasoning_delta so EventRouter routes thinking deltas through
         stream_ctx.handle_delta(text, "thinking") when stream_ctx is provided.
 
         This replaces the old SHOULD:5 empty-set test which suppressed per-token
         ThinkingContent emission. With the new contract, thinking deltas are routed
-        through the ordered consumer as stream_thinking_delta events, not ThinkingContent.
+        through the ordered consumer as block_delta events with block_type="thinking",
+        not ThinkingContent.
         """
         from amplifier_module_provider_github_copilot.streaming import load_event_config
 
@@ -587,7 +588,7 @@ class TestThinkingDeltaNotEmittedPerToken:
 
         assert "assistant.reasoning_delta" in event_config.thinking_content_types, (
             "assistant.reasoning_delta must be in streaming_emission.thinking_content_types "
-            "in events.yaml for the five-event streaming contract. "
+            "in events.yaml for the four-event streaming contract. "
             f"Got: {event_config.thinking_content_types}"
         )
 
@@ -646,9 +647,13 @@ class TestThinkingDeltaNotEmittedPerToken:
         while not stream_ctx._queue.empty():  # type: ignore[attr-defined]
             events.append(stream_ctx._queue.get_nowait())  # type: ignore[attr-defined]
 
-        thinking_deltas = [e for e in events if e[0] == "llm:stream_thinking_delta"]
+        thinking_deltas = [
+            e for e in events
+            if e[0] == "llm:stream_block_delta" and e[1].get("block_type") == "thinking"
+        ]
         assert len(thinking_deltas) >= 1, (
-            f"stream_ctx must receive llm:stream_thinking_delta. Got events: {[e[0] for e in events]}"
+            "stream_ctx must receive llm:stream_block_delta with block_type='thinking'. "
+            f"Got events: {[e[0] for e in events]}"
         )
 
 
