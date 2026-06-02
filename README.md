@@ -127,7 +127,7 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.0b10; run `amplifier provider models github-copilot` for the live list.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.0; run `amplifier provider models github-copilot` for the live list.
 
 **Routing:**
 
@@ -509,7 +509,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk==1.0.0b10`
+- `github-copilot-sdk==1.0.0`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize

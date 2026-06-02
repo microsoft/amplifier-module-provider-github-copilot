@@ -156,6 +156,11 @@ event_classifications:
     # tool.execution_complete bridge; forwarding this would double-emit
     # under a different schema.
     - mcp_app.tool_call_complete
+    # SDK v1.0.0b12 — extension-SDK attachment push. MinimalMode disables the
+    # extension surface (enable_skills=False and no extension_sdk_path is ever
+    # passed), so this is unreachable; and it carries no domain value. Same
+    # disposition as session.extensions_loaded above.
+    - session.extensions.attachments_pushed
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:

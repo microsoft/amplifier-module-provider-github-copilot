@@ -267,7 +267,11 @@ async def test_live_malformed_token_does_not_leak_files_to_default_paths(
     pre_amplifier = _relative_set(Path.home() / ".amplifier")
     pre_provider_home = _relative_set(isolated_home) if isolated_home.exists() else set()
 
-    from amplifier_core.llm_errors import ConfigurationError, ProviderUnavailableError
+    from amplifier_core.llm_errors import (
+        AuthenticationError,
+        ConfigurationError,
+        ProviderUnavailableError,
+    )
 
     from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider as Provider
     from amplifier_module_provider_github_copilot.sdk_adapter import client as _client_mod
@@ -278,8 +282,12 @@ async def test_live_malformed_token_does_not_leak_files_to_default_paths(
 
         # A4: complete() drives SDK subprocess startup where token validation occurs.
         # list_models() routes through fetch_and_map_models (patchable) and never
-        # reaches the SDK auth layer.
-        with pytest.raises((ProviderUnavailableError, ConfigurationError)):
+        # reaches the SDK auth layer. The bundled CLI validates the token against
+        # GitHub server-side, so a malformed token surfaces as a 401 that the error
+        # contract maps to AuthenticationError (errors.yaml: "401"/unauthorized);
+        # ProviderUnavailableError/ConfigurationError remain accepted for non-auth
+        # subprocess-startup failures.
+        with pytest.raises((AuthenticationError, ProviderUnavailableError, ConfigurationError)):
             await p.complete(  # type: ignore[arg-type]
                 {"messages": [{"role": "user", "content": "ping"}], "model": "claude-opus-4.5"},  # pyright: ignore[reportArgumentType]
                 model="claude-opus-4.5",

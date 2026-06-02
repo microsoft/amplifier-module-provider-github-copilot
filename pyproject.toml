@@ -27,7 +27,11 @@ dependencies = [
     # - v1.0.0b9: on_list_models + mode kwargs (additive)
     # - v1.0.0b10: 8 new create_session kwargs + telemetry consolidation
     #   (MinimalMode:MUST:7-15)
-    "github-copilot-sdk==1.0.0b10",
+    # - v1.0.0b12: bundled CLI 1.0.57; copilot.rpc stable public shim;
+    #   one new SessionEventType (session.extensions.attachments_pushed)
+    # - v1.0.0 (GA): byte-identical Python source to b12 (bundled CLI 1.0.57);
+    #   stable release stamp — no API or behavior change vs b12
+    "github-copilot-sdk==1.0.0",
     # PyYAML for config loading
     "pyyaml>=6.0",
     # PEP 440 version parser used by the import-time SDK floor check

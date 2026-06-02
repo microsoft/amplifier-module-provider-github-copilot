@@ -480,7 +480,7 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
             _check_sdk_version("1.0.0b6")
         msg = str(exc_info.value)
         assert "github-copilot-sdk" in msg
-        assert "pip install 'github-copilot-sdk==1.0.0b10'" in msg
+        assert "pip install 'github-copilot-sdk==1.0.0'" in msg
         assert "amplifier provider install" in msg
 
 
