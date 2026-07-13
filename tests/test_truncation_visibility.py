@@ -140,6 +140,7 @@ class TestConvertChatRequestMaxOutputTokens:
         request.attachments = None
         request.max_output_tokens = 256
         request.reasoning_effort = None
+        request.context_tier = None
 
         result = convert_chat_request(request)
 
@@ -157,6 +158,7 @@ class TestConvertChatRequestMaxOutputTokens:
         request.attachments = None
         request.max_output_tokens = None
         request.reasoning_effort = None
+        request.context_tier = None
 
         result = convert_chat_request(request)
 
@@ -381,6 +383,7 @@ class TestCorrectionPathClampsMaxTokens:
                 tools: list[Any] | None = None,
                 max_tokens: int | None = None,
                 reasoning_effort: str | None = None,
+                context_tier: str | None = None,
             ) -> AsyncIterator[MockSDKSession]:
                 call_index_cell[0] += 1
                 idx = call_index_cell[0]
@@ -412,6 +415,7 @@ class TestCorrectionPathClampsMaxTokens:
         request.attachments = None
         request.max_output_tokens = max_output_tokens
         request.reasoning_effort = None
+        request.context_tier = None
         # Non-empty tools → tools_available=True → fake-tool path active
         request.tools = [{"name": "bash", "description": "Run shell commands", "parameters": {}}]
         return request

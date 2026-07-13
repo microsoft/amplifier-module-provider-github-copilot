@@ -212,6 +212,7 @@ class TestE2ECompletionWithRealisticData:
             system_message: str | None = None,
             max_tokens: int | None = None,
             reasoning_effort: str | None = None,
+            context_tier: str | None = None,
         ):
             # Use correct SDK API pattern (send + on)
             mock_session = MagicMock(spec=_SessionSpec)

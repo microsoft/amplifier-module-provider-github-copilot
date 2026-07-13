@@ -325,6 +325,7 @@ class TestRealApiProof:
             tools=None,
             max_output_tokens=16,
             reasoning_effort=None,
+            context_tier=None,
             metadata={"stream": False},
         )
 

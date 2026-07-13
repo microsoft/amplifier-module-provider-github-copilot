@@ -506,6 +506,7 @@ class MockCopilotClientWrapper:
         self.last_tools: list[Any] | None = None
         self.last_max_tokens: int | None = None
         self.last_reasoning_effort: str | None = None
+        self.last_context_tier: str | None = None
 
     def is_healthy(self) -> bool:
         """Always healthy for testing (no real subprocess)."""
@@ -528,6 +529,7 @@ class MockCopilotClientWrapper:
         tools: list[Any] | None = None,
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        context_tier: str | None = None,
     ) -> AsyncIterator[MockSDKSession]:
         """Create a mock session context manager.
 
@@ -539,6 +541,7 @@ class MockCopilotClientWrapper:
             tools: Tool definitions (stored for assertions).
             max_tokens: Per-session output token cap (stored for assertions).
             reasoning_effort: Per-session reasoning effort (stored for assertions).
+            context_tier: Per-session context-window tier (stored for assertions).
 
         Yields:
             MockSDKSession configured with events.
@@ -555,6 +558,7 @@ class MockCopilotClientWrapper:
         self.last_tools = tools
         self.last_max_tokens = max_tokens
         self.last_reasoning_effort = reasoning_effort
+        self.last_context_tier = context_tier
 
         # Create session with configured events
         self._session = self._session_class(

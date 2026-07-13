@@ -29,6 +29,7 @@ def _make_standard_request(model: str = "claude-opus-4.5") -> MagicMock:
     request.tools = None
     request.max_output_tokens = None
     request.reasoning_effort = None
+    request.context_tier = None
     request.temperature = None
     request.stop = None
     request.stream = None
@@ -1168,6 +1169,7 @@ class TestCancelledErrorTranslation:
                 tools=None,
                 max_tokens=None,
                 reasoning_effort=None,
+                context_tier=None,
             ):
                 nonlocal call_count
                 call_count += 1

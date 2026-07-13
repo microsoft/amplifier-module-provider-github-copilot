@@ -964,3 +964,51 @@ class TestWriteCacheOverwrite:
         # Verify it's the second content (not first)
         assert result[0].id == "second-model"
         assert result[0].name == "Second Model"
+
+
+# =============================================================================
+# Per-tier prompt-budget fields: round-trip + back-compat
+# Contract: behaviors:ModelCache:SHOULD:1, sdk-boundary:ModelDiscovery:MUST:2
+# =============================================================================
+
+
+class TestTierWindowCacheRoundTrip:
+    """The two prompt-budget fields survive write -> read, and pre-existing
+    caches written before these fields existed still load (no version bump)."""
+
+    def test_new_fields_round_trip(self, tmp_path: Path) -> None:
+        models = [
+            CopilotModelInfo(
+                id="claude-opus-4.8",
+                name="Claude Opus 4.8",
+                context_window=1_000_000,
+                max_output_tokens=64_000,
+                context_window_default=200_000,
+                context_window_long=936_000,
+            )
+        ]
+        cache_file = tmp_path / "models_cache.json"
+        write_cache(models, cache_file)
+
+        result = read_cache(cache_file)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0].context_window_default == 200_000
+        assert result[0].context_window_long == 936_000
+
+    def test_old_cache_without_new_fields_loads(self, tmp_path: Path) -> None:
+        # A cache written by a prior provider version has no tier-budget keys.
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(make_cache_data("claude-opus-4.5")), encoding="utf-8")
+
+        result = read_cache(cache_file)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        # Missing tier keys load as the 0 sentinel (not the display ceiling), so
+        # get_info routes to the static policy window instead of over-reporting
+        # the budget. version stays "1.0" — additive fields, no bump.
+        info = result[0]
+        assert info.context_window_default == 0
+        assert info.context_window_long == 0

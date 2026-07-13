@@ -59,6 +59,35 @@ class MockModelCapabilities:
 
 
 @dataclass
+class MockModelBillingTokenPricesLongContext:
+    """Mock SDK ModelBillingTokenPricesLongContext.
+
+    ``context_max`` is the long-context-tier prompt budget (max_prompt_tokens).
+    """
+
+    context_max: int | None = None
+
+
+@dataclass
+class MockModelBillingTokenPrices:
+    """Mock SDK ModelBillingTokenPrices.
+
+    ``context_max`` is the default-tier prompt budget (max_prompt_tokens);
+    ``long_context`` carries the long-tier prompt budget when the model is tiered.
+    """
+
+    context_max: int | None = None
+    long_context: MockModelBillingTokenPricesLongContext | None = None
+
+
+@dataclass
+class MockModelBilling:
+    """Mock SDK ModelBilling (lives on ModelInfo.billing)."""
+
+    token_prices: MockModelBillingTokenPrices | None = None
+
+
+@dataclass
 class MockSDKModelInfo:
     """Mock SDK ModelInfo - replicates copilot.client.ModelInfo structure."""
 
@@ -91,8 +120,33 @@ def make_sdk_model_info(
     supports_reasoning_effort: bool = False,
     supported_reasoning_efforts: list[str] | None = None,
     default_reasoning_effort: str | None = None,
+    billing_context_max: int | None = None,
+    billing_long_context_max: int | None = None,
+    with_billing: bool = False,
 ) -> MockSDKModelInfo:
-    """Create a mock SDK ModelInfo for testing."""
+    """Create a mock SDK ModelInfo for testing.
+
+    Billing seam: pass ``billing_context_max`` (and optionally
+    ``billing_long_context_max``) to attach a tiered ``billing.token_prices``
+    surface. ``with_billing=True`` attaches a billing object whose
+    ``token_prices`` is None (the "billing present but no prices" shape).
+    Leaving all billing args unset yields ``billing=None`` (untiered model).
+    """
+    billing: MockModelBilling | None = None
+    if with_billing:
+        billing = MockModelBilling(token_prices=None)
+    elif billing_context_max is not None or billing_long_context_max is not None:
+        long_context = (
+            MockModelBillingTokenPricesLongContext(context_max=billing_long_context_max)
+            if billing_long_context_max is not None
+            else None
+        )
+        billing = MockModelBilling(
+            token_prices=MockModelBillingTokenPrices(
+                context_max=billing_context_max,
+                long_context=long_context,
+            )
+        )
     return MockSDKModelInfo(
         id=model_id,
         name=name,
@@ -106,6 +160,7 @@ def make_sdk_model_info(
                 max_context_window_tokens=context_window,
             ),
         ),
+        billing=billing,
         supported_reasoning_efforts=supported_reasoning_efforts,
         default_reasoning_effort=default_reasoning_effort,
     )
@@ -178,11 +233,20 @@ class TestSDKToCopilotModelInfoTranslation:
 
         result = sdk_model_to_copilot_model(sdk_model)
 
+        from amplifier_module_provider_github_copilot.config_loader import (
+            get_default_context_window,
+            get_default_max_output_tokens,
+        )
+
         assert isinstance(result, CopilotModelInfo)
         assert result.id == "test-model"
-        # Should use policy defaults from config/models.yaml
-        assert result.context_window > 0
-        assert result.max_output_tokens > 0
+        # None limits → exact policy fallbacks (not merely "> 0").
+        assert result.context_window == get_default_context_window()
+        assert result.max_output_tokens == get_default_max_output_tokens()
+        # No billing + None max_prompt_tokens → both tier budgets collapse to
+        # the static prompt-budget fallback, and long == default.
+        assert result.context_window_default == get_default_context_window()
+        assert result.context_window_long == result.context_window_default
 
     def test_copilot_model_info_is_frozen(self) -> None:
         """CopilotModelInfo MUST be immutable (frozen dataclass)."""
@@ -236,6 +300,173 @@ class TestSDKToCopilotModelInfoTranslation:
         assert result.supports_reasoning_effort is True
         assert result.supported_reasoning_efforts == ("low", "medium", "high")
         assert result.default_reasoning_effort == "medium"
+
+
+# =============================================================================
+# Per-tier prompt-budget windows from SDK billing surface
+# Contract: sdk-boundary:ModelDiscovery:MUST:2
+# =============================================================================
+
+
+class TestBillingTierWindows:
+    """sdk_model_to_copilot_model derives per-tier prompt budgets from billing.
+
+    The SDK exposes prompt budgets (max_prompt_tokens) per tier on
+    ``billing.token_prices.context_max`` (default) and
+    ``billing.token_prices.long_context.context_max`` (long). These are the
+    numbers compaction must use; ``context_window`` (the 1M display ceiling)
+    is NOT a budget. Mirrors live SDK shapes for opus-4.8 / opus-4.5 / mai.
+    """
+
+    def _translate(self, sdk_model: Any) -> Any:
+        from amplifier_module_provider_github_copilot.models import (
+            sdk_model_to_copilot_model,
+        )
+
+        return sdk_model_to_copilot_model(sdk_model)
+
+    def test_tiered_model_reads_both_prompt_budgets(self) -> None:
+        # opus-4.8 shape: 1M display ceiling, billed prompt budgets 200K/936K.
+        sdk_model = make_sdk_model_info(
+            model_id="claude-opus-4.8",
+            name="Claude Opus 4.8",
+            context_window=1_000_000,
+            max_prompt_tokens=936_000,
+            billing_context_max=200_000,
+            billing_long_context_max=936_000,
+        )
+
+        result = self._translate(sdk_model)
+
+        assert result.context_window_default == 200_000
+        assert result.context_window_long == 936_000
+        # Display ceiling is untouched (still the SDK total window).
+        assert result.context_window == 1_000_000
+
+    def test_dual_semantic_ceiling_differs_from_budget(self) -> None:
+        # Locks the invariant: display ceiling != default prompt budget for a
+        # tiered model. A future refactor collapsing them fails here loudly.
+        sdk_model = make_sdk_model_info(
+            model_id="claude-opus-4.8",
+            context_window=1_000_000,
+            max_prompt_tokens=936_000,
+            billing_context_max=200_000,
+            billing_long_context_max=936_000,
+        )
+
+        result = self._translate(sdk_model)
+
+        assert result.context_window != result.context_window_default
+        assert result.context_window_default == 200_000
+
+    def test_no_billing_falls_back_to_max_prompt_tokens(self) -> None:
+        # opus-4.5 shape: no billing surface => default budget is the limits'
+        # max_prompt_tokens (168K), and long collapses to default.
+        sdk_model = make_sdk_model_info(
+            model_id="claude-opus-4.5",
+            name="Claude Opus 4.5",
+            context_window=200_000,
+            max_prompt_tokens=168_000,
+            billing_context_max=None,
+            billing_long_context_max=None,
+        )
+
+        result = self._translate(sdk_model)
+
+        assert result.context_window_default == 168_000
+        assert result.context_window_long == 168_000
+
+    def test_billing_without_long_context_collapses_long_to_default(self) -> None:
+        # mai shape: billing present, default prompt budget set, no long tier.
+        sdk_model = make_sdk_model_info(
+            model_id="mai-code-1-flash-internal",
+            name="MAI-Code-1-Flash",
+            context_window=256_000,
+            max_prompt_tokens=128_000,
+            billing_context_max=128_000,
+            billing_long_context_max=None,
+        )
+
+        result = self._translate(sdk_model)
+
+        assert result.context_window_default == 128_000
+        assert result.context_window_long == 128_000
+
+    def test_billing_present_but_no_token_prices(self) -> None:
+        # Defensive shape: billing object present, token_prices None => fall to
+        # max_prompt_tokens for default, long collapses to default.
+        sdk_model = make_sdk_model_info(
+            model_id="weird-model",
+            context_window=200_000,
+            max_prompt_tokens=150_000,
+            with_billing=True,
+        )
+
+        result = self._translate(sdk_model)
+
+        assert result.context_window_default == 150_000
+        assert result.context_window_long == 150_000
+
+    def test_all_budgets_strictly_positive(self) -> None:
+        # Regression guard: every reported budget must be > 0 across all billing shapes.
+        for sdk_model in (
+            make_sdk_model_info(
+                model_id="a", billing_context_max=200_000, billing_long_context_max=936_000
+            ),
+            make_sdk_model_info(model_id="b", billing_context_max=None),
+            make_sdk_model_info(model_id="c", with_billing=True),
+        ):
+            result = self._translate(sdk_model)
+            assert result.context_window_default > 0
+            assert result.context_window_long > 0
+
+
+class TestResolveEffectiveWindow:
+    """resolve_effective_window picks the tier budget, guarding the 0 sentinel.
+
+    Pure, sync, no SDK imports — the tier selection mechanism that get_info()
+    delegates to. Contract: provider-protocol:get_info:MUST:5
+    """
+
+    def _info(self, default: int, long: int, ceiling: int = 1_000_000) -> Any:
+        from amplifier_module_provider_github_copilot.models import CopilotModelInfo
+
+        return CopilotModelInfo(
+            id="m",
+            name="M",
+            context_window=ceiling,
+            max_output_tokens=64_000,
+            context_window_default=default,
+            context_window_long=long,
+        )
+
+    def test_long_tier_selected_when_enabled(self) -> None:
+        from amplifier_module_provider_github_copilot.models import (
+            resolve_effective_window,
+        )
+
+        info = self._info(default=200_000, long=936_000)
+        assert resolve_effective_window(info, enable_long_context=True) == 936_000
+
+    def test_default_tier_selected_when_disabled(self) -> None:
+        from amplifier_module_provider_github_copilot.models import (
+            resolve_effective_window,
+        )
+
+        info = self._info(default=200_000, long=936_000)
+        assert resolve_effective_window(info, enable_long_context=False) == 200_000
+
+    def test_zero_sentinel_passes_through_for_static_fallback(self) -> None:
+        from amplifier_module_provider_github_copilot.models import (
+            resolve_effective_window,
+        )
+
+        # Old-cache / unknown shape: both budgets 0. The resolver returns the 0
+        # sentinel verbatim so the caller (get_info) routes to the static policy
+        # window instead of mistaking the display ceiling for a compaction budget.
+        info = self._info(default=0, long=0, ceiling=128_000)
+        assert resolve_effective_window(info, enable_long_context=False) == 0
+        assert resolve_effective_window(info, enable_long_context=True) == 0
 
 
 # =============================================================================
@@ -1076,6 +1307,7 @@ class TestModelTranslationEdgeCases:
             id="test-model",
             name="Test Model",
             capabilities=None,
+            billing=None,
             supported_reasoning_efforts=None,
             default_reasoning_effort=None,
         )
@@ -1106,6 +1338,7 @@ class TestModelTranslationEdgeCases:
                 limits=None,
                 supports=SimpleNamespace(vision=True, reasoning_effort=False),
             ),
+            billing=None,
             supported_reasoning_efforts=None,
             default_reasoning_effort=None,
         )
@@ -1137,6 +1370,7 @@ class TestModelTranslationEdgeCases:
                 ),
                 supports=None,
             ),
+            billing=None,
             supported_reasoning_efforts=None,
             default_reasoning_effort=None,
         )

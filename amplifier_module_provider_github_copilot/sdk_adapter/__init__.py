@@ -28,7 +28,11 @@ from .event_helpers import (
     is_usage_event,
 )
 from .extract import extract_event_fields
-from .model_translation import CopilotModelInfo, sdk_model_to_copilot_model
+from .model_translation import (
+    CopilotModelInfo,
+    resolve_effective_window,
+    sdk_model_to_copilot_model,
+)
 from .tool_capture import ToolCaptureHandler, normalize_tool_request
 from .types import (
     CompletionConfig,
@@ -67,4 +71,5 @@ __all__ = [
     "extract_attachments_from_chat_request",  # Request attachment extraction
     "CopilotModelInfo",  # Domain type: SDK model → domain model
     "sdk_model_to_copilot_model",  # Translation: SDK ModelInfo → CopilotModelInfo
+    "resolve_effective_window",  # Tier-aware prompt-budget selector
 ]

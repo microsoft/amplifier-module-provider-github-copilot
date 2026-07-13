@@ -38,6 +38,7 @@ def _make_request(model: str = "claude-opus-4.5") -> MagicMock:
     request.tools = None
     request.max_output_tokens = None
     request.reasoning_effort = None
+    request.context_tier = None
     request.temperature = None
     request.stop = None
     request.stream = None

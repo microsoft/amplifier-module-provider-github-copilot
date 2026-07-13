@@ -216,6 +216,7 @@ def sample_request() -> MagicMock:
     req.messages = [MagicMock(role="user", content="Hello")]
     req.model = "gpt-4o"
     req.reasoning_effort = None
+    req.context_tier = None
     return req
 
 

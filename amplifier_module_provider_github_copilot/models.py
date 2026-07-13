@@ -73,6 +73,7 @@ from amplifier_module_provider_github_copilot.config_loader import (
 # =============================================================================
 from .sdk_adapter import (  # noqa: E402
     CopilotModelInfo,
+    resolve_effective_window,
     sdk_model_to_copilot_model,
 )
 
@@ -80,6 +81,7 @@ from .sdk_adapter import (  # noqa: E402
 __all__ = [
     "CopilotModelInfo",
     "sdk_model_to_copilot_model",
+    "resolve_effective_window",
     "copilot_model_to_amplifier_model",
     "fetch_models",
     "get_default_context_window",

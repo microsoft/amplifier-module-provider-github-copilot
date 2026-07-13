@@ -669,6 +669,12 @@ class CopilotModelInfo:
     max_output_tokens: int
     supports_vision: bool = False
     supports_reasoning_effort: bool = False
+    context_window_default: int = 0   # prompt budget: billing.token_prices.context_max OR limits.max_prompt_tokens OR static; 0 => use context_window
+    context_window_long: int = 0      # long-tier prompt budget: billing.token_prices.long_context.context_max OR context_window_default; 0 => no long tier
+
+# context_window_default / context_window_long are populated by sdk_model_to_copilot_model from the
+# SDK billing surface; the 0 defaults preserve positional construction in fixtures and tolerant
+# disk-cache reads at _SUPPORTED_CACHE_VERSION = "1.0" (no version bump).
 
 # amplifier_core.ModelInfo — OUTPUT (what kernel expects)
 # Imported from amplifier_core, NOT defined by us

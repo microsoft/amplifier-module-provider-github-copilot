@@ -138,6 +138,8 @@ class CompletionRequest:
         max_tokens: Maximum tokens in response.
         reasoning_effort: Reasoning effort hint forwarded to SDK
             ``create_session`` per ``provider-protocol:complete:MUST:11``.
+        context_tier: Context-window tier hint forwarded to SDK
+            ``create_session`` per ``provider-protocol:complete:MUST:12``.
 
     """
 
@@ -153,6 +155,10 @@ class CompletionRequest:
     # forwarded as opaque str. Validation: validate_reasoning_effort() in
     # request_adapter, called from provider before the SDK call.
     reasoning_effort: str | None = None
+    # Contract: provider-protocol:complete:MUST:12. Kernel context_tier
+    # forwarded as opaque str. Validation: validate_context_tier() in
+    # request_adapter, called from provider before the SDK call.
+    context_tier: str | None = None
 
 
 @dataclass

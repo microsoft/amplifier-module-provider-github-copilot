@@ -76,6 +76,7 @@ def create_mock_session_ctx(
         system_message: str | None = None,
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        context_tier: str | None = None,
     ) -> AsyncIterator[MagicMock]:
         mock_session = MagicMock(spec=SessionHandle)
         mock_session.disconnect = AsyncMock(spec=_StubSDKSession.disconnect)

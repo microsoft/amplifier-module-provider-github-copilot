@@ -537,6 +537,7 @@ class CopilotClientWrapper:
         tools: list[Any] | None = None,
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        context_tier: str | None = None,
     ) -> AsyncIterator[SessionHandle]:
         """Create an ephemeral session with proper cleanup.
 
@@ -557,6 +558,12 @@ class CopilotClientWrapper:
                         (not None), forwarded to SDK as
                         ``model_capabilities=ModelCapabilitiesOverride(...)``.
                         Contract: provider-protocol:complete:MUST:10
+            reasoning_effort: Optional reasoning-effort level forwarded to the
+                        SDK when the model supports it.
+                        Contract: provider-protocol:complete:MUST:11
+            context_tier: Optional context tier ("default" / "long_context")
+                        forwarded to the SDK to select the prompt-budget window.
+                        Contract: provider-protocol:complete:MUST:12
 
         Yields:
             SessionHandle: opaque façade wrapping the raw SDK session.
@@ -652,6 +659,19 @@ class CopilotClientWrapper:
             logger.debug(
                 "[CLIENT] Forwarding reasoning_effort=%r to SDK session",
                 reasoning_effort,
+            )
+
+        # Contract: provider-protocol:complete:MUST:12. Membrane passthrough:
+        # the value has already been gated by validate_context_tier() in the
+        # provider; forward the verbatim STRING. The SDK ContextTier enum is a
+        # plain enum.Enum and is not JSON-serializable by the SDK's bare
+        # json.dumps JSON-RPC sender, so the string form is mandatory — never
+        # construct or forward the enum here.
+        if context_tier is not None:
+            session_config["context_tier"] = context_tier
+            logger.debug(
+                "[CLIENT] Forwarding context_tier=%r to SDK session",
+                context_tier,
             )
 
         sdk_session = None

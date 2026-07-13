@@ -89,6 +89,7 @@ def _create_mock_request(model: str = "gpt-4o") -> MagicMock:
     request.attachments = None
     request.max_output_tokens = None  # canonical ChatRequest field (not max_tokens)
     request.reasoning_effort = None
+    request.context_tier = None
     return request
 
 

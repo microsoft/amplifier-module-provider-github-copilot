@@ -123,6 +123,8 @@ def write_cache(
                 "supports_reasoning_effort": m.supports_reasoning_effort,
                 "supported_reasoning_efforts": list(m.supported_reasoning_efforts),
                 "default_reasoning_effort": m.default_reasoning_effort,
+                "context_window_default": m.context_window_default,
+                "context_window_long": m.context_window_long,
             }
             for m in models
         ],
@@ -239,6 +241,12 @@ def read_cache(
                     supports_reasoning_effort=m.get("supports_reasoning_effort", False),
                     supported_reasoning_efforts=tuple(m.get("supported_reasoning_efforts", [])),
                     default_reasoning_effort=m.get("default_reasoning_effort"),
+                    # Tier-budget fields are additive (cache version unchanged).
+                    # Pre-upgrade caches omit them: load as the 0 sentinel so
+                    # resolve_effective_window/get_info route to the static policy
+                    # window rather than the inflated display ceiling.
+                    context_window_default=m.get("context_window_default", 0),
+                    context_window_long=m.get("context_window_long", 0),
                 )
             )
         except (KeyError, TypeError) as e:

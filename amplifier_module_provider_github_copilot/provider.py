@@ -89,6 +89,7 @@ from .request_adapter import (
     build_request_payload_for_observability,
     build_response_payload_for_observability,
     convert_chat_request,
+    validate_context_tier,
     validate_reasoning_effort,
 )
 from .request_adapter import (
@@ -106,6 +107,7 @@ from .sdk_adapter import (
     SessionConfig,
     ToolCaptureHandler,
     extract_event_fields,
+    resolve_effective_window,
 )
 from .streaming import (
     MAX_EXTRACTION_DEPTH,
@@ -167,10 +169,12 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_raw_flag(value: Any) -> bool:
-    """Strictly parse the raw config flag from provider config dict.
+    """Strictly parse a boolean flag from the provider config dict.
 
-    Handles string inputs so that config={"raw": "false"} is not accidentally
-    treated as True (bool("false") == True is a Python footgun).
+    Handles string inputs so that e.g. config={"raw": "false"} is not
+    accidentally treated as True (bool("false") == True is a Python footgun).
+    Reused verbatim for every boolean provider-config knob (``raw``,
+    ``enable_long_context``).
 
     Args:
         value: Raw value from provider config dict.
@@ -497,6 +501,11 @@ class GitHubCopilotProvider:
         self._provider_config = load_models_config()
         # Parse raw flag once at init — avoids bool("false")==True footgun at call time
         self._raw: bool = _parse_raw_flag(self.config.get("raw", False))
+        # Reuse the bool parser (see _parse_raw_flag) — provider-level long-context
+        # default; mirrors self._raw. Contract: provider-protocol:complete:MUST:13
+        self._enable_long_context: bool = _parse_raw_flag(
+            self.config.get("enable_long_context", False)
+        )
         # Parse retry config once at init — allows per-instance user overrides
         self._retry_config: RetryConfig = _build_retry_config(self.config, load_retry_config())
         # Track pending streaming emit tasks for cleanup
@@ -535,14 +544,34 @@ class GitHubCopilotProvider:
 
         Contract: provider-protocol:get_info:MUST:1
         Contract: provider-protocol:get_info:MUST:3 (config_fields)
+        Contract: provider-protocol:get_info:MUST:4 (enable_long_context field)
+        Contract: provider-protocol:get_info:MUST:5 (tier-selected budget window)
         """
         cfg = self._provider_config
+        # Copy before injecting — cfg.defaults is the process-wide lru_cached
+        # singleton from load_models_config(); in-place mutation would poison it
+        # for every other provider instance.
+        defaults = dict(cfg.defaults)
+        # Report the default model's tier-selected PROMPT budget so Amplifier's
+        # compaction math matches the active context tier. Cold cache (model not
+        # yet discovered) keeps the static fallback from config/_models.py.
+        info = self._lookup_copilot_model_info(self._effective_default_model)
+        if info is not None:
+            resolved = resolve_effective_window(info, self._enable_long_context)
+            # 0 => pre-tier cache (unknown budget); keep the static window so the
+            # display ceiling is never mistaken for a compaction budget.
+            if resolved > 0:
+                defaults["context_window"] = resolved
+            # No >0 guard here, unlike context_window above: max_output_tokens is
+            # always cache-populated and never a 0-sentinel. Add a guard if it ever
+            # becomes tier-derived, or a 0 from an old cache would silently land.
+            defaults["max_output_tokens"] = info.max_output_tokens
         return ProviderInfo(
             id=cfg.provider_id,
             display_name=cfg.display_name,
             credential_env_vars=cfg.credential_env_vars,
             capabilities=cfg.capabilities,
-            defaults=cfg.defaults,
+            defaults=defaults,
             config_fields=[
                 ConfigField(
                     id="github_token",
@@ -551,6 +580,14 @@ class GitHubCopilotProvider:
                     prompt="Enter your GitHub token (or Copilot agent token)",
                     env_var="GITHUB_TOKEN",
                     required=True,
+                ),
+                ConfigField(
+                    id="enable_long_context",
+                    display_name="Long context tier by default",
+                    field_type="boolean",
+                    prompt="Default to the long-context tier when the model supports it",
+                    required=False,
+                    default="false",
                 ),
             ],
         )
@@ -664,6 +701,28 @@ class GitHubCopilotProvider:
                 model_id=model,
             )
 
+        # Contract: provider-protocol:complete:MUST:13. Provider-level default —
+        # when the caller omits context_tier and enable_long_context is on,
+        # select "long_context" (caller value wins). Resolved to a transient
+        # local; ChatRequest is not mutated. Selects the tier; does not unlock
+        # capacity. The effective tier still flows through the MUST:12 gate below.
+        requested_context_tier = internal_request.context_tier
+        if requested_context_tier is None and self._enable_long_context:
+            requested_context_tier = "long_context"
+
+        # Contract: provider-protocol:complete:MUST:12. Static SDK-literal
+        # membership gate. There is no per-model capability descriptor for
+        # context tier, so this is a pure allowlist check; like MUST:11, a
+        # pre-flight ConfigurationError is exempt from llm:request/llm:response
+        # emission (observability:Events:MUST:6).
+        if requested_context_tier is None:
+            validated_context_tier: str | None = None
+        else:
+            validated_context_tier = validate_context_tier(
+                requested_context_tier,
+                model_id=model,
+            )
+
         # Create lifecycle context for observability (handles timing)
         # raw=self._raw passes per-instance flag parsed once in __init__
         async with llm_lifecycle(self.coordinator, model, raw=self._raw) as ctx:
@@ -722,6 +781,7 @@ class GitHubCopilotProvider:
                         system_message=internal_request.system_message,
                         max_tokens=internal_request.max_tokens,
                         reasoning_effort=validated_reasoning_effort,
+                        context_tier=validated_context_tier,
                         request_id=request_id,
                         use_streaming=_use_streaming,
                     )
@@ -871,6 +931,10 @@ class GitHubCopilotProvider:
                         # so reasoning posture is uniform across the turn;
                         # the contract explicitly mandates BOTH call sites.
                         reasoning_effort=validated_reasoning_effort,
+                        # Contract: provider-protocol:complete:MUST:12. Same
+                        # validated tier on both call sites so the correction
+                        # turn runs on the identical context window.
+                        context_tier=validated_context_tier,
                         request_id=request_id,
                         use_streaming=_use_streaming,
                     )
@@ -1022,6 +1086,7 @@ class GitHubCopilotProvider:
         system_message: str | None = None,
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        context_tier: str | None = None,
         request_id: str | None = None,
         use_streaming: bool = True,
     ) -> None:
@@ -1063,6 +1128,7 @@ class GitHubCopilotProvider:
                 system_message=system_message,
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
+                context_tier=context_tier,
             ) as sdk_session:
                 # Capture SDK session ID for observability correlation
                 accumulator.sdk_session_id = sdk_session.session_id

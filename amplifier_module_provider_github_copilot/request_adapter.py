@@ -33,6 +33,14 @@ logger = logging.getLogger(__name__)
 # forwarded to the SDK. Mirrors the SDK ReasoningEffort Literal as of v0.3.0.
 _REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset({"low", "medium", "high", "xhigh"})
 
+# Static allowlist for context_tier. Mirrors the public SDK annotation
+# ``copilot.session.ContextTier = typing.Literal["default", "long_context"]``
+# (verified against installed github-copilot-sdk 1.0.2). Unlike reasoning_effort
+# there is NO per-model capability descriptor, so this membership set is the only
+# validation possible. Evergreen note: if the SDK Literal grows a tier, update
+# this frozenset — pinned by test_context_tier.TestSDKSourceShape.
+_CONTEXT_TIER_ALLOWLIST: frozenset[str] = frozenset({"default", "long_context"})
+
 # Echo-redaction guard for ConfigurationError messages. Rejected values are
 # rendered verbatim only if they match this token shape; anything else is
 # replaced with "<redacted; len=N>". The pattern excludes every known
@@ -281,6 +289,23 @@ def convert_chat_request(
             provider=PROVIDER_ID,
         )
 
+    # context_tier is read defensively via getattr: amplifier-core 1.6.0 ChatRequest
+    # has no context_tier field, so this returns None today. When None, the provider
+    # falls through to the enable_long_context config default (per MUST:13).
+    # Membership validation happens in provider.complete() via validate_context_tier().
+    # Contract: provider-protocol:complete:MUST:12. Empty string normalizes to
+    # None (no tier requested); a non-str, non-None value is a caller bug and raises.
+    raw_context_tier = getattr(request, "context_tier", None)
+    if raw_context_tier is None or raw_context_tier == "":
+        context_tier: str | None = None
+    elif isinstance(raw_context_tier, str):
+        context_tier = raw_context_tier
+    else:
+        raise ConfigurationError(
+            f"context_tier must be str or None; got {type(raw_context_tier).__name__}.",
+            provider=PROVIDER_ID,
+        )
+
     return CompletionRequest(
         prompt=prompt,
         model=model,
@@ -289,16 +314,18 @@ def convert_chat_request(
         system_message=system_message,
         max_tokens=max_tokens,
         reasoning_effort=reasoning_effort,
+        context_tier=context_tier,
     )
 
 
-def _redact_reasoning_effort_for_log(value: str) -> str:
-    """Render ``value`` safely for inclusion in error messages and logs.
+def _redact_token_for_log(value: str) -> str:
+    """Render a short enum-like ``value`` safely for error messages and logs.
 
     Returns the value verbatim only when it matches the well-formed token
     pattern (lowercase ASCII letters / underscores, <= 16 chars). Anything
     else is replaced with ``<redacted; len=N>`` so an injected secret
-    fragment cannot leak via a ConfigurationError text or log line.
+    fragment cannot leak via a ConfigurationError text or log line. Shared by
+    the reasoning_effort and context_tier validators.
 
     Contract: provider-protocol:complete:MUST:11 (defense in depth)
     """
@@ -353,7 +380,7 @@ def validate_reasoning_effort(
     if not reasoning_effort:
         return None
 
-    safe = _redact_reasoning_effort_for_log(reasoning_effort)
+    safe = _redact_token_for_log(reasoning_effort)
 
     # Universal shape gate. The SDK accepts only the fixed lowercase Literal
     # set; any other token (mixed-case "High", typos, novel values, overlong
@@ -400,6 +427,59 @@ def validate_reasoning_effort(
         )
 
     return reasoning_effort
+
+
+def validate_context_tier(
+    context_tier: str | None,
+    *,
+    model_id: str,
+) -> str | None:
+    """Validate caller-supplied context_tier against the static SDK allowlist.
+
+    Contract: provider-protocol:complete:MUST:12
+
+    Pre-flight gate, called from ``provider.complete()`` before any SDK call.
+    Returns the value unchanged on success; raises ``ConfigurationError`` on a
+    membership violation.
+
+    Unlike :func:`validate_reasoning_effort` there is no per-model capability
+    descriptor for context tier (the SDK exposes no ``supports_context_tier`` /
+    ``supported_context_tiers`` on any model type), so validation is membership
+    against the static SDK literal allowlist
+    ``{"default", "long_context"}`` only. The membrane forwards the verbatim
+    string; the SDK ``ContextTier`` enum is never constructed here because it is
+    a plain ``enum.Enum`` and is not JSON-serializable by the SDK's JSON-RPC
+    sender.
+
+    Behavior:
+        * empty/None → returns ``None``
+        * value not in ``{"default","long_context"}`` (including mixed-case and
+          overlong values) → raises ``ConfigurationError`` with the rejected
+          value redacted when it doesn't match the safe token shape
+
+    Args:
+        context_tier: Verbatim ``ChatRequest.context_tier``.
+        model_id: Effective model id, used in error messages.
+
+    Returns:
+        The validated string, or ``None`` when no tier was requested.
+
+    Raises:
+        ConfigurationError: Value not in the SDK literal allowlist.
+    """
+    if not context_tier:
+        return None
+
+    if context_tier not in _CONTEXT_TIER_ALLOWLIST:
+        safe = _redact_token_for_log(context_tier)
+        allowed = ", ".join(repr(v) for v in sorted(_CONTEXT_TIER_ALLOWLIST))
+        raise ConfigurationError(
+            f"context_tier={safe} for model {model_id!r} is not in the SDK "
+            f"literal allowlist (case-sensitive). Allowed values: {allowed}.",
+            provider=PROVIDER_ID,
+        )
+
+    return context_tier
 
 
 def extract_prompt_from_chat_request(request: Any) -> str:

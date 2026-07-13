@@ -38,12 +38,19 @@ class CopilotModelInfo:
     Attributes:
         id: Model identifier (e.g., "claude-opus-4.5")
         name: Human-readable display name
-        context_window: Maximum context window in tokens
+        context_window: SDK display ceiling (limits.max_context_window_tokens).
+            Use for the model-list UI surface; this is NOT a compaction budget.
         max_output_tokens: Maximum output tokens per response
         supports_vision: Whether the model supports image inputs
         supports_reasoning_effort: Whether the model supports reasoning effort
         supported_reasoning_efforts: Tuple of supported reasoning effort levels
         default_reasoning_effort: Default reasoning effort level
+        context_window_default: Default-tier prompt budget (max_prompt_tokens),
+            from billing.token_prices.context_max ELSE limits.max_prompt_tokens.
+            Feeds the compaction budget when the long tier is off. 0 => unknown.
+        context_window_long: Long-tier prompt budget, from
+            billing.token_prices.long_context.context_max ELSE context_window_default.
+            0 => no long tier (enable_long_context becomes a no-op for the model).
     """
 
     id: str
@@ -54,6 +61,21 @@ class CopilotModelInfo:
     supports_reasoning_effort: bool = False
     supported_reasoning_efforts: tuple[str, ...] = ()
     default_reasoning_effort: str | None = None
+    context_window_default: int = 0
+    context_window_long: int = 0
+
+
+def resolve_effective_window(info: CopilotModelInfo, enable_long_context: bool) -> int:
+    """Return the prompt-budget window for the active context tier.
+
+    The long-tier budget is selected when ``enable_long_context`` is set,
+    otherwise the default-tier budget. Returns 0 when the budget is unknown
+    (a pre-tier cache read); the caller treats 0 as "keep the static policy
+    window" so the display ceiling is never reported as a compaction budget.
+
+    Contract: provider-protocol:get_info:MUST:5
+    """
+    return info.context_window_long if enable_long_context else info.context_window_default
 
 
 # =============================================================================
@@ -85,6 +107,7 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
     # Extract capabilities using duck-typing (SDK type structure)
     # Guard against None capabilities (SDK may return partial model info)
     capabilities = sdk_model.capabilities
+    max_prompt_tokens: int | None = None
     if capabilities is None:
         # SDK returned no capabilities - use all defaults
         context_window = get_default_context_window()
@@ -139,6 +162,31 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
         supported_reasoning_efforts = tuple(supported_efforts)
     default_reasoning_effort = getattr(sdk_model, "default_reasoning_effort", None)
 
+    # Per-tier PROMPT budgets from the SDK billing surface. The SDK separates
+    # the display ceiling (context_window, above) from the billed prompt budget
+    # per tier; compaction needs the latter. billing is Optional and present
+    # only on tiered models — None-walk each level (mirrors the limits reads).
+    billing = getattr(sdk_model, "billing", None)
+    billing_default: int | None = None
+    billing_long: int | None = None
+    if billing is not None:
+        token_prices = billing.token_prices
+        if token_prices is not None:
+            billing_default = token_prices.context_max
+            long_prices = token_prices.long_context
+            if long_prices is not None:
+                billing_long = long_prices.context_max
+
+    # Default-tier budget: billed prompt budget ELSE the limits' max_prompt_tokens
+    # ELSE the static policy fallback. Long-tier budget collapses to default when
+    # the model has no long_context billing entry.
+    context_window_default = billing_default
+    if context_window_default is None:
+        context_window_default = max_prompt_tokens
+    if context_window_default is None:
+        context_window_default = get_default_context_window()
+    context_window_long = billing_long if billing_long is not None else context_window_default
+
     return CopilotModelInfo(
         id=sdk_model.id,
         name=sdk_model.name,
@@ -148,4 +196,6 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
         supports_reasoning_effort=supports_reasoning_effort,
         supported_reasoning_efforts=supported_reasoning_efforts,
         default_reasoning_effort=default_reasoning_effort,
+        context_window_default=context_window_default,
+        context_window_long=context_window_long,
     )

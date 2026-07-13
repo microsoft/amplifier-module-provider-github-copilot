@@ -62,6 +62,10 @@ class ConfigField:
     prompt: str
     env_var: str | None = None
     required: bool = False
+    default: str | None = None
+    choices: list[str] | None = None
+    show_when: dict[str, str] | None = None
+    requires_model: bool = False
     description: str | None = None
 
 

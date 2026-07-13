@@ -421,6 +421,7 @@ def _make_capturing_wrapper(fake_text: str, clean_text: str) -> tuple[Any, list[
             tools: list[Any] | None = None,
             max_tokens: int | None = None,
             reasoning_effort: str | None = None,
+            context_tier: str | None = None,
         ) -> AsyncIterator[Any]:
             call_index_cell[0] += 1
             idx = call_index_cell[0]
@@ -464,6 +465,7 @@ class TestCompleteThreadsReasoningEffortToBothCallSites:
         request.attachments = None
         request.max_output_tokens = None
         request.reasoning_effort = reasoning_effort
+        request.context_tier = None
         request.tools = [{"name": "bash", "description": "Run shell commands", "parameters": {}}]
         return request
 
@@ -610,6 +612,7 @@ class TestProviderRaisesOnUnsupportedCachedModel:
         request.attachments = None
         request.max_output_tokens = None
         request.reasoning_effort = "high"
+        request.context_tier = None
         request.tools = None
 
         # Coordinator wired with an AsyncMock hooks.emit so we can pin the
