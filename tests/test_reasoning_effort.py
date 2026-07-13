@@ -166,6 +166,83 @@ class TestResolveReasoningEffortGate:
         # Allowed values must be enumerated for diagnosability.
         assert "'low'" in msg and "'medium'" in msg and "'high'" in msg
 
+    def test_raises_when_valid_shape_value_excluded_by_model_allowlist(self) -> None:
+        """A token that passes the universal shape gate but is absent from the
+        model's own ``supported_reasoning_efforts`` is rejected at the per-model
+        gate (provider-protocol:complete:MUST:11), not the universal gate. Uses
+        ``"max"`` against a model advertising {low, medium, high} — the exact
+        case the MUST:11 superset makes reachable.
+
+        Contract: provider-protocol:complete:MUST:11
+        """
+        info = _model_info(allowlist=("low", "medium", "high"))
+        with pytest.raises(ConfigurationError) as excinfo:
+            validate_reasoning_effort("max", info, model_id="claude-sonnet-4.6")
+        msg = str(excinfo.value)
+        assert "claude-sonnet-4.6" in msg
+        assert "max" in msg
+        # Per-model rejection enumerates the model's own supported values, not
+        # the universal SDK literal set.
+        assert "'low'" in msg and "'medium'" in msg and "'high'" in msg
+        assert "xhigh" not in msg
+
+    def test_unsupported_message_exact_wording(self) -> None:
+        """The ``supports_reasoning_effort=False`` rejection names the model id,
+        quotes the rejected effort as ``reasoning_effort='<value>'``, and points
+        the operator at the discovery command + reconfigure.
+
+        Contract: provider-protocol:complete:MUST:11 (wording not pinned by the
+        contract; this guards the operator-facing diagnosability of the message).
+        """
+        info = CopilotModelInfo(
+            id="claude-sonnet-4.5",
+            name="Claude Sonnet 4.5",
+            context_window=168_000,
+            max_output_tokens=32_000,
+            supports_reasoning_effort=False,
+            supported_reasoning_efforts=(),
+        )
+        with pytest.raises(ConfigurationError) as excinfo:
+            validate_reasoning_effort("max", info, model_id="claude-sonnet-4.5")
+        msg = str(excinfo.value)
+        assert "claude-sonnet-4.5" in msg
+        assert "reasoning_effort='max'" in msg
+        assert "amplifier provider models github-copilot" in msg
+        assert "reconfigure" in msg
+        assert (
+            "Model 'claude-sonnet-4.5' does not support reasoning_effort='max'; "
+            "run 'amplifier provider models github-copilot' and reconfigure."
+        ) in msg
+
+    def test_allowlist_message_exact_wording(self) -> None:
+        """The per-model allowlist rejection names the model id, quotes the
+        rejected effort, enumerates the model's supported values, and points the
+        operator at the discovery command + reconfigure.
+
+        Contract: provider-protocol:complete:MUST:11
+        """
+        info = CopilotModelInfo(
+            id="claude-sonnet-4.6",
+            name="Claude Sonnet 4.6",
+            context_window=200_000,
+            max_output_tokens=64_000,
+            supports_reasoning_effort=True,
+            supported_reasoning_efforts=("low", "medium", "high"),
+        )
+        with pytest.raises(ConfigurationError) as excinfo:
+            validate_reasoning_effort("max", info, model_id="claude-sonnet-4.6")
+        msg = str(excinfo.value)
+        assert "claude-sonnet-4.6" in msg
+        assert "reasoning_effort='max'" in msg
+        assert "'low'" in msg and "'medium'" in msg and "'high'" in msg
+        assert "amplifier provider models github-copilot" in msg
+        assert "reconfigure" in msg
+        assert (
+            "Model 'claude-sonnet-4.6' does not support reasoning_effort='max'. "
+            "Allowed values: 'low', 'medium', 'high'; run 'amplifier provider "
+            "models github-copilot' and reconfigure."
+        ) in msg
+
     def test_mixed_case_rejected_no_silent_normalization(self) -> None:
         """SDK Literal is strictly lowercase; reject mixed-case explicitly.
 
@@ -188,7 +265,7 @@ class TestResolveReasoningEffortGate:
         # Mutation guard: pin the exact rejection wording so a regression that
         # silently lower-cases the input or drops the case-sensitivity hint
         # turns this test red instead of green.
-        assert "SDK literal allowlist" in msg
+        assert "provider fallback allowlist" in msg
         assert "case-sensitive" in msg
 
     def test_overlong_value_rejected_via_allowlist_with_redaction(self) -> None:
@@ -200,7 +277,7 @@ class TestResolveReasoningEffortGate:
         with pytest.raises(ConfigurationError) as excinfo:
             validate_reasoning_effort(oversize, info, model_id="claude-sonnet-4.6")
         msg = str(excinfo.value)
-        assert "SDK literal allowlist" in msg
+        assert "provider fallback allowlist" in msg
         assert "<redacted; len=200>" in msg
         assert oversize not in msg
 
@@ -222,7 +299,7 @@ class TestResolveReasoningEffortGate:
         )
 
     def test_model_info_none_with_bogus_value_raises(self) -> None:
-        """Cache miss + value not in the SDK literal allowlist must raise.
+        """Cache miss + value not in the provider fallback allowlist must raise.
 
         Without this gate, an arbitrary <=16-char string would silently reach
         the SDK whenever ``CopilotModelInfo`` is unavailable, defeating the
@@ -233,9 +310,12 @@ class TestResolveReasoningEffortGate:
         msg = str(excinfo.value)
         assert "frobozz" in msg
         assert "brand-new-model" in msg
-        assert "SDK literal allowlist" in msg
+        assert "provider fallback allowlist" in msg
         # Must enumerate accepted values so the caller can self-correct.
-        for v in ("low", "medium", "high", "xhigh"):
+        # "none" and "max" are included because the fallback allowlist extends
+        # the v1.0.2 SDK literal with both (advertised by the live list_models
+        # endpoint; absent from the v1.0.2 SDK literal).
+        for v in ("none", "low", "medium", "high", "xhigh", "max"):
             assert f"'{v}'" in msg
 
     @pytest.mark.parametrize("bad_value", ["High", "MEDIUM", "Low", "xHigh"])
@@ -269,7 +349,7 @@ class TestResolveReasoningEffortGate:
         # assert structural signal instead of verbatim echo.
         assert "<redacted" in msg
         assert "brand-x" in msg
-        assert "SDK literal allowlist" in msg
+        assert "provider fallback allowlist" in msg
         assert "case-sensitive" in msg
 
     def test_overlong_value_message_does_not_echo_value(self) -> None:
@@ -282,11 +362,63 @@ class TestResolveReasoningEffortGate:
         with pytest.raises(ConfigurationError) as excinfo:
             validate_reasoning_effort(secret_like, info, model_id="claude-sonnet-4.6")
         msg = str(excinfo.value)
-        assert "SDK literal allowlist" in msg
+        assert "provider fallback allowlist" in msg
         assert "<redacted; len=40>" in msg
         # The raw secret-shaped value MUST NOT appear in the error text.
         assert secret_like not in msg
         assert "ghp_" not in msg
+
+
+class TestReasoningEffortNoneLevel:
+    """The "none" effort level (advertised by some live models, absent from the
+    v1.0.2 SDK ``ReasoningEffort`` Literal) passes the universal shape gate and
+    is then governed by the per-model allowlist, exactly like "max".
+
+    Contract: provider-protocol:complete:MUST:11
+    """
+
+    def _info(self, efforts: tuple[str, ...]) -> Any:
+        from amplifier_module_provider_github_copilot.sdk_adapter import (
+            CopilotModelInfo,
+        )
+
+        return CopilotModelInfo(
+            id="probe-model",
+            name="Probe",
+            context_window=272_000,
+            max_output_tokens=128_000,
+            supports_reasoning_effort=True,
+            supported_reasoning_efforts=efforts,
+        )
+
+    def test_none_accepted_when_model_advertises_it(self) -> None:
+        info = self._info(("none", "low", "medium", "high", "xhigh"))
+        result = validate_reasoning_effort("none", info, model_id="probe-model")
+        assert result == "none"
+
+    def test_none_in_fallback_allowlist(self) -> None:
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _REASONING_EFFORT_FALLBACK_ALLOWLIST,
+        )
+
+        assert "none" in _REASONING_EFFORT_FALLBACK_ALLOWLIST
+
+    def test_none_passes_universal_gate_on_cache_miss(self) -> None:
+        result = validate_reasoning_effort("none", None, model_id="probe-model")
+        assert result == "none"
+
+    def test_none_rejected_when_model_excludes_it(self) -> None:
+        info = self._info(("low", "medium", "high"))
+        with pytest.raises(ConfigurationError) as excinfo:
+            validate_reasoning_effort("none", info, model_id="probe-model")
+        msg = str(excinfo.value)
+        assert "reasoning_effort='none'" in msg
+        assert "probe-model" in msg
+        # The per-model gate (not the universal shape gate) rejected it: the
+        # error must enumerate the model's own efforts and MUST NOT list 'none'.
+        allowed_segment = msg.split("Allowed values:", 1)[1]
+        assert "'low', 'medium', 'high'" in allowed_segment
+        assert "none" not in allowed_segment
 
 
 # ----------------------------------------------------------------------------
@@ -312,7 +444,7 @@ class TestSessionForwardsReasoningEffort:
 
     @pytest.mark.parametrize(
         "effort_value",
-        ["low", "medium", "high", "xhigh"],
+        ["none", "low", "medium", "high", "xhigh", "max"],
     )
     @pytest.mark.asyncio
     async def test_value_reaches_sdk_create_session_kwargs(self, effort_value: str) -> None:
@@ -790,3 +922,404 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
             "ConfigurationError must chain the original SDK exception via "
             "`raise ... from exc` so traces preserve root cause."
         )
+
+
+# ----------------------------------------------------------------------------
+# MUST:6 — get_info() exposes a reasoning_effort choice ConfigField
+# ----------------------------------------------------------------------------
+
+
+class TestGetInfoExposesReasoningEffortField:
+    """get_info() MUST include a choice ConfigField for reasoning_effort.
+
+    Contract: provider-protocol:get_info:MUST:6
+    """
+
+    def _get_field(self, field_id: str) -> Any:
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        provider = GitHubCopilotProvider()
+        info = provider.get_info()
+        for f in info.config_fields:
+            if f.id == field_id:
+                return f
+        raise AssertionError(
+            f"ConfigField '{field_id}' not found in get_info().config_fields; "
+            f"ids present: {[f.id for f in info.config_fields]}"
+        )
+
+    def test_reasoning_effort_field_present_with_correct_type(self) -> None:
+        """Field must have field_type='choice'."""
+        f = self._get_field("reasoning_effort")
+        assert f.field_type == "choice", (
+            f"reasoning_effort ConfigField must be field_type='choice'; got {f.field_type!r}"
+        )
+
+    def test_reasoning_effort_field_default_is_model_default(self) -> None:
+        """Default MUST be 'model default' so absence is a no-op."""
+        f = self._get_field("reasoning_effort")
+        assert f.default == "model default", (
+            f"reasoning_effort ConfigField must default to 'model default'; got {f.default!r}"
+        )
+
+    def test_reasoning_effort_field_not_required(self) -> None:
+        """Field is optional — omitting it is valid."""
+        f = self._get_field("reasoning_effort")
+        assert f.required is False, (
+            f"reasoning_effort ConfigField must be required=False; got required={f.required!r}"
+        )
+
+    def test_reasoning_effort_field_requires_model(self) -> None:
+        """Field only makes sense after a model is selected."""
+        f = self._get_field("reasoning_effort")
+        assert f.requires_model is True, (
+            f"reasoning_effort ConfigField must have requires_model=True; "
+            f"got requires_model={f.requires_model!r}"
+        )
+
+    def test_reasoning_effort_field_exact_choices(self) -> None:
+        """Choices must be the exact ordered list including 'none' and 'max'."""
+        f = self._get_field("reasoning_effort")
+        expected = ["model default", "none", "low", "medium", "high", "xhigh", "max"]
+        assert f.choices == expected, (
+            f"reasoning_effort ConfigField choices mismatch.\n"
+            f"  Expected: {expected}\n"
+            f"  Got:      {f.choices!r}"
+        )
+
+    def test_reasoning_effort_choices_match_levels(self) -> None:
+        """ConfigField choices MUST stay in sync with REASONING_EFFORT_LEVELS:
+        the 'model default' sentinel followed by the shared ordered constant.
+
+        Pins the single-source-of-truth wiring so an edit to the constant
+        cannot silently diverge from the wizard choices.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            REASONING_EFFORT_LEVELS,
+        )
+
+        f = self._get_field("reasoning_effort")
+        assert f.choices == ["model default", *REASONING_EFFORT_LEVELS], (
+            f"choices must equal ['model default', *REASONING_EFFORT_LEVELS]; "
+            f"got {f.choices!r} vs levels {REASONING_EFFORT_LEVELS!r}"
+        )
+
+    def test_reasoning_effort_field_positioned_after_enable_long_context(self) -> None:
+        """reasoning_effort MUST appear immediately after enable_long_context."""
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        provider = GitHubCopilotProvider()
+        info = provider.get_info()
+        ids = [f.id for f in info.config_fields]
+        elc_idx = ids.index("enable_long_context")
+        re_idx = ids.index("reasoning_effort")
+        assert re_idx == elc_idx + 1, (
+            f"reasoning_effort must appear immediately after enable_long_context; "
+            f"field order: {ids}"
+        )
+
+    def test_enable_long_context_field_requires_model(self) -> None:
+        """The preceding enable_long_context field is also model-scoped, so the
+        wizard groups both model-dependent prompts after model selection."""
+        f = self._get_field("enable_long_context")
+        assert f.requires_model is True, (
+            f"enable_long_context ConfigField must have requires_model=True; "
+            f"got requires_model={f.requires_model!r}"
+        )
+
+
+# ----------------------------------------------------------------------------
+# MUST:14 — provider-level reasoning_effort default
+# ----------------------------------------------------------------------------
+
+
+class TestReasoningEffortProviderDefault:
+    """provider.complete() MUST apply the stored _reasoning_effort default when
+    the caller passes None, and the caller value MUST win when present.
+
+    Contract: provider-protocol:complete:MUST:14
+    """
+
+    @staticmethod
+    def _make_request(
+        reasoning_effort: str | None,
+        *,
+        with_tools: bool = True,
+    ) -> MagicMock:
+        request = MagicMock()
+        request.model = "gpt-4o"
+        request.messages = [MagicMock(role="user", content="list files")]
+        request.attachments = None
+        request.max_output_tokens = None
+        request.reasoning_effort = reasoning_effort
+        request.context_tier = None
+        if with_tools:
+            request.tools = [
+                {"name": "bash", "description": "Run shell commands", "parameters": {}}
+            ]
+        else:
+            request.tools = []
+        return request
+
+    @pytest.mark.asyncio
+    async def test_default_applied_on_both_call_sites(self) -> None:
+        """When caller passes None and config sets 'medium', both SDK session
+        calls (main + correction retry) MUST receive reasoning_effort='medium'.
+
+        Mutation check: removing the MUST:14 block from provider.complete()
+        leaves both calls with None.
+        """
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        wrapper, session_calls = _make_capturing_wrapper(
+            fake_text="[Tool Call: bash(command='ls')]",
+            clean_text="ok",
+        )
+        provider = GitHubCopilotProvider(
+            config={"reasoning_effort": "medium"},
+            client=wrapper,  # type: ignore[arg-type]
+        )
+        result = await provider.complete(self._make_request(None, with_tools=True))
+
+        assert len(session_calls) == 2, (
+            f"Expected main + correction = 2 session calls, got {session_calls!r}"
+        )
+        assert session_calls[0]["reasoning_effort"] == "medium", (
+            f"Main session: provider default not applied — "
+            f"got {session_calls[0]['reasoning_effort']!r}"
+        )
+        assert session_calls[1]["reasoning_effort"] == "medium", (
+            f"Correction session: provider default not applied on retry — "
+            f"got {session_calls[1]['reasoning_effort']!r}"
+        )
+        assert isinstance(result, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_caller_wins_over_provider_default(self) -> None:
+        """An explicit caller reasoning_effort MUST take precedence over the
+        provider-level default on both call sites.
+
+        Mutation check: swapping the condition in the MUST:14 guard from
+        ``validated_reasoning_effort is None`` to ``True`` would replace the
+        caller's value — this test goes red.
+        """
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        wrapper, session_calls = _make_capturing_wrapper(
+            fake_text="[Tool Call: bash(command='ls')]",
+            clean_text="ok",
+        )
+        provider = GitHubCopilotProvider(
+            config={"reasoning_effort": "low"},
+            client=wrapper,  # type: ignore[arg-type]
+        )
+        # Caller passes "high"; provider default is "low". "high" MUST win.
+        result = await provider.complete(self._make_request("high", with_tools=True))
+
+        assert len(session_calls) == 2, (
+            f"Expected main + correction = 2 session calls, got {session_calls!r}"
+        )
+        assert session_calls[0]["reasoning_effort"] == "high", (
+            f"Main session: caller value lost to provider default — "
+            f"got {session_calls[0]['reasoning_effort']!r}"
+        )
+        assert session_calls[1]["reasoning_effort"] == "high", (
+            f"Correction session: caller value lost to provider default — "
+            f"got {session_calls[1]['reasoning_effort']!r}"
+        )
+        assert isinstance(result, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_provider_default_unsupported_model_raises_before_sdk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MUST:14 fail-loud: when the caller omits reasoning_effort and the
+        operator-configured default is injected, an unsupported cached model
+        MUST raise ConfigurationError BEFORE any SDK session call — the stored
+        default flows through the same validate_reasoning_effort gate as an
+        explicit caller value.
+
+        Distinct from TestProviderRaisesOnUnsupportedCachedModel, which covers
+        the explicit-caller path; this pins the provider-default-injection
+        branch of the MUST:14 guard specifically.
+
+        Mutation check: routing the stored default around
+        validate_reasoning_effort (or moving the gate after
+        _execute_sdk_completion) lets the SDK call fire — session_calls becomes
+        non-empty and the raise disappears.
+
+        Contract: provider-protocol:complete:MUST:14
+        """
+        from amplifier_module_provider_github_copilot import provider as provider_mod
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter import (
+            CopilotModelInfo,
+        )
+
+        unsupported_info = CopilotModelInfo(
+            id="gpt-4o",
+            name="GPT-4o",
+            context_window=128_000,
+            max_output_tokens=16_384,
+            supports_vision=False,
+            supports_reasoning_effort=False,
+            supported_reasoning_efforts=(),
+        )
+        monkeypatch.setattr(
+            provider_mod.GitHubCopilotProvider,
+            "_lookup_copilot_model_info",
+            lambda self, model_id: unsupported_info,
+        )
+
+        wrapper, session_calls = _make_capturing_wrapper(
+            fake_text="ok",
+            clean_text="ok",
+        )
+        provider = GitHubCopilotProvider(
+            config={"reasoning_effort": "medium"},
+            client=wrapper,  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(
+            ConfigurationError, match="does not support reasoning_effort"
+        ):
+            await provider.complete(self._make_request(None, with_tools=False))
+
+        assert session_calls == [], (
+            f"SDK session MUST NOT be called when the injected provider default "
+            f"is rejected pre-flight; got {session_calls!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_default_config_value_means_no_effort(self) -> None:
+        """Config value 'model default' normalises to None — no effort forwarded."""
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        wrapper, session_calls = _make_capturing_wrapper(
+            fake_text="ok",
+            clean_text="ok",
+        )
+        provider = GitHubCopilotProvider(
+            config={"reasoning_effort": "model default"},
+            client=wrapper,  # type: ignore[arg-type]
+        )
+        result = await provider.complete(self._make_request(None, with_tools=False))
+
+        assert len(session_calls) == 1, (
+            f"Expected 1 session call (no retry without tools), got {session_calls!r}"
+        )
+        assert session_calls[0]["reasoning_effort"] is None, (
+            f"Config 'model default' must normalise to no effort forwarded; "
+            f"got {session_calls[0]['reasoning_effort']!r}"
+        )
+        assert isinstance(result, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_model_default_config_value_trimmed_and_case_insensitive(self) -> None:
+        """' Model Default ' (surrounding whitespace, mixed case) normalises to
+        None — the sentinel is matched after strip().lower(), not literally."""
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        wrapper, session_calls = _make_capturing_wrapper(
+            fake_text="ok",
+            clean_text="ok",
+        )
+        provider = GitHubCopilotProvider(
+            config={"reasoning_effort": "  Model Default  "},
+            client=wrapper,  # type: ignore[arg-type]
+        )
+        result = await provider.complete(self._make_request(None, with_tools=False))
+
+        assert len(session_calls) == 1, (
+            f"Expected 1 session call (no retry without tools), got {session_calls!r}"
+        )
+        assert session_calls[0]["reasoning_effort"] is None, (
+            f"' Model Default ' must normalise to no effort forwarded; "
+            f"got {session_calls[0]['reasoning_effort']!r}"
+        )
+        assert isinstance(result, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_no_config_means_no_effort(self) -> None:
+        """Absent reasoning_effort config → no effort forwarded to SDK."""
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        wrapper, session_calls = _make_capturing_wrapper(
+            fake_text="ok",
+            clean_text="ok",
+        )
+        provider = GitHubCopilotProvider(client=wrapper)  # type: ignore[arg-type]
+        result = await provider.complete(self._make_request(None, with_tools=False))
+
+        assert len(session_calls) == 1, (
+            f"Expected 1 session call (no retry without tools), got {session_calls!r}"
+        )
+        assert session_calls[0]["reasoning_effort"] is None, (
+            f"No config must mean no effort forwarded; got {session_calls[0]['reasoning_effort']!r}"
+        )
+        assert isinstance(result, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_non_str_config_value_normalises_to_none(self) -> None:
+        """A non-str reasoning_effort config value MUST normalise to None
+        without raising at construction — the isinstance guard prevents the
+        ``.strip()`` AttributeError a bare truthy non-str would trigger.
+
+        Mutation check: reverting the init to ``config.get(...) or ""`` makes
+        construction raise AttributeError on the int and turns this test red.
+        """
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        wrapper, session_calls = _make_capturing_wrapper(fake_text="ok", clean_text="ok")
+        provider = GitHubCopilotProvider(
+            config={"reasoning_effort": 123},  # type: ignore[dict-item]
+            client=wrapper,  # type: ignore[arg-type]
+        )
+        assert provider._reasoning_effort is None  # pyright: ignore[reportPrivateUsage]
+        result = await provider.complete(self._make_request(None, with_tools=False))
+        assert session_calls[0]["reasoning_effort"] is None
+        assert isinstance(result, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_config_value_stripped_before_store(self) -> None:
+        """Surrounding whitespace on a real effort value MUST be stripped at
+        store time so the case-sensitive validate gate sees the bare token and
+        forwards it; case is preserved (not normalised).
+
+        Mutation check: storing the raw (unstripped) value forwards ' high '
+        which the validate gate rejects — this test goes red.
+        """
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        wrapper, session_calls = _make_capturing_wrapper(
+            fake_text="[Tool Call: bash(command='ls')]",
+            clean_text="ok",
+        )
+        provider = GitHubCopilotProvider(
+            config={"reasoning_effort": "  high  "},
+            client=wrapper,  # type: ignore[arg-type]
+        )
+        assert provider._reasoning_effort == "high"  # pyright: ignore[reportPrivateUsage]
+        result = await provider.complete(self._make_request(None, with_tools=True))
+        assert session_calls[0]["reasoning_effort"] == "high", (
+            f"stripped provider default not forwarded — "
+            f"got {session_calls[0]['reasoning_effort']!r}"
+        )
+        assert session_calls[1]["reasoning_effort"] == "high"
+        assert isinstance(result, ChatResponse)

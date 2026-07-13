@@ -96,12 +96,45 @@ __all__ = [
 # =============================================================================
 
 
+def _format_long_millions(tokens: int) -> str:
+    """Format a token count as a compact millions string: two decimals, trailing
+    zeros stripped, always at least one fractional digit, suffixed "M".
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:3
+
+    Examples:
+        1_000_000  -> "1.0M"
+        1_050_000  -> "1.05M"
+        936_000 + 64_000 = 1_000_000  -> "1.0M"
+        922_000 + 128_000 = 1_050_000 -> "1.05M"
+    """
+    millions = tokens / 1_000_000
+    text = f"{millions:.2f}".rstrip("0").rstrip(".")
+    if "." not in text:
+        text += ".0"
+    return f"{text}M"
+
+
 def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelInfo:
     """Translate CopilotModelInfo to amplifier_core.ModelInfo.
 
     Contract: sdk-boundary:ModelDiscovery:MUST:3
     - MUST translate CopilotModelInfo to amplifier_core.ModelInfo (kernel contract)
     - MUST map: id, display_name, context_window, max_output_tokens, capabilities
+
+    Capabilities are built in this order:
+        ["streaming", "tools"]
+        + "vision" if supports_vision
+        + "thinking" if supports_reasoning_effort
+        + "reasoning=<levels> default=<d>" if supports_reasoning_effort and
+          supported_reasoning_efforts is non-empty (default= omitted when None)
+        + "long=<x>M" if context_window_long > context_window_default > 0
+
+    Context column:
+        context_window = context_window_default if context_window_default > 0
+                         else context_window  (0-sentinel → fall back to ceiling)
+
+    The defaults dict is preserved as-is (machine-readable source of truth).
 
     Args:
         model: CopilotModelInfo domain type
@@ -115,10 +148,34 @@ def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelI
     if model.supports_vision:
         capabilities.append("vision")
 
+    # Two complementary signals: "thinking" is the coarse boolean capability
+    # flag (consumers that only test membership rely on it); "reasoning=<levels>"
+    # below carries the granular level menu for richer consumers. Both emit.
     if model.supports_reasoning_effort:
         capabilities.append("thinking")
 
-    # Build defaults dict (model-specific config)
+    # REASONING TOKEN: human-readable effort levels + default
+    # Only emitted when supported_reasoning_efforts is non-empty (list is authoritative)
+    if model.supports_reasoning_effort and model.supported_reasoning_efforts:
+        effort_str = "/".join(model.supported_reasoning_efforts)
+        if model.default_reasoning_effort is not None:
+            capabilities.append(f"reasoning={effort_str} default={model.default_reasoning_effort}")
+        else:
+            capabilities.append(f"reasoning={effort_str}")
+
+    # LONG TOKEN: emitted only for genuine long tier (long > default > 0)
+    # The 0-sentinel (context_window_default == 0) means old/pre-tier cache → skip
+    if (
+        model.context_window_long > model.context_window_default
+        and model.context_window_default > 0
+    ):
+        # long= advertises the long tier's TOTAL capacity (prompt budget +
+        # max output), whereas the Context column below reports only the
+        # default-tier prompt budget; the two bases are intentionally different.
+        long_total = model.context_window_long + model.max_output_tokens
+        capabilities.append(f"long={_format_long_millions(long_total)}")
+
+    # Build defaults dict (model-specific config — machine-readable source of truth)
     defaults: dict[str, Any] = {}
 
     if model.default_reasoning_effort is not None:
@@ -127,10 +184,15 @@ def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelI
     if model.supported_reasoning_efforts:
         defaults["supported_reasoning_efforts"] = list(model.supported_reasoning_efforts)
 
+    # Context column: use default-tier budget; fall back to ceiling on 0-sentinel
+    context_window = (
+        model.context_window_default if model.context_window_default > 0 else model.context_window
+    )
+
     return AmplifierModelInfo(
         id=model.id,
         display_name=model.name,
-        context_window=model.context_window,
+        context_window=context_window,
         max_output_tokens=model.max_output_tokens,
         capabilities=capabilities,
         defaults=defaults,

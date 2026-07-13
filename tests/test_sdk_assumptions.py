@@ -592,22 +592,113 @@ class TestReasoningEffortLiteralPin:
             f"allowlist may need to follow the SDK's chosen Literal."
         )
 
-    def test_fallback_allowlist_matches_sdk_reasoning_effort_literal(self, sdk_module: Any) -> None:
-        """``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` MUST equal
-        ``frozenset(get_args(ReasoningEffort))`` so a future SDK Literal
-        addition (e.g. ``"ultra"``) is caught here at CI time rather than
-        producing a wrong ``ConfigurationError`` in production on a
-        cold-cache cache-miss path.
+    def test_fallback_allowlist_is_superset_of_sdk_reasoning_effort_literal(
+        self, sdk_module: Any
+    ) -> None:
+        """``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` MUST be a strict superset of
+        ``frozenset(get_args(ReasoningEffort))``: every SDK Literal member must
+        be present, and the only permitted extras are in ``_KNOWN_EXTRAS``.
 
-        Contract: provider-protocol:complete:MUST:11 (SDK literal allowlist
-        ``{"low","medium","high","xhigh"}`` enumerated verbatim in
-        ``contracts/provider-protocol.md``).
+        The provider allowlist extends the v1.0.2 SDK Literal with ``"max"``
+        (advertised by the live list_models endpoint; absent from the v1.0.2
+        SDK Literal). Only values documented in
+        ``_KNOWN_EXTRAS`` are allowed to differ from the SDK Literal — any
+        unreviewed addition is a bug.
+
+        Contract: provider-protocol:complete:MUST:11
 
         Mutation check:
-        - SDK adds ``"ultra"`` but constant unchanged → red (added in SDK).
-        - Constant drops ``"xhigh"`` → red (stale in provider).
-        - Constant adds ``"banana"`` → red (stale in provider).
-        - Both updated to ``{"low","medium","high","xhigh","ultra"}`` → green.
+        - SDK adds ``"ultra"`` but allowlist unchanged → red (missing SDK member).
+        - Constant drops ``"xhigh"`` → red (missing SDK member).
+        - Constant adds ``"banana"`` without adding to _KNOWN_EXTRAS → red.
+        - SDK adds ``"ultra"``; both allowlist and _KNOWN_EXTRAS updated → green.
+        """
+        from typing import get_args
+
+        from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _REASONING_EFFORT_FALLBACK_ALLOWLIST,
+        )
+
+        # Values the provider forwards beyond the v1.0.2 SDK Literal.
+        _KNOWN_EXTRAS: frozenset[str] = frozenset({"none", "max"})
+
+        sdk_members = frozenset(get_args(ReasoningEffort))
+
+        # Every SDK member must be in the provider allowlist.
+        missing = sdk_members - _REASONING_EFFORT_FALLBACK_ALLOWLIST
+        assert not missing, (
+            f"_REASONING_EFFORT_FALLBACK_ALLOWLIST is missing SDK members: "
+            f"{sorted(missing)}. Add them to the frozenset in request_adapter.py "
+            f"and update contracts/provider-protocol.md MUST:11."
+        )
+
+        # No unreviewed extras beyond what is explicitly documented.
+        unreviewed = _REASONING_EFFORT_FALLBACK_ALLOWLIST - sdk_members - _KNOWN_EXTRAS
+        assert not unreviewed, (
+            f"_REASONING_EFFORT_FALLBACK_ALLOWLIST has unreviewed extras vs SDK: "
+            f"{sorted(unreviewed)}. Either remove them or add to _KNOWN_EXTRAS "
+            f"with a justifying comment."
+        )
+
+    def test_reasoning_effort_levels_are_token_safe(self, sdk_module: Any) -> None:
+        """Every REASONING_EFFORT_LEVELS member MUST be a bare lowercase token
+        (``^[a-z]+$``). models.py joins these with '/' to build the
+        ``reasoning=a/b/c`` capability string; a value containing '/' or
+        whitespace would make that token ambiguous to parse.
+
+        Contract: sdk-boundary:ModelDiscovery:MUST:3
+        """
+        import re
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            REASONING_EFFORT_LEVELS,
+        )
+
+        bad = [v for v in REASONING_EFFORT_LEVELS if not re.fullmatch(r"[a-z]+", v)]
+        assert not bad, (
+            f"REASONING_EFFORT_LEVELS members must match ^[a-z]+$ so the "
+            f"'/'-joined reasoning= token is unambiguous; offenders: {bad!r}"
+        )
+
+    def test_reasoning_effort_type_is_literal_4_values(self, sdk_module: Any) -> None:
+        """SDK ``ReasoningEffort`` MUST be a Literal with exactly 4 members.
+
+        Pins the v1.0.2 SDK surface {low, medium, high, xhigh}. The test goes
+        red if the installed SDK's ``ReasoningEffort`` Literal differs from that
+        set, signalling that the provider allowlist and Layer-1 gate need
+        re-evaluation against the changed SDK surface.
+
+        Contract: sdk-boundary:SDKSurface:MUST:3 (pin SDK Literal surface)
+        """
+        from typing import Literal, get_args, get_origin
+
+        from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
+
+        expected = frozenset({"low", "medium", "high", "xhigh"})
+        actual = frozenset(get_args(ReasoningEffort))
+        assert get_origin(ReasoningEffort) is Literal, (
+            f"ReasoningEffort is no longer a Literal; got {ReasoningEffort!r}. "
+            f"Provider allowlist and Layer-1 gate need re-evaluation."
+        )
+        assert actual == expected, (
+            f"SDK ReasoningEffort Literal changed from expected {sorted(expected)} "
+            f"to {sorted(actual)}.\n"
+            f"  Added in SDK:   {sorted(actual - expected)}\n"
+            f"  Removed in SDK: {sorted(expected - actual)}\n"
+            f"Follow the migration steps in this test's docstring."
+        )
+
+    def test_max_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
+        """Pins that ``"max"`` is advertised by the live GitHub Copilot endpoint
+        and is absent from the v1.0.2 SDK ``ReasoningEffort`` Literal.
+
+        The provider's ``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` includes ``"max"``
+        so cache-miss paths forward it to the SDK's Layer-2 backstop instead of
+        raising a ``ConfigurationError``.
+
+        Contract: provider-protocol:complete:MUST:11 (provider fallback allowlist)
         """
         from typing import get_args
 
@@ -618,17 +709,43 @@ class TestReasoningEffortLiteralPin:
         )
 
         sdk_members = frozenset(get_args(ReasoningEffort))
-        assert sdk_members == _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
-            f"Provider _REASONING_EFFORT_FALLBACK_ALLOWLIST drifted from SDK "
-            f"ReasoningEffort Literal.\n"
-            f"  SDK:               {sorted(sdk_members)}\n"
-            f"  Provider:          {sorted(_REASONING_EFFORT_FALLBACK_ALLOWLIST)}\n"
-            f"  Added in SDK:      {sorted(sdk_members - _REASONING_EFFORT_FALLBACK_ALLOWLIST)}\n"
-            f"  Stale in provider: {sorted(_REASONING_EFFORT_FALLBACK_ALLOWLIST - sdk_members)}\n"
-            f"Update _REASONING_EFFORT_FALLBACK_ALLOWLIST in "
-            f"amplifier_module_provider_github_copilot/request_adapter.py "
-            f"AND the contract enumeration at "
-            f"contracts/provider-protocol.md MUST:11."
+        assert "max" not in sdk_members, (
+            "SDK ReasoningEffort now includes 'max'. Delete this test, remove "
+            "'max' from _KNOWN_EXTRAS in test_fallback_allowlist_is_superset*, "
+            "and sync contracts/provider-protocol.md MUST:11."
+        )
+        assert "max" in _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
+            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'max'; the v1.0.2 "
+            "fallback path forwards it to the SDK Layer-2 backstop."
+        )
+
+    def test_none_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
+        """Pins that ``"none"`` is advertised by the live GitHub Copilot endpoint
+        and is absent from the v1.0.2 SDK ``ReasoningEffort`` Literal.
+
+        The provider's ``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` includes ``"none"``
+        so cache-miss paths forward it to the SDK's Layer-2 backstop instead of
+        raising a ``ConfigurationError``.
+
+        Contract: provider-protocol:complete:MUST:11 (provider fallback allowlist)
+        """
+        from typing import get_args
+
+        from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _REASONING_EFFORT_FALLBACK_ALLOWLIST,
+        )
+
+        sdk_members = frozenset(get_args(ReasoningEffort))
+        assert "none" not in sdk_members, (
+            "SDK ReasoningEffort now includes 'none'. Delete this test, remove "
+            "'none' from _KNOWN_EXTRAS in test_fallback_allowlist_is_superset*, "
+            "and sync contracts/provider-protocol.md MUST:11."
+        )
+        assert "none" in _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
+            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'none'; the v1.0.2 "
+            "fallback path forwards it to the SDK Layer-2 backstop."
         )
 
 

@@ -164,6 +164,21 @@ class TestValidateContextTier:
         assert secret not in msg, "rejected value leaked into error text"
         assert "redacted" in msg
 
+    def test_secret_shaped_model_id_redacted_in_error(self) -> None:
+        """A secret-shaped model_id must not leak into the error message.
+
+        Mirrors the model_id redaction at the reasoning_effort raise sites:
+        ``ChatRequest.model`` is caller-controlled, so a misrouted credential
+        reaching this validator must be redacted before it is reflected into
+        the ConfigurationError text.
+        """
+        secret_model = "ghp_" + "x" * 36  # GitHub token shape, len=40
+        with pytest.raises(ConfigurationError) as excinfo:
+            validate_context_tier("turbo", model_id=secret_model)
+        msg = str(excinfo.value)
+        assert secret_model not in msg, "caller-controlled model_id leaked into error text"
+        assert "[REDACTED]" in msg
+
     def test_rejected_value_not_logged_verbatim(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -505,6 +520,10 @@ class TestGetInfoExposesEnableLongContextField:
         )
         assert field.required is False, (
             f"required must be False, got {field.required!r}"
+        )
+        assert field.requires_model is True, (
+            f"requires_model must be True (tier support is per-model), "
+            f"got {field.requires_model!r}"
         )
 
 

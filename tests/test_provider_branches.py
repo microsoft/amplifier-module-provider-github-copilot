@@ -781,3 +781,67 @@ class TestCorrectionLoopForElseExhaustion:
         assert any("exhausted" in r.getMessage().lower() for r in caplog.records), (
             "log_exhausted must be called when for/else fires — 'exhausted' not found in logs"
         )
+
+
+# ---------------------------------------------------------------------------
+# _build_retry_config: override-present and override-absent paths (provider.py)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRetryConfigOverrides:
+    """_build_retry_config always returns a new RetryConfig, applying recognised
+    config keys over the supplied defaults.
+
+    Contract: behaviors:Retry:MUST:7
+
+    Mutation check: dropping the ``config.get("max_retries")`` override makes
+    max_retries a no-op and the provider always uses the policy defaults -
+    test_max_retries_overrides_base_max_attempts goes red.
+    """
+
+    def test_max_retries_overrides_base_max_attempts(self) -> None:
+        """Config key 'max_retries' must set max_attempts to retries + 1.
+
+        Exercises the override path: a recognised key changes the corresponding
+        field, and the result is a distinct object from the defaults.
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_retry_config,
+        )
+        from amplifier_module_provider_github_copilot.provider import (
+            _build_retry_config,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        base = load_retry_config()
+        result = _build_retry_config({"max_retries": 6}, base)
+
+        assert result is not base, (
+            "_build_retry_config must return a new RetryConfig, not the base object."
+        )
+        assert result.max_attempts == 7, (
+            f"max_retries=6 must set max_attempts to 7 (retries + 1); "
+            f"got {result.max_attempts!r}"
+        )
+
+    def test_empty_config_returns_defaults_by_value(self) -> None:
+        """Config dict without any retry keys yields a new RetryConfig equal by
+        value to the defaults (the function never returns the base object itself).
+        """
+        from amplifier_module_provider_github_copilot.config_loader import (
+            load_retry_config,
+        )
+        from amplifier_module_provider_github_copilot.provider import (
+            _build_retry_config,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        base = load_retry_config()
+        result = _build_retry_config({}, base)
+
+        assert result is not base, (
+            "_build_retry_config always constructs a new RetryConfig; it must not "
+            "return the base object by identity."
+        )
+        assert result == base, (
+            f"With no overrides, the result must equal the defaults by value; "
+            f"got {result!r} vs {base!r}"
+        )

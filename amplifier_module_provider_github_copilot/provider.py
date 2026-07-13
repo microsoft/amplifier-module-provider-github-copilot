@@ -84,6 +84,7 @@ from .observability import (
 # Request adapter for ChatRequest conversion (separation of concerns)
 # Include private functions for backward compat (tests import from provider.py)
 from .request_adapter import (
+    REASONING_EFFORT_LEVELS,
     _extract_content_block,  # pyright: ignore[reportPrivateUsage]
     _extract_message_content,  # pyright: ignore[reportPrivateUsage]
     build_request_payload_for_observability,
@@ -516,6 +517,23 @@ class GitHubCopilotProvider:
         # _lookup_copilot_model_info() call. None means "never populated";
         # an empty list means "looked up disk, nothing there".
         self._copilot_models_cache: list[CopilotModelInfo] | None = None
+        # Contract: provider-protocol:complete:MUST:14
+        # Provider-level reasoning_effort default, validated lazily at call time
+        # (mirrors _enable_long_context): an unsupported value surfaces as a
+        # ConfigurationError on the first completion, not at construction. A
+        # non-str config value, the empty string, and the "model default"
+        # sentinel (case-insensitive, trimmed) all normalise to None — no
+        # injection. The stored value is stripped but case is preserved so the
+        # case-sensitive validate_reasoning_effort gate sees the operator input.
+        _raw_reasoning_effort = self.config.get("reasoning_effort")
+        _raw_reasoning_effort = (
+            _raw_reasoning_effort.strip() if isinstance(_raw_reasoning_effort, str) else ""
+        )
+        self._reasoning_effort: str | None = (
+            None
+            if (not _raw_reasoning_effort or _raw_reasoning_effort.lower() == "model default")
+            else _raw_reasoning_effort
+        )
 
     @property
     def _effective_default_model(self) -> str:
@@ -546,6 +564,7 @@ class GitHubCopilotProvider:
         Contract: provider-protocol:get_info:MUST:3 (config_fields)
         Contract: provider-protocol:get_info:MUST:4 (enable_long_context field)
         Contract: provider-protocol:get_info:MUST:5 (tier-selected budget window)
+        Contract: provider-protocol:get_info:MUST:6 (reasoning_effort ConfigField)
         """
         cfg = self._provider_config
         # Copy before injecting — cfg.defaults is the process-wide lru_cached
@@ -588,6 +607,17 @@ class GitHubCopilotProvider:
                     prompt="Default to the long-context tier when the model supports it",
                     required=False,
                     default="false",
+                    requires_model=True,
+                ),
+                ConfigField(
+                    id="reasoning_effort",
+                    display_name="Default reasoning effort",
+                    field_type="choice",
+                    prompt="Select the default reasoning effort for supported models",
+                    choices=["model default", *REASONING_EFFORT_LEVELS],
+                    required=False,
+                    default="model default",
+                    requires_model=True,
                 ),
             ],
         )
@@ -682,7 +712,7 @@ class GitHubCopilotProvider:
         # Contract: provider-protocol:complete:MUST:11. Layer-1 capability gate.
         # Skip the cache read when no effort was requested to keep the hot path
         # zero-overhead. Cache miss is non-fatal: validate_reasoning_effort
-        # applies the SDK literal allowlist and defers per-model policy to
+        # applies the provider fallback allowlist and defers per-model policy to
         # errors.yaml:P4.
         #
         # Contract: observability:Events:MUST:6. Pre-flight ConfigurationError
@@ -698,6 +728,17 @@ class GitHubCopilotProvider:
             validated_reasoning_effort = validate_reasoning_effort(
                 internal_request.reasoning_effort,
                 model_info,
+                model_id=model,
+            )
+
+        # Contract: provider-protocol:complete:MUST:14. Provider-level default —
+        # when the caller omits reasoning_effort and a stored default is configured,
+        # validate and apply it. Caller value (set above) always wins.
+        if validated_reasoning_effort is None and self._reasoning_effort is not None:
+            _default_model_info = self._lookup_copilot_model_info(model)
+            validated_reasoning_effort = validate_reasoning_effort(
+                self._reasoning_effort,
+                _default_model_info,
                 model_id=model,
             )
 

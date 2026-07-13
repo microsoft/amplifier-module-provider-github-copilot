@@ -28,10 +28,19 @@ from .security_redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
+# Provider reasoning-effort levels in ascending intensity order. Single source
+# of truth shared by the request-path fallback allowlist below and the
+# provider's reasoning_effort ConfigField choices (kept in sync by
+# test_reasoning_effort_choices_match_levels). Superset of the v1.0.2 SDK
+# ReasoningEffort Literal {low,medium,high,xhigh}: the live list_models endpoint
+# additionally advertises "none" and "max", neither of which the v1.0.2 SDK
+# Literal enumerates. Membership is pinned by the SDK-superset test in
+# tests/test_sdk_assumptions.py.
+REASONING_EFFORT_LEVELS: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh", "max")
+
 # Fallback allowlist used when the resolved CopilotModelInfo is unavailable
-# (cache miss / unknown model). Without this, any short string would be
-# forwarded to the SDK. Mirrors the SDK ReasoningEffort Literal as of v0.3.0.
-_REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset({"low", "medium", "high", "xhigh"})
+# (cache miss / unknown model). Membership mirrors REASONING_EFFORT_LEVELS.
+_REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset(REASONING_EFFORT_LEVELS)
 
 # Static allowlist for context_tier. Mirrors the public SDK annotation
 # ``copilot.session.ContextTier = typing.Literal["default", "long_context"]``
@@ -46,12 +55,11 @@ _CONTEXT_TIER_ALLOWLIST: frozenset[str] = frozenset({"default", "long_context"})
 # replaced with "<redacted; len=N>". The pattern excludes every known
 # credential shape (uppercase, hyphens, dots, '/', '=', '+', '%' all fail),
 # so machine secrets cannot leak through error reflection. Digits are allowed
-# inside the token to admit future SDK literal variants like "high2" without
+# inside the token to admit lowercase alphanumeric level tokens without
 # false-redacting them; a leading digit is still rejected so PEM-style and
 # numeric-prefix secrets are out. Human passphrases that happen to fit are
-# out of scope: ChatRequest.reasoning_effort is typed Literal[...] at the
-# kernel boundary; routing a secret through it is a caller bug the type
-# system already rejects.
+# out of scope: ChatRequest.reasoning_effort is typed str | None at the
+# kernel boundary, so routing a secret through it is a caller bug.
 _REASONING_EFFORT_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 
 # Pattern matching synthetic role-marker format in user-controlled content.
@@ -353,8 +361,8 @@ def validate_reasoning_effort(
 
     Behavior:
         * empty/None → returns ``None``
-        * value not in the SDK literal allowlist
-          ``{"low","medium","high","xhigh"}`` → raises (universal shape gate;
+        * value not in the provider fallback allowlist
+          ``{"none","low","medium","high","xhigh","max"}`` → raises (universal shape gate;
           rejects mixed-case and unknown tokens regardless of model_info;
           value redacted in error message when it doesn't match the safe
           token shape)
@@ -389,10 +397,11 @@ def validate_reasoning_effort(
     # supported_reasoning_efforts is empty. The redactor above ensures the
     # error message never echoes a non-token-shape value verbatim.
     if reasoning_effort not in _REASONING_EFFORT_FALLBACK_ALLOWLIST:
-        allowed = ", ".join(repr(v) for v in sorted(_REASONING_EFFORT_FALLBACK_ALLOWLIST))
+        allowed = ", ".join(repr(v) for v in REASONING_EFFORT_LEVELS)
         raise ConfigurationError(
-            f"reasoning_effort={safe} for model {model_id!r} is not in the "
-            f"SDK literal allowlist (case-sensitive). Allowed values: {allowed}.",
+            f"reasoning_effort={safe} for model {redact_sensitive_text(model_id)!r} "
+            f"is not in the provider fallback allowlist (case-sensitive). "
+            f"Allowed values: {allowed}.",
             provider=PROVIDER_ID,
         )
 
@@ -410,10 +419,9 @@ def validate_reasoning_effort(
 
     if not model_info.supports_reasoning_effort:
         raise ConfigurationError(
-            f"Model {model_id!r} does not support reasoning_effort. "
-            f"Caller passed reasoning_effort={safe}; remove the "
-            f"field or pick a model whose capability descriptor advertises "
-            f"supports_reasoning_effort=True.",
+            f"Model {redact_sensitive_text(model_id)!r} does not support "
+            f"reasoning_effort={safe}; run 'amplifier provider models "
+            f"github-copilot' and reconfigure.",
             provider=PROVIDER_ID,
         )
 
@@ -421,8 +429,9 @@ def validate_reasoning_effort(
     if allowlist and reasoning_effort not in allowlist:
         allowed = ", ".join(repr(v) for v in allowlist)
         raise ConfigurationError(
-            f"Model {model_id!r} does not support "
-            f"reasoning_effort={safe}. Allowed values: {allowed}.",
+            f"Model {redact_sensitive_text(model_id)!r} does not support "
+            f"reasoning_effort={safe}. Allowed values: {allowed}; run "
+            f"'amplifier provider models github-copilot' and reconfigure.",
             provider=PROVIDER_ID,
         )
 
@@ -474,7 +483,8 @@ def validate_context_tier(
         safe = _redact_token_for_log(context_tier)
         allowed = ", ".join(repr(v) for v in sorted(_CONTEXT_TIER_ALLOWLIST))
         raise ConfigurationError(
-            f"context_tier={safe} for model {model_id!r} is not in the SDK "
+            f"context_tier={safe} for model {redact_sensitive_text(model_id)!r} "
+            f"is not in the SDK "
             f"literal allowlist (case-sensitive). Allowed values: {allowed}.",
             provider=PROVIDER_ID,
         )

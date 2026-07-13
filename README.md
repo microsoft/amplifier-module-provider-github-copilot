@@ -127,7 +127,7 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.2; run `amplifier provider models github-copilot` for the live list.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.2; run `amplifier provider models github-copilot` for the live list. The Context column is the default-tier prompt window; models that advertise a larger long-context tier (shown as `long=` in the live list) are reached by enabling `enable_long_context`.
 
 **Routing:**
 
@@ -139,36 +139,39 @@ Models are discovered dynamically from the SDK at runtime — the list reflects 
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
-| `claude-opus-4.8` | 1M | 64k | streaming, tools, vision, thinking |
-| `claude-opus-4.7` | 1M | 64k | streaming, tools, vision, thinking |
-| `claude-opus-4.6` | 1M | 64k | streaming, tools, vision, thinking |
-| `claude-opus-4.5` | 200k | 32k | streaming, tools, vision |
-| `claude-sonnet-4.6` | 1M | 64k | streaming, tools, vision, thinking |
-| `claude-sonnet-4.5` | 200k | 32k | streaming, tools, vision |
-| `claude-haiku-4.5` | 200k | 64k | streaming, tools, vision |
+| `claude-opus-4.8` | 200k | 64k | streaming, tools, vision, thinking |
+| `claude-opus-4.7` | 200k | 64k | streaming, tools, vision, thinking |
+| `claude-opus-4.6` | 200k | 64k | streaming, tools, vision, thinking |
+| `claude-opus-4.5` | 168k | 32k | streaming, tools, vision |
+| `claude-sonnet-5` | 200k | 64k | streaming, tools, vision, thinking |
+| `claude-sonnet-4.6` | 200k | 64k | streaming, tools, vision, thinking |
+| `claude-sonnet-4.5` | 168k | 32k | streaming, tools, vision |
+| `claude-haiku-4.5` | 136k | 64k | streaming, tools, vision |
 
 **OpenAI:**
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
-| `gpt-5.5` | 1.05M | 128k | streaming, tools, vision, thinking |
-| `gpt-5.4` | 1.05M | 128k | streaming, tools, vision, thinking |
-| `gpt-5.3-codex` | 400k | 128k | streaming, tools, vision, thinking |
-| `gpt-5.4-mini` | 400k | 128k | streaming, tools, vision, thinking |
-| `gpt-5-mini` | 264k | 136k | streaming, tools, vision, thinking |
+| `gpt-5.5` | 272k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.4` | 272k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.3-codex` | 272k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.4-mini` | 272k | 128k | streaming, tools, vision, thinking |
+| `gpt-5-mini` | 128k\* | 136k | streaming, tools, vision, thinking |
+
+> \* `gpt-5-mini`'s Max Output (136k) exceeds its Context value because the Context column is the default-tier prompt window, while Max Output is tier-invariant; the model's full token window is larger than the default-tier prompt budget.
 
 **Google:**
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
-| `gemini-3.1-pro-preview` | 1M | 64k | streaming, tools, vision, thinking |
-| `gemini-3.5-flash` | 1M | 64k | streaming, tools, vision, thinking |
+| `gemini-3.1-pro-preview` | 200k | 64k | streaming, tools, vision, thinking |
+| `gemini-3.5-flash` | 200k | 64k | streaming, tools, vision, thinking |
 
 **MAI:**
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
-| `mai-code-1-flash-internal` | 256k | 128k | streaming, tools, thinking |
+| `mai-code-1-flash-picker` | 128k | 128k | streaming, tools, thinking |
 
 > **Tip:** Want intelligent model selection? Use the [Routing Matrix bundle](https://github.com/microsoft/amplifier-bundle-routing-matrix) to select models by semantic role (`coding`, `reasoning`, `fast`) rather than hardcoding a model ID.
 
@@ -187,6 +190,8 @@ providers:
 | Key | Default | Description |
 | --- | --- | --- |
 | `default_model` | `"claude-opus-4.5"` | Model used when the caller does not specify one. Any ID from `list_models()` is valid. |
+| `reasoning_effort` | `"model default"` | Default reasoning effort applied to completions on models that support it (e.g. `low`, `medium`, `high`). Validated against the target model's advertised levels before the SDK call; an unsupported value raises `ConfigurationError`. Run `amplifier provider models github-copilot` to see each model's levels. `"model default"` (or unset) defers to the model's own default. |
+| `enable_long_context` | `false` | Default to the model's long-context tier when the caller does not set a `context_tier`. Forwarded to the SDK as `long_context`; ignored by models without a long tier. |
 | `raw` | `false` | Include raw SDK payloads as a `"raw"` field in `llm:request` / `llm:response` events. See [Raw Payload Logging](#raw-payload-logging). |
 
 ### Raw Payload Logging

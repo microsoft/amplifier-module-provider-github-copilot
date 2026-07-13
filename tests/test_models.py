@@ -379,7 +379,7 @@ class TestBillingTierWindows:
     def test_billing_without_long_context_collapses_long_to_default(self) -> None:
         # mai shape: billing present, default prompt budget set, no long tier.
         sdk_model = make_sdk_model_info(
-            model_id="mai-code-1-flash-internal",
+            model_id="mai-code-1-flash-picker",
             name="MAI-Code-1-Flash",
             context_window=256_000,
             max_prompt_tokens=128_000,
@@ -391,6 +391,24 @@ class TestBillingTierWindows:
 
         assert result.context_window_default == 128_000
         assert result.context_window_long == 128_000
+
+    def test_claude_sonnet_5_default_tier_budget(self) -> None:
+        # claude-sonnet-5 shape (README snapshot): 200K default-tier prompt
+        # window, no separate long tier => long collapses to default. Anchors
+        # the README claude-sonnet-5 row's Context column to the translation.
+        sdk_model = make_sdk_model_info(
+            model_id="claude-sonnet-5",
+            name="Claude Sonnet 5",
+            context_window=264_000,
+            max_prompt_tokens=200_000,
+            billing_context_max=None,
+            billing_long_context_max=None,
+        )
+
+        result = self._translate(sdk_model)
+
+        assert result.context_window_default == 200_000
+        assert result.context_window_long == 200_000
 
     def test_billing_present_but_no_token_prices(self) -> None:
         # Defensive shape: billing object present, token_prices None => fall to
@@ -1251,7 +1269,11 @@ class TestFetchAndMapModels:
         model = amplifier_models[0]
         assert model.id == "claude-opus-4.5"
         assert model.display_name == "Claude Opus 4.5"
-        assert model.context_window == 200000
+        # context_window now reflects the default-tier budget (context_window_default),
+        # not the SDK display ceiling. For a model without billing, the default budget
+        # equals max_prompt_tokens (168000), so the context column shows 168000.
+        # Contract: sdk-boundary:ModelDiscovery:MUST:3 (context column = default-tier budget)
+        assert model.context_window == 168000
         assert model.max_output_tokens == 32000  # 200000 - 168000
         assert "vision" in model.capabilities
         assert "streaming" in model.capabilities
@@ -1381,3 +1403,239 @@ class TestModelTranslationEdgeCases:
         # Vision/reasoning should default to False when supports is None
         assert result.supports_vision is False
         assert result.supports_reasoning_effort is False
+
+
+# =============================================================================
+# _format_long_millions helper
+# Contract: sdk-boundary:ModelDiscovery:MUST:3
+# =============================================================================
+
+
+class TestFormatLongMillions:
+    """Unit tests for the _format_long_millions rounding/formatting helper.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:3
+    """
+
+    def _fmt(self, tokens: int) -> str:
+        from amplifier_module_provider_github_copilot.models import _format_long_millions
+
+        return _format_long_millions(tokens)
+
+    def test_exactly_one_million(self) -> None:
+        """1_000_000 tokens -> '1.0M'."""
+        assert self._fmt(1_000_000) == "1.0M"
+
+    def test_one_point_zero_five_million(self) -> None:
+        """1_050_000 tokens -> '1.05M'."""
+        assert self._fmt(1_050_000) == "1.05M"
+
+    def test_opus_tier_sum_one_million(self) -> None:
+        """936_000 + 64_000 = 1_000_000 -> '1.0M'."""
+        assert self._fmt(936_000 + 64_000) == "1.0M"
+
+    def test_gpt_tier_sum_one_point_zero_five_million(self) -> None:
+        """922_000 + 128_000 = 1_050_000 -> '1.05M'."""
+        assert self._fmt(922_000 + 128_000) == "1.05M"
+
+    def test_just_under_one_million_rounds_to_one(self) -> None:
+        """999_999 rounds to '1.0M' (two-decimal rounding, trailing zeros
+        stripped, one fractional digit guaranteed)."""
+        assert self._fmt(999_999) == "1.0M"
+
+    def test_hundred_million_keeps_one_fractional_digit(self) -> None:
+        """100_000_000 -> '100.0M' (integer result still carries '.0')."""
+        assert self._fmt(100_000_000) == "100.0M"
+
+
+# =============================================================================
+# Tier-aware capabilities: reasoning= and long= tokens, context column
+# Contract: sdk-boundary:ModelDiscovery:MUST:3
+# =============================================================================
+
+
+class TestTierAwareModelDisplay:
+    """Tier-aware enrichment of the capabilities list and context column.
+
+    Contract: sdk-boundary:ModelDiscovery:MUST:3
+    - MUST map: id, display_name, context_window, max_output_tokens, capabilities
+    - capabilities MUST include reasoning= and long= tokens derived from
+      CopilotModelInfo SDK metadata; defaults dict MUST be preserved.
+    """
+
+    def _make(
+        self,
+        *,
+        supports_vision: bool = False,
+        supports_reasoning_effort: bool = False,
+        supported_reasoning_efforts: tuple[str, ...] = (),
+        default_reasoning_effort: str | None = None,
+        context_window: int = 200_000,
+        max_output_tokens: int = 32_000,
+        context_window_default: int = 0,
+        context_window_long: int = 0,
+    ) -> Any:
+        from amplifier_module_provider_github_copilot.models import (
+            CopilotModelInfo,
+            copilot_model_to_amplifier_model,
+        )
+
+        model = CopilotModelInfo(
+            id="test-model",
+            name="Test Model",
+            context_window=context_window,
+            max_output_tokens=max_output_tokens,
+            supports_vision=supports_vision,
+            supports_reasoning_effort=supports_reasoning_effort,
+            supported_reasoning_efforts=supported_reasoning_efforts,
+            default_reasoning_effort=default_reasoning_effort,
+            context_window_default=context_window_default,
+            context_window_long=context_window_long,
+        )
+        return copilot_model_to_amplifier_model(model)
+
+    def test_reasoning_token_with_default(self) -> None:
+        """Contract: sdk-boundary:ModelDiscovery:MUST:3
+        reasoning= token MUST include all effort levels VERBATIM and default= suffix.
+        """
+        result = self._make(
+            supports_reasoning_effort=True,
+            supported_reasoning_efforts=("low", "medium", "high", "xhigh", "max"),
+            default_reasoning_effort="medium",
+        )
+        reasoning_tokens = [c for c in result.capabilities if c.startswith("reasoning=")]
+        assert len(reasoning_tokens) == 1
+        assert reasoning_tokens[0] == "reasoning=low/medium/high/xhigh/max default=medium"
+
+    def test_reasoning_token_without_default(self) -> None:
+        """When default_reasoning_effort is None, no ' default=' substring in token."""
+        result = self._make(
+            supports_reasoning_effort=True,
+            supported_reasoning_efforts=("low", "medium", "high"),
+            default_reasoning_effort=None,
+        )
+        reasoning_tokens = [c for c in result.capabilities if c.startswith("reasoning=")]
+        assert len(reasoning_tokens) == 1
+        assert " default=" not in reasoning_tokens[0]
+        assert reasoning_tokens[0] == "reasoning=low/medium/high"
+
+    def test_no_reasoning_token_non_reasoning_model(self) -> None:
+        """Non-reasoning models: no 'reasoning=' element and no 'thinking' element."""
+        result = self._make(supports_reasoning_effort=False)
+        assert not any(c.startswith("reasoning=") for c in result.capabilities)
+        assert "thinking" not in result.capabilities
+
+    def test_no_reasoning_token_when_efforts_empty(self) -> None:
+        """reasoning_effort=True but empty efforts list -> no reasoning= token.
+        'thinking' still appears (it reflects supports_reasoning_effort flag).
+        """
+        result = self._make(
+            supports_reasoning_effort=True,
+            supported_reasoning_efforts=(),
+        )
+        assert not any(c.startswith("reasoning=") for c in result.capabilities)
+        assert "thinking" in result.capabilities
+
+    def test_genuine_long_tier_one_million(self) -> None:
+        """Genuine long tier (long > default > 0): 936_000 + 64_000 = 1_000_000 -> 'long=1.0M'."""
+        result = self._make(
+            max_output_tokens=64_000,
+            context_window_default=200_000,
+            context_window_long=936_000,
+        )
+        long_tokens = [c for c in result.capabilities if c.startswith("long=")]
+        assert len(long_tokens) == 1
+        assert long_tokens[0] == "long=1.0M"
+
+    def test_genuine_long_tier_one_point_zero_five_million(self) -> None:
+        """Genuine long tier (long > default > 0): 922_000 + 128_000 = 1_050_000 -> 'long=1.05M'."""
+        result = self._make(
+            max_output_tokens=128_000,
+            context_window_default=200_000,
+            context_window_long=922_000,
+        )
+        long_tokens = [c for c in result.capabilities if c.startswith("long=")]
+        assert len(long_tokens) == 1
+        assert long_tokens[0] == "long=1.05M"
+
+    def test_no_long_token_when_same_windows(self) -> None:
+        """No long= token when context_window_long == context_window_default."""
+        result = self._make(
+            context_window_default=168_000,
+            context_window_long=168_000,
+        )
+        assert not any(c.startswith("long=") for c in result.capabilities)
+
+    def test_zero_sentinel_no_long_token(self) -> None:
+        """context_window_default=0 is the 0-sentinel: no long= token,
+        returned context_window falls back to ceiling (model.context_window).
+        """
+        result = self._make(
+            context_window=128_000,
+            context_window_default=0,
+            context_window_long=0,
+        )
+        assert not any(c.startswith("long=") for c in result.capabilities)
+        assert result.context_window == 128_000
+
+    def test_zero_sentinel_with_positive_long_no_long_token(self) -> None:
+        """context_window_default=0 (0-sentinel) MUST suppress long= even when
+        context_window_long is positive — the ``context_window_default > 0``
+        guard, not just ``long > default``, gates the token.
+
+        Mutation check: dropping the ``and context_window_default > 0`` clause
+        would emit a long= token here (long=900_000 > default=0) and turn this
+        test red.
+        """
+        result = self._make(
+            max_output_tokens=64_000,
+            context_window=128_000,
+            context_window_default=0,
+            context_window_long=900_000,
+        )
+        assert not any(c.startswith("long=") for c in result.capabilities)
+        assert result.context_window == 128_000
+
+    def test_context_column_uses_default_budget(self) -> None:
+        """Tiered model: returned .context_window is the DEFAULT-tier budget, not the ceiling."""
+        result = self._make(
+            context_window=200_000,
+            context_window_default=168_000,
+            context_window_long=168_000,
+        )
+        assert result.context_window == 168_000
+
+    def test_streaming_tools_always_present(self) -> None:
+        """All GitHub Copilot models MUST have 'streaming' and 'tools' capabilities."""
+        result = self._make()
+        assert "streaming" in result.capabilities
+        assert "tools" in result.capabilities
+
+    def test_vision_present_iff_supports_vision(self) -> None:
+        """'vision' in capabilities iff supports_vision=True."""
+        with_vision = self._make(supports_vision=True)
+        without_vision = self._make(supports_vision=False)
+        assert "vision" in with_vision.capabilities
+        assert "vision" not in without_vision.capabilities
+
+    def test_thinking_present_iff_supports_reasoning_effort(self) -> None:
+        """'thinking' in capabilities iff supports_reasoning_effort=True."""
+        with_r = self._make(supports_reasoning_effort=True)
+        without_r = self._make(supports_reasoning_effort=False)
+        assert "thinking" in with_r.capabilities
+        assert "thinking" not in without_r.capabilities
+
+    def test_defaults_dict_preserved_for_reasoning_model(self) -> None:
+        """Regression: defaults dict MUST still carry reasoning fields.
+
+        Contract: sdk-boundary:ModelDiscovery:MUST:3
+        The capabilities string is the human-readable view; defaults is the
+        machine-readable source of truth and MUST NOT be removed.
+        """
+        result = self._make(
+            supports_reasoning_effort=True,
+            supported_reasoning_efforts=("low", "medium", "high"),
+            default_reasoning_effort="medium",
+        )
+        assert result.defaults.get("reasoning_effort") == "medium"
+        assert result.defaults.get("supported_reasoning_efforts") == ["low", "medium", "high"]
