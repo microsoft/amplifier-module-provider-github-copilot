@@ -599,8 +599,8 @@ class TestReasoningEffortLiteralPin:
         ``frozenset(get_args(ReasoningEffort))``: every SDK Literal member must
         be present, and the only permitted extras are in ``_KNOWN_EXTRAS``.
 
-        The provider allowlist extends the v1.0.2 SDK Literal with ``"max"``
-        (advertised by the live list_models endpoint; absent from the v1.0.2
+        The provider allowlist extends the v1.0.6 SDK Literal with ``"max"``
+        (advertised by the live list_models endpoint; absent from the v1.0.6
         SDK Literal). Only values documented in
         ``_KNOWN_EXTRAS`` are allowed to differ from the SDK Literal — any
         unreviewed addition is a bug.
@@ -621,7 +621,7 @@ class TestReasoningEffortLiteralPin:
             _REASONING_EFFORT_FALLBACK_ALLOWLIST,
         )
 
-        # Values the provider forwards beyond the v1.0.2 SDK Literal.
+        # Values the provider forwards beyond the v1.0.6 SDK Literal.
         _KNOWN_EXTRAS: frozenset[str] = frozenset({"none", "max"})
 
         sdk_members = frozenset(get_args(ReasoningEffort))
@@ -665,7 +665,7 @@ class TestReasoningEffortLiteralPin:
     def test_reasoning_effort_type_is_literal_4_values(self, sdk_module: Any) -> None:
         """SDK ``ReasoningEffort`` MUST be a Literal with exactly 4 members.
 
-        Pins the v1.0.2 SDK surface {low, medium, high, xhigh}. The test goes
+        Pins the v1.0.6 SDK surface {low, medium, high, xhigh}. The test goes
         red if the installed SDK's ``ReasoningEffort`` Literal differs from that
         set, signalling that the provider allowlist and Layer-1 gate need
         re-evaluation against the changed SDK surface.
@@ -692,7 +692,7 @@ class TestReasoningEffortLiteralPin:
 
     def test_max_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
         """Pins that ``"max"`` is advertised by the live GitHub Copilot endpoint
-        and is absent from the v1.0.2 SDK ``ReasoningEffort`` Literal.
+        and is absent from the v1.0.6 SDK ``ReasoningEffort`` Literal.
 
         The provider's ``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` includes ``"max"``
         so cache-miss paths forward it to the SDK's Layer-2 backstop instead of
@@ -715,13 +715,13 @@ class TestReasoningEffortLiteralPin:
             "and sync contracts/provider-protocol.md MUST:11."
         )
         assert "max" in _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
-            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'max'; the v1.0.2 "
+            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'max'; the v1.0.6 "
             "fallback path forwards it to the SDK Layer-2 backstop."
         )
 
     def test_none_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
         """Pins that ``"none"`` is advertised by the live GitHub Copilot endpoint
-        and is absent from the v1.0.2 SDK ``ReasoningEffort`` Literal.
+        and is absent from the v1.0.6 SDK ``ReasoningEffort`` Literal.
 
         The provider's ``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` includes ``"none"``
         so cache-miss paths forward it to the SDK's Layer-2 backstop instead of
@@ -744,7 +744,7 @@ class TestReasoningEffortLiteralPin:
             "and sync contracts/provider-protocol.md MUST:11."
         )
         assert "none" in _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
-            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'none'; the v1.0.2 "
+            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'none'; the v1.0.6 "
             "fallback path forwards it to the SDK Layer-2 backstop."
         )
 

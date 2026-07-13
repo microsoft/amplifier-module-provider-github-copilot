@@ -419,7 +419,7 @@ class CopilotClientWrapper:
                         )
                     raise RuntimeError(
                         "CopilotClient unavailable. "
-                        "Production code requires github-copilot-sdk >= 1.0.0b10."
+                        "Production code requires github-copilot-sdk >= 1.0.0."
                     )
 
                 # Wiring:MUST:1/2 — both branches pass base_directory; only the

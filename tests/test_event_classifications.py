@@ -177,6 +177,24 @@ class TestExplicitDropEntriesEmitNoUnknownWarning:
             "session.todos_changed",
             "session.binary_asset",
             "session.canvas.closed",
+            # SDK v1.0.6 (bundled CLI 1.0.69) enum members added to the
+            # events.yaml DROP block. All lifecycle/telemetry/MCP/canvas events
+            # with no kernel domain mapping; see events.yaml for per-event
+            # rationale. assistant.tool_call_delta (partial tool-call input) and
+            # assistant.idle (deferred-idle marker) are DROP so they do NOT
+            # corrupt the content stream / prematurely emit TURN_COMPLETE.
+            "assistant.tool_call_delta",
+            "assistant.idle",
+            "session.usage_checkpoint",
+            "session.session_limits_changed",
+            "session.schedule_rearmed",
+            "session_limits_exhausted.requested",
+            "session_limits_exhausted.completed",
+            "mcp.headers_refresh_required",
+            "mcp.headers_refresh_completed",
+            "session.canvas.unavailable",
+            "session.canvas.recorded",
+            "session.canvas.removed",
         ],
     )
     def test_sdk_030_event_types_classified_without_warning(

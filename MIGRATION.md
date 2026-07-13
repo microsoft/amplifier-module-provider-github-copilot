@@ -1,3 +1,57 @@
+# Migration Guide: v2.4.x → v2.5.0
+
+## Overview
+
+v2.5.0 advances the pinned `github-copilot-sdk` from `1.0.2` to `1.0.6` (stable)
+and raises the import-time support floor from the pre-GA beta `1.0.0b10` to GA
+`1.0.0`. The provider's public surface (`mount`, `GitHubCopilotProvider`, entry
+point, documented configuration env vars) is unchanged — no config key, env var,
+public API symbol, or CLI flag is removed or renamed. The action on upgrade is
+ensuring SDK `1.0.6` is installed. Pre-GA beta SDKs (`1.0.0bN`, `1.0.0rcN`) are
+no longer supported and are rejected at import time.
+
+---
+
+## What Changed: SDK requirement is now `github-copilot-sdk==1.0.6`
+
+- **What:** The provider now pins `github-copilot-sdk==1.0.6` (was `==1.0.2`) and
+  enforces a GA support floor (`>=1.0.0`; was the pre-GA `>=1.0.0b10`). On import
+  it checks the installed SDK version and raises a clear `ImportError` if it is
+  below `1.0.0`. The `1.0.2 → 1.0.6` move is **non-breaking** — no SDK symbol the
+  provider imports was removed or renamed, protocol version is unchanged, and the
+  imported shapes (reasoning-effort literal, context-tier literal, capability
+  overrides) are identical.
+- **New GPT-5.6 models:** SDK `1.0.6` bundles Copilot CLI `1.0.69`, which surfaces
+  the server-driven GPT-5.6 model family (`gpt-5.6-luna`, `gpt-5.6-sol`,
+  `gpt-5.6-terra`) via `list_models`. The provider has no model allowlist, so
+  these appear automatically once the backend advertises them — no provider code
+  change enables them.
+- **New runtime dependency:** SDK `1.0.6` adds `httpx>=0.24.0` (with its transitive
+  deps: `httpcore`, `h11`, `anyio`, `certifi`, `idna`). A clean install
+  pulls these via the regenerated `uv.lock`.
+- **Get the new SDK:** Reinstall through Amplifier
+  (`amplifier provider install --force github-copilot`), or pin manually:
+  `pip install 'github-copilot-sdk==1.0.6'`. A clean `pip install` of `2.5.0`
+  pulls `1.0.6` automatically via the `pyproject.toml` pin.
+- **Dropped support:** Pre-GA beta SDKs (`1.0.0b10` and earlier betas, `rc`) that
+  previously cleared the `1.0.0b10` floor now raise `ImportError` on import.
+- **Rollback:** Pin provider `==2.4.0` with `github-copilot-sdk==1.0.2`.
+
+---
+
+## When
+
+Provider version `2.5.0`.
+
+---
+
+## Rollback
+
+If the new SDK breaks your workflow, pin provider `==2.4.0` with
+`github-copilot-sdk==1.0.2`.
+
+---
+
 # Migration Guide: v2.3.x → v2.4.0
 
 ## Overview
