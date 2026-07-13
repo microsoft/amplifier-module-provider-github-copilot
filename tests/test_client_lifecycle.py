@@ -1257,7 +1257,7 @@ class TestTokenFallbackSecurityExtended:
         ``RuntimeError`` so production code that loses the SDK symbol does
         not silently proceed into ``None(**kwargs)``.
 
-        Contract: sdk-boundary:Membrane:MUST:5 (production needs >=1.0.0b10).
+        Contract: sdk-boundary:Membrane:MUST:5 (production needs >=1.0.0).
         """
         from amplifier_core.llm_errors import ProviderUnavailableError
 
@@ -1277,7 +1277,9 @@ class TestTokenFallbackSecurityExtended:
 
         err = str(exc_info.value)
         assert "CopilotClient unavailable" in err
-        assert "1.0.0b10" in err
+        # Pin the full GA floor phrase (with trailing period) so a regression to a
+        # pre-GA beta message like ">= 1.0.0b10." cannot satisfy this assertion.
+        assert "requires github-copilot-sdk >= 1.0.0." in err
         # The bare RuntimeError chain must survive translation as the cause.
         assert isinstance(exc_info.value.__cause__, RuntimeError)
 

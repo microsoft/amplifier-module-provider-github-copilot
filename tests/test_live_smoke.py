@@ -262,7 +262,7 @@ def _bind_real_sdk_override_types(monkeypatch: pytest.MonkeyPatch) -> None:
     those types this raises ``TypeError: 'NoneType' object is not callable`` —
     a test-harness artifact, NOT a production defect. In production
     ``SKIP_SDK_CHECK`` is unset and ``_imports`` already holds the real classes
-    (verified against github-copilot-sdk==1.0.2). ``client.py`` looks these up
+    (verified against github-copilot-sdk==1.0.6). ``client.py`` looks these up
     via the membrane at call time, so patching ``_imports`` is sufficient.
 
     Fail-closed: uses ``require_sdk()`` (which fails, never skips, on a missing

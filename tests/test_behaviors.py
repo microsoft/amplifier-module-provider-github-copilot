@@ -417,53 +417,67 @@ class TestSdkVersionConsistency:
 
 
 class TestSdkVersionFloorMatchesSymbolRequirements:
-    """Guard must reject versions that lack symbols the adapter calls.
+    """Guard must reject versions below the GA support-policy floor.
 
     Contract: sdk-boundary:Membrane:MUST:5
 
     The adapter calls ``CopilotClient(base_directory=..., mode="copilot-cli", ...)``
-    in ``sdk_adapter/client.py`` plus the 9 new MinimalMode kwargs
+    in ``sdk_adapter/client.py`` plus the 9 MinimalMode kwargs
     (``enable_session_store``, ``enable_skills``, ``enable_file_hooks``,
     ``enable_host_git_operations``, ``enable_on_demand_instruction_discovery``,
     ``skip_embedding_retrieval``, ``embedding_cache_storage``,
-    ``enable_session_telemetry``, ``mcp_oauth_token_storage``) added at b10
-    (verified against SDK b10 ``client.py:1573-1605``). Any SDK older than b10
-    fails at first ``create_session(...)`` with
-    ``TypeError: unexpected keyword argument``.
-    The runtime guard must reject those versions at import time so users
-    get the actionable reinstall message instead of a deferred ``TypeError``.
+    ``enable_session_telemetry``, ``mcp_oauth_token_storage``) — those symbols
+    first appeared at ``1.0.0b10`` (verified against SDK b10
+    ``client.py:1573-1605``). The runtime floor is set higher, at GA (1.0.0),
+    as a SUPPORT POLICY: pre-GA betas (``bN``/``rc``) are no longer supported
+    and must be rejected at import time so users get the actionable reinstall
+    message instead of a deferred ``TypeError``.
     """
 
-    def test_rejects_pre_b9_one_x_versions(self) -> None:
-        """sdk-boundary:Membrane:MUST:5 — b4–b9 must NOT pass the guard.
+    def test_rejects_pre_ga_one_x_versions(self) -> None:
+        """sdk-boundary:Membrane:MUST:5 — pre-GA 1.x betas must NOT pass the guard.
 
-        These versions lack at least one of the b10 MinimalMode MUST:7-15
-        kwargs the adapter passes unconditionally to ``create_session``.
+        These pre-GA prereleases sort below the GA support floor (1.0.0) and
+        are rejected regardless of which MinimalMode kwargs they carry.
         """
         from amplifier_module_provider_github_copilot import (
             _check_sdk_version,  # type: ignore[reportPrivateUsage]
         )
 
-        for stale in ("1.0.0b4", "1.0.0b5", "1.0.0b6", "1.0.0b7", "1.0.0b8", "1.0.0b9"):
+        for stale in (
+            "1.0.0b4",
+            "1.0.0b5",
+            "1.0.0b6",
+            "1.0.0b7",
+            "1.0.0b8",
+            "1.0.0b9",
+            "1.0.0b10",
+            "1.0.0b11",
+            "1.0.0rc1",
+        ):
             with pytest.raises(ImportError) as exc_info:
                 _check_sdk_version(stale)
             msg = str(exc_info.value)
             assert stale in msg, f"Error must echo installed version {stale!r}"
-            assert "1.0.0b10" in msg, "Error must state the pinned target version"
+            assert "1.0.6" in msg, "Error must state the pinned target version"
 
-    def test_accepts_b10_and_above(self) -> None:
-        """sdk-boundary:Membrane:MUST:5 — b10 and forward all satisfy the floor.
+    def test_accepts_ga_and_above(self) -> None:
+        """sdk-boundary:Membrane:MUST:5 — GA (1.0.0) and forward satisfy the floor.
 
-        b10 is the symbol-availability floor (introduction of MinimalMode
-        MUST:7-15 kwargs); the pyproject pin is 1.0.2. b10 and every later
-        release must satisfy the floor.
+        The floor is a support-policy floor at the GA line (1.0.0); the
+        symbol-availability minimum (b10) sits below it, and the pyproject pin
+        is 1.0.6. GA and every later release must satisfy the floor.
         """
         from amplifier_module_provider_github_copilot import (
             _check_sdk_version,  # type: ignore[reportPrivateUsage]
         )
 
-        for ok in ("1.0.0b10", "1.0.0", "1.0.1", "1.1.0", "2.0.0"):
+        for ok in ("1.0.0", "1.0.1", "1.1.0", "2.0.0"):
             _check_sdk_version(ok)  # must not raise
+
+        # Pre-GA betas are now below the support floor.
+        with pytest.raises(ImportError):
+            _check_sdk_version("1.0.0b10")
 
     def test_message_format_invariants_preserved(self) -> None:
         """Pre-existing message anchors survive the floor tightening.

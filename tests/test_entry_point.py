@@ -202,7 +202,7 @@ class TestSDKVersionCheck:
     """
 
     def test_old_sdk_version_raises_import_error(self) -> None:
-        """_check_sdk_version MUST raise ImportError for SDK < 1.0.0b10.
+        """_check_sdk_version MUST raise ImportError for SDK < 1.0.0.
 
         Contract: sdk-boundary:Membrane:MUST:5
         """
@@ -229,6 +229,10 @@ class TestSDKVersionCheck:
             "0.3.0b1",
             "1.0.0a1",
             "1.0.0b9",
+            # Pre-GA betas/rcs are now below the support-policy floor (1.0.0).
+            "1.0.0b10",
+            "1.0.0b11",
+            "1.0.0rc1",
         ):
             with pytest.raises(ImportError, match="github-copilot-sdk"):
                 _check_sdk_version(old_ver)
@@ -238,10 +242,10 @@ class TestSDKVersionCheck:
             _check_sdk_version(good_ver)  # no exception
 
     def test_correct_sdk_version_installed(self) -> None:
-        """SDK installed in the test environment MUST be >= 1.0.0b10.
+        """SDK installed in the test environment MUST be >= 1.0.0.
 
         If this fails, the test environment has a stale SDK. Upgrade with:
-            pip install 'github-copilot-sdk==1.0.0b10'
+            pip install 'github-copilot-sdk==1.0.6'
 
         SKIP_SDK_CHECK bypasses the SDK subprocess at runtime but never exempts
         the test environment from having the correct SDK package installed.
@@ -257,8 +261,8 @@ class TestSDKVersionCheck:
 
         version = importlib.metadata.version("github-copilot-sdk")
         assert _parse_sdk_version(version) >= _SDK_FLOOR, (
-            f"Test environment has SDK {version} which is < 1.0.0b10. "
-            "Install 'github-copilot-sdk==1.0.0b10' to run these tests."
+            f"Test environment has SDK {version} which is < 1.0.0. "
+            "Install 'github-copilot-sdk==1.0.6' to run these tests."
         )
 
     def test_version_check_error_message_is_actionable(self) -> None:
@@ -276,7 +280,7 @@ class TestSDKVersionCheck:
 
         error_msg = str(exc_info.value)
         assert "0.1.28" in error_msg, "Error must include the installed version"
-        assert "1.0.0b10" in error_msg, "Error must state the required version"
+        assert "1.0.6" in error_msg, "Error must state the required version"
         assert "github-copilot-sdk" in error_msg, "Error must name the package"
         assert "amplifier provider install" in error_msg, (
             "Error must include the amplifier provider install command"
@@ -302,16 +306,19 @@ class TestSDKVersionCheck:
             with pytest.raises(ImportError):
                 _check_sdk_version(weird_ver)
 
-        # "1.0.0b10" satisfies the floor and MUST not raise.
-        _check_sdk_version("1.0.0b10")
+        # "1.0.0b10" is a pre-GA beta below the support floor and MUST raise.
+        with pytest.raises(ImportError):
+            _check_sdk_version("1.0.0b10")
 
     def test_post_and_local_releases_above_floor_are_accepted(self) -> None:
-        """PEP 440 post/local/dev releases at or above b10 MUST be accepted.
+        """PEP 440 post/local/dev releases at or above GA (1.0.0) MUST be accepted.
 
         Regression guard for the prior bespoke-regex implementation which
         fail-closed on any of ``.postN``, ``+local``, and ``.devN`` even
         when the underlying release was >= the floor. ``packaging.Version``
-        orders these correctly so the floor check accepts them.
+        orders these correctly so the floor check accepts them. Pre-GA
+        prereleases (``bN``, ``rc``) — including their post/local variants —
+        sort below ``1.0.0`` and MUST be rejected by the GA support floor.
 
         Contract: sdk-boundary:Membrane:MUST:5
         """
@@ -320,10 +327,6 @@ class TestSDKVersionCheck:
         )
 
         for accepted in (
-            "1.0.0b10.post1",
-            "1.0.0b10+local",
-            "1.0.0b11",
-            "1.0.0rc1",
             "1.0.0",
             "1.0.0.post1",
             "1.0.0+local.build",
@@ -332,6 +335,14 @@ class TestSDKVersionCheck:
         ):
             _check_sdk_version(accepted)  # must not raise
 
-        # And the floor itself is still rejected when one beta below.
-        with pytest.raises(ImportError):
-            _check_sdk_version("1.0.0b9")
+        # Pre-GA prereleases (and their post/local variants) sort below 1.0.0
+        # and MUST be rejected by the support-policy floor.
+        for rejected in (
+            "1.0.0b10.post1",
+            "1.0.0b10+local",
+            "1.0.0b11",
+            "1.0.0rc1",
+            "1.0.0b9",
+        ):
+            with pytest.raises(ImportError):
+                _check_sdk_version(rejected)

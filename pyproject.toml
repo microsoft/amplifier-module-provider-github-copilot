@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "2.4.0"
+version = "2.5.0"
 description = "GitHub Copilot provider for Amplifier - Two-Medium Architecture"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,7 +39,11 @@ dependencies = [
     #   v1.0.2 adds graceful runtime shutdown on CopilotClient.stop() (bounded by
     #   _RUNTIME_SHUTDOWN_TIMEOUT_SECONDS) — lands on the once-per-lifecycle close()
     #   path, not the per-turn session disconnect path.
-    "github-copilot-sdk==1.0.2",
+    # - v1.0.6 (stable; bundled CLI 1.0.69): NON-BREAKING for our SDK imports —
+    #   same symbols/shapes as 1.0.2 (protocol version unchanged). Surfaces the
+    #   server-driven GPT-5.6 model family via list_models (no provider allowlist).
+    #   Adds `httpx` as a new runtime dependency (pulled in via uv.lock).
+    "github-copilot-sdk==1.0.6",
     # PyYAML for config loading
     "pyyaml>=6.0",
     # PEP 440 version parser used by the import-time SDK floor check

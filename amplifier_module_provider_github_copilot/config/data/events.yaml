@@ -175,6 +175,46 @@ event_classifications:
     - session.todos_changed
     - session.binary_asset
     - session.canvas.closed
+    # SDK v1.0.6 (bundled CLI 1.0.69) — 12 new SessionEventType enum members.
+    # All DROP: the provider's domain surface is single-completion + tool-call +
+    # usage + error + content-deltas; none of these carry a kernel domain mapping.
+    # Each is grouped with its already-dropped siblings above.
+    #   assistant.tool_call_delta — streaming tool-call *input* delta (partial
+    #     argument tokens: input_delta/tool_call_id/tool_name/tool_type). No
+    #     streaming-tool-call domain type exists; the complete tool call is
+    #     delivered via tool.execution_complete -> TOOL_CALL, and forwarding
+    #     partial args as content would corrupt the text stream. Mirrors
+    #     tool.execution_partial_result (also DROP).
+    #   assistant.idle — main-loop idle that can fire while the session-level
+    #     idle event is DEFERRED (background work still pending). Bridging would
+    #     emit TURN_COMPLETE prematurely and double-emit when session.idle fires;
+    #     session.idle remains the authoritative TURN_COMPLETE source (cf. the
+    #     model.call_failure double-emit rationale above).
+    #   session.usage_checkpoint — durable resume-accounting checkpoint
+    #     (total_nano_aiu); live per-turn usage travels via assistant.usage ->
+    #     USAGE_UPDATE, so this persistence artifact has no per-turn mapping.
+    #   session.session_limits_changed — session-limits state telemetry
+    #     (SessionLimitsConfig | None); no domain value.
+    #   session.schedule_rearmed — self-paced schedule re-arm marker; sibling of
+    #     session.schedule_created / session.schedule_cancelled above.
+    #   session_limits_exhausted.requested / .completed — limits-exhaustion
+    #     handling flow markers (request/completed pattern, cf. auto_mode_switch.*).
+    #   mcp.headers_refresh_required / .completed — MCP header/auth refresh
+    #     lifecycle; sibling of mcp.oauth_required / mcp.oauth_completed above.
+    #   session.canvas.unavailable / .recorded / .removed — canvas UI lifecycle;
+    #     Amplifier hosts no canvas surface (cf. session.canvas.opened / .closed).
+    - assistant.tool_call_delta
+    - assistant.idle
+    - session.usage_checkpoint
+    - session.session_limits_changed
+    - session.schedule_rearmed
+    - session_limits_exhausted.requested
+    - session_limits_exhausted.completed
+    - mcp.headers_refresh_required
+    - mcp.headers_refresh_completed
+    - session.canvas.unavailable
+    - session.canvas.recorded
+    - session.canvas.removed
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:

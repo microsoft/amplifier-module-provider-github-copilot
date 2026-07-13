@@ -44,27 +44,26 @@ _SKIP_SDK_CHECK = _os.environ.get("SKIP_SDK_CHECK") and is_pytest_running()
 
 
 def _check_sdk_version(version_str: str) -> None:
-    """Raise ImportError if SDK version does not satisfy >=1.0.0b10.
+    """Raise ImportError if the SDK version does not satisfy the support floor (>=1.0.0).
 
-    The b10 floor matches what the adapter actually calls:
+    The floor is a SUPPORT-POLICY floor set at the GA line (``>=1.0.0``): pre-GA
+    beta SDKs (``1.0.0bN``, ``1.0.0rcN``) are no longer supported and are
+    rejected here at import time so the user gets an actionable reinstall
+    message instead of a deferred failure.
+
+    History (why the floor is a policy choice, not a symbol requirement): the
+    symbols the adapter actually calls —
     ``CopilotClient(base_directory=..., mode="copilot-cli", ...)`` plus the
-    9 MinimalMode kwargs pinned at b10 (``enable_session_store``,
+    9 MinimalMode ``create_session`` kwargs (``enable_session_store``,
     ``enable_skills``, ``enable_file_hooks``, ``enable_host_git_operations``,
     ``enable_on_demand_instruction_discovery``, ``skip_embedding_retrieval``,
     ``embedding_cache_storage``, ``enable_session_telemetry``,
-    ``mcp_oauth_token_storage``). Eight are new ``create_session`` kwargs in
-    b10 (the seven feature toggles plus ``mcp_oauth_token_storage``; verified
-    against SDK b10 ``client.py:1582-1605`` and absent from b9); passing any of
-    them to b9 raises ``TypeError: unexpected keyword argument`` at the first
-    ``create_session(...)`` call. ``enable_session_telemetry`` is a pre-existing
-    b9 kwarg consolidated under MinimalMode now.
-    Surfacing the floor at import time gives the user the actionable
-    reinstall message instead of a deferred ``TypeError``.
+    ``mcp_oauth_token_storage``) — first existed at the ``1.0.0b10`` beta, so
+    the technical symbol-availability minimum sits *below* this floor. The floor
+    is deliberately set higher, at GA, to drop beta-SDK support entirely.
 
-    The floor is the symbol-availability minimum (``>=1.0.0b10``); the
-    exact pyproject pin (``==1.0.2``) is enforced separately by
-    ``tests/_sdk_version_gate.py``. Earlier 1.x betas lack required
-    MinimalMode kwargs and are rejected here at import time.
+    The exact pyproject pin (``==1.0.6``) is enforced separately by
+    ``tests/_sdk_version_gate.py``; this guard only enforces the GA floor.
 
     Extracted for testability — module-level code that runs under
     SKIP_SDK_CHECK cannot be reached by unit tests; this function can be
@@ -74,15 +73,15 @@ def _check_sdk_version(version_str: str) -> None:
     """
     if _parse_sdk_version(version_str) < _SDK_FLOOR:
         raise ImportError(
-            f"github-copilot-sdk=={version_str} is below the symbol-availability "
-            "floor (>=1.0.0b10 required; MinimalMode MUST:7-15 kwargs added at b10). "
-            "Pinned target: ==1.0.2 (pyproject.toml). "
-            "Reinstall with: pip install 'github-copilot-sdk==1.0.2' "
+            f"github-copilot-sdk=={version_str} is below the minimum supported "
+            "version (>=1.0.0 required; pre-GA beta SDKs are no longer supported). "
+            "Pinned target: ==1.0.6 (pyproject.toml). "
+            "Reinstall with: pip install 'github-copilot-sdk==1.0.6' "
             f"or: amplifier provider install --force {PROVIDER_ID}"
         )
 
 
-_SDK_FLOOR: _Version = _Version("1.0.0b10")
+_SDK_FLOOR: _Version = _Version("1.0.0")
 _SDK_UNPARSEABLE: _Version = _Version("0.0.0a0")
 
 
@@ -106,7 +105,7 @@ if not _SKIP_SDK_CHECK:  # pragma: no cover
         # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
-            "Install with:  pip install 'github-copilot-sdk==1.0.2'"
+            "Install with:  pip install 'github-copilot-sdk==1.0.6'"
         ) from _e
     # Contract: sdk-boundary:Membrane:MUST:5 — fail at import time on wrong version.
     _check_sdk_version(_sdk_version)
@@ -127,7 +126,7 @@ from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
 # Contract: provider-protocol:public_api:MUST:1 — must match pyproject.toml [project].version
 # Verified by tests/test_behaviors.py::TestPackageVersionConsistency
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"
