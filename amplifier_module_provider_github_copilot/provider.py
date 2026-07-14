@@ -90,6 +90,7 @@ from .request_adapter import (
     build_request_payload_for_observability,
     build_response_payload_for_observability,
     convert_chat_request,
+    resolve_provider_default_effort,
     validate_context_tier,
     validate_reasoning_effort,
 )
@@ -518,13 +519,13 @@ class GitHubCopilotProvider:
         # an empty list means "looked up disk, nothing there".
         self._copilot_models_cache: list[CopilotModelInfo] | None = None
         # Contract: provider-protocol:complete:MUST:14
-        # Provider-level reasoning_effort default, validated lazily at call time
-        # (mirrors _enable_long_context): an unsupported value surfaces as a
-        # ConfigurationError on the first completion, not at construction. A
-        # non-str config value, the empty string, and the "model default"
-        # sentinel (case-insensitive, trimmed) all normalise to None — no
+        # Provider-level reasoning_effort default, resolved lazily at call time
+        # against the per-call model (mirrors _enable_long_context); the
+        # apply/drop/forward/raise policy lives in resolve_provider_default_effort.
+        # A non-str config value, the empty string, and the "model default"
+        # sentinel (case-insensitive, trimmed) all normalise to None -- no
         # injection. The stored value is stripped but case is preserved so the
-        # case-sensitive validate_reasoning_effort gate sees the operator input.
+        # case-sensitive shape gate sees the operator input.
         _raw_reasoning_effort = self.config.get("reasoning_effort")
         _raw_reasoning_effort = (
             _raw_reasoning_effort.strip() if isinstance(_raw_reasoning_effort, str) else ""
@@ -713,15 +714,17 @@ class GitHubCopilotProvider:
         # Skip the cache read when no effort was requested to keep the hot path
         # zero-overhead. Cache miss is non-fatal: validate_reasoning_effort
         # applies the provider fallback allowlist and defers per-model policy to
-        # errors.yaml:P4.
+        # errors.yaml:P4. A well-formed caller value the resolved model cannot
+        # consume is DROPPED to None with a WARNING (server falls back), symmetric
+        # with the MUST:14 operator-default gate; only a malformed value stays fail-loud.
         #
         # Contract: observability:Events:MUST:6. Pre-flight ConfigurationError
-        # raised here is exempt from llm:request/llm:response emission — the
-        # SDK was never touched, so the request/response pair invariant does
-        # not apply. Caller-bug rejections are tracked via INFO/WARNING logs
-        # and are categorically distinct from in-flight failures (which the
-        # 5xx-class llm:response error events cover).
-        if internal_request.reasoning_effort is None:
+        # raised here (malformed value only) is exempt from llm:request/llm:response
+        # emission — the SDK was never touched, so the request/response pair
+        # invariant does not apply. Caller-bug rejections and capability-mismatch
+        # drops are tracked via INFO/WARNING logs and are categorically distinct
+        # from in-flight failures (which the 5xx-class llm:response error events cover).
+        if not internal_request.reasoning_effort:
             validated_reasoning_effort: str | None = None
         else:
             model_info = self._lookup_copilot_model_info(model)
@@ -732,11 +735,18 @@ class GitHubCopilotProvider:
             )
 
         # Contract: provider-protocol:complete:MUST:14. Provider-level default —
-        # when the caller omits reasoning_effort and a stored default is configured,
-        # validate and apply it. Caller value (set above) always wins.
-        if validated_reasoning_effort is None and self._reasoning_effort is not None:
+        # when the caller OMITS reasoning_effort and a stored default is configured,
+        # resolve it against the per-call model: apply where the model supports it,
+        # drop to None where it does not (server falls back), forward-and-defer on
+        # cache miss, and raise on a malformed default. Gated on the caller having
+        # supplied nothing (falsy ``reasoning_effort`` — ``None`` or empty string;
+        # ``CompletionRequest`` does not normalize ``""`` to ``None`` the way the
+        # ChatRequest membrane does), so a caller value that MUST:11 dropped for an
+        # incapable model does NOT spuriously re-trigger the operator default on the
+        # same model (the raw truthy field, not the dropped result, is checked).
+        if not internal_request.reasoning_effort and self._reasoning_effort is not None:
             _default_model_info = self._lookup_copilot_model_info(model)
-            validated_reasoning_effort = validate_reasoning_effort(
+            validated_reasoning_effort = resolve_provider_default_effort(
                 self._reasoning_effort,
                 _default_model_info,
                 model_id=model,

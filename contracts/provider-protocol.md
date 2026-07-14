@@ -5,7 +5,7 @@
 - **Module Reference:** amplifier_module_provider_github_copilot/provider.py
 - **Amplifier Contract:** amplifier-core PROVIDER_CONTRACT.md
 - **Status:** Specification
-- **Updated:** 2026-06-30 — Extended the provider reasoning-effort fallback allowlist and the `reasoning_effort` ConfigField choices to admit `"none"` (now `{"none","low","medium","high","xhigh","max"}`), reconciling `complete:MUST:11`, the Layer-1 narrative cache-miss clause, and `get_info:MUST:6` to the 6-value set. Like `"max"`, `"none"` is advertised by live `list_models` for some models but is not enumerated by the v1.0.2 SDK `ReasoningEffort` Literal `{low,medium,high,xhigh}`; it is forwarded verbatim through the SDK truthiness pass-through and gated per-model by `supported_reasoning_efforts` (rejected fail-loud for a model that does not advertise it). No behavioural change for models that do not advertise `"none"`. Prior: 2026-06-29 — Defined `complete:MUST:14` (provider-level `reasoning_effort` default: `__init__` normalises `"model default"` case-insensitively after trimming surrounding whitespace and the empty string to `None`, else stores the value verbatim; `complete()` applies the stored default only when the caller's MUST:11-resolved value is `None`, the caller value wins, the stored default is validated through the same `validate_reasoning_effort` gate before any SDK call, forwarded on both call sites, with no `ChatRequest` mutation) and recorded the already-present `get_info:MUST:6` (choice `reasoning_effort` ConfigField). Reconciled the `complete:MUST:11` row and the Layer-1 narrative cache-miss clause to the 5-value provider fallback allowlist `{"low","medium","high","xhigh","max"}` (a strict superset of the v1.0.2 SDK `ReasoningEffort` Literal that additionally admits `"max"`). Tightened the `get_info:MUST:6` `"model default"` normalisation wording to case-insensitive/trimmed. Prior: 2026-06-24 — Corrected `get_info:MUST:5`/`get_info:MUST:2`: `defaults.max_output_tokens` is the resolved model's single tier-invariant `CopilotModelInfo.max_output_tokens` (derived per `sdk-boundary` §Limit Derivation), NOT tier-selected — the SDK exposes per-tier PROMPT budgets only, with no per-tier `max_output_tokens`, so the same value is reported for both tiers (matches `tests/test_context_tier.py` asserting `64_000` in both tiers). Only `defaults.context_window` is tier-selected. Wording-only; no code/test change. Prior: 2026-06-22 — Added `get_info:MUST:5` (tier-aware budget reporting: when the configured default model's `CopilotModelInfo` is resolvable from cache, `defaults.context_window` and `defaults.max_output_tokens` report the effective tier-selected prompt-budget window — long-tier when `enable_long_context` parses truthy and the model exposes a long tier, else default-tier — read live from SDK billing; cold cache => static fallback, MUST NOT raise/fetch/block the wizard; MUST copy the lru-cached `cfg.defaults` before mutation) and strengthened `get_info:MUST:2` from presence to concrete value-shape. Reporting-only; preserves `complete:MUST:13` "does not unlock capacity". Prior: 2026-06-22 — Added MUST:13 (provider-level `enable_long_context` default: when the flag parses truthy and the caller omits `context_tier`, `complete()` resolves an effective `context_tier` of `"long_context"` and runs it through the MUST:12 gate; a caller-supplied value takes precedence; selects the tier, does not unlock capacity) and `get_info:MUST:4` (boolean `enable_long_context` ConfigField for the init wizard). Prior: 2026-06-22 — Added MUST:12 (context_tier forward-only plumbing with a static SDK-literal membership gate; no per-model capability descriptor exists; verbatim string forwarded, never the SDK enum; emit/visibility deferred to a separate change-set). Prior: 2026-05-12 — Added MUST:11 (reasoning_effort plumbing) and QualityGates section. Cross-referenced `observability:Events:MUST:6` (pre-flight ConfigurationError exempt from llm:request/llm:response emission).
+- **Updated:** 2026-07-17 — `complete:MUST:11`/`complete:MUST:14`: a `reasoning_effort` the resolved model cannot consume (`supports_reasoning_effort=False`, or absent from a non-empty `supported_reasoning_efforts`) is DROPPED to `None` with a log (WARNING for a caller value, INFO for the operator default) and the `reasoningEffort` field omitted on the wire, instead of raising `ConfigurationError` — fixing broken delegation when a parent session's effort is inherited by a sub-agent routed to a non-reasoning model (e.g. a `fast` role — `claude-haiku-4.5`). The resolved model's advertised `supported_reasoning_efforts` is authoritative and WIDENS acceptance beyond the static fallback allowlist `{none,low,medium,high,xhigh,max}` (e.g. `minimal`, advertised for `gemini-3.5-flash`, is forwarded rather than raising). A malformed/unknown token still raises for every model (shared `_check_effort_shape`, before any SDK call); cache-miss forwards and defers to the SDK Layer-2 backstop. The operator default only applies when the caller supplied nothing, so a dropped caller value does not re-trigger it. Caller precedence, dual-call-site forwarding, and `ChatRequest` immutability are unchanged. Prior: 2026-06-30 — Extended the provider reasoning-effort fallback allowlist and the `reasoning_effort` ConfigField choices to admit `"none"` (now `{"none","low","medium","high","xhigh","max"}`), reconciling `complete:MUST:11`, the Layer-1 narrative cache-miss clause, and `get_info:MUST:6` to the 6-value set. Like `"max"`, `"none"` is advertised by live `list_models` for some models but is not enumerated by the v1.0.2 SDK `ReasoningEffort` Literal `{low,medium,high,xhigh}`; it is forwarded verbatim through the SDK truthiness pass-through and gated per-model by `supported_reasoning_efforts` (rejected fail-loud for a model that does not advertise it). No behavioural change for models that do not advertise `"none"`. Prior: 2026-06-29 — Defined `complete:MUST:14` (provider-level `reasoning_effort` default: `__init__` normalises `"model default"` case-insensitively after trimming surrounding whitespace and the empty string to `None`, else stores the value verbatim; `complete()` applies the stored default only when the caller's MUST:11-resolved value is `None`, the caller value wins, the stored default is validated through the same `validate_reasoning_effort` gate before any SDK call, forwarded on both call sites, with no `ChatRequest` mutation) and recorded the already-present `get_info:MUST:6` (choice `reasoning_effort` ConfigField). Reconciled the `complete:MUST:11` row and the Layer-1 narrative cache-miss clause to the 5-value provider fallback allowlist `{"low","medium","high","xhigh","max"}` (a strict superset of the v1.0.2 SDK `ReasoningEffort` Literal that additionally admits `"max"`). Tightened the `get_info:MUST:6` `"model default"` normalisation wording to case-insensitive/trimmed. Prior: 2026-06-24 — Corrected `get_info:MUST:5`/`get_info:MUST:2`: `defaults.max_output_tokens` is the resolved model's single tier-invariant `CopilotModelInfo.max_output_tokens` (derived per `sdk-boundary` §Limit Derivation), NOT tier-selected — the SDK exposes per-tier PROMPT budgets only, with no per-tier `max_output_tokens`, so the same value is reported for both tiers (matches `tests/test_context_tier.py` asserting `64_000` in both tiers). Only `defaults.context_window` is tier-selected. Wording-only; no code/test change. Prior: 2026-06-22 — Added `get_info:MUST:5` (tier-aware budget reporting: when the configured default model's `CopilotModelInfo` is resolvable from cache, `defaults.context_window` and `defaults.max_output_tokens` report the effective tier-selected prompt-budget window — long-tier when `enable_long_context` parses truthy and the model exposes a long tier, else default-tier — read live from SDK billing; cold cache => static fallback, MUST NOT raise/fetch/block the wizard; MUST copy the lru-cached `cfg.defaults` before mutation) and strengthened `get_info:MUST:2` from presence to concrete value-shape. Reporting-only; preserves `complete:MUST:13` "does not unlock capacity". Prior: 2026-06-22 — Added MUST:13 (provider-level `enable_long_context` default: when the flag parses truthy and the caller omits `context_tier`, `complete()` resolves an effective `context_tier` of `"long_context"` and runs it through the MUST:12 gate; a caller-supplied value takes precedence; selects the tier, does not unlock capacity) and `get_info:MUST:4` (boolean `enable_long_context` ConfigField for the init wizard). Prior: 2026-06-22 — Added MUST:12 (context_tier forward-only plumbing with a static SDK-literal membership gate; no per-model capability descriptor exists; verbatim string forwarded, never the SDK enum; emit/visibility deferred to a separate change-set). Prior: 2026-05-12 — Added MUST:11 (reasoning_effort plumbing) and QualityGates section. Cross-referenced `observability:Events:MUST:6` (pre-flight ConfigurationError exempt from llm:request/llm:response emission).
 
 ---
 
@@ -191,12 +191,25 @@ async def complete(
   which the SDK adapter translates to
   `CopilotClient.create_session(reasoning_effort=<value>)` and the SDK
   serializes onto the JSON-RPC `session.create` payload as `reasoningEffort`.
-  Before the SDK call, the provider MUST pre-validate the value against the
-  resolved model's capability descriptor: if
-  `CopilotModelInfo.supports_reasoning_effort` is False, or the value is not in
-  `CopilotModelInfo.supported_reasoning_efforts` (when that allowlist is
-  non-empty), raise `kernel_errors.ConfigurationError` with the offending
-  model id, the rejected value, and (when applicable) the allowed set. The
+  Before the SDK call, the provider MUST resolve the value through the
+  capability-aware `validate_reasoning_effort` gate: a malformed, mixed-case,
+  overlong, or unknown token that is neither in the shared fallback allowlist nor
+  a shape-valid value advertised by the resolved model raises
+  `kernel_errors.ConfigurationError`, before any SDK call. When the resolved
+  model's `CopilotModelInfo` is cached with `supports_reasoning_effort` True, the
+  value is listed in its `supported_reasoning_efforts`, AND the value matches the
+  universal safe-token shape (`_REASONING_EFFORT_TOKEN_RE`), the value is accepted
+  verbatim even if it lies outside the static fallback allowlist — the model's
+  advertised set is authoritative and WIDENS allowlist membership (e.g. `minimal`
+  for `gemini-3.5-flash`); widening never relaxes the lexical shape, so a
+  malformed or secret-shaped token advertised by a poisoned on-disk cache still
+  falls through to the shape gate and is rejected (value redacted). A
+  well-formed value the resolved model cannot consume
+  (`CopilotModelInfo.supports_reasoning_effort` is False, or the value absent
+  from a non-empty `CopilotModelInfo.supported_reasoning_efforts`) is DROPPED to
+  `None` with a WARNING log naming the model and the drop reason (the field is omitted and the server falls back to its default), NOT raised; on cache-miss
+  (`CopilotModelInfo` unavailable) the value is forwarded with an INFO log,
+  deferring final per-model validation to the SDK Layer-2 backstop. The
   empty string `""` is treated as None (no effort requested). Forwarding
   applies to BOTH the normal completion call site and the fake-tool correction
   retry call site in `provider.py`. Relies on `github-copilot-sdk>=0.3.0`
@@ -278,26 +291,43 @@ no enforcement docstring).
 
 **Enforcement Disclaimer for `reasoning_effort` (MUST:11):**
 
-The provider's MUST:11 obligation is **forward + pre-validate**, not enforce
+The provider's MUST:11 obligation is **forward + best-effort pre-validate**, not enforce
 that the model actually reasons. Three layers are in scope:
 
 1. **Provider Layer 1 (proactive gate)** — `validate_reasoning_effort()` in
    `request_adapter.py` is called from `provider.complete()` after
-   `convert_chat_request` and after `CopilotModelInfo` lookup. Raises
-   `kernel_errors.ConfigurationError` on (a) `supports_reasoning_effort=False`,
-   (b) value outside a non-empty `supported_reasoning_efforts` allowlist,
-   (c) value longer than 16 chars (defensive), (d) mixed-case value (SDK is
-   strictly lowercase Literal), or (e) cache-miss (`model_info is None`)
-   AND value not in the provider's fallback allowlist
-   `{"none","low","medium","high","xhigh","max"}` — a strict superset of the
-   v1.0.2 SDK `ReasoningEffort` Literal that additionally admits `"none"` and `"max"`.
-   Verified by `tests/test_reasoning_effort.py`.
-2. **Provider Layer 2 (SDK-error backstop)** — when Layer 1 is bypassed
-   (stale capability cache, model added server-side, or model_info lookup
-   miss), the SDK raises `JsonRpcError` with `"does not support"` text.
-   `errors.yaml:P4` substring rule maps this to `ConfigurationError` via
-   `error_translation.py`. Layer-1 and Layer-2 raise the SAME class —
-   contract obligation, not coincidence.
+   `convert_chat_request` and after `CopilotModelInfo` lookup. The resolved
+   model's advertised capability set is consulted FIRST: when `CopilotModelInfo`
+   is cached, `supports_reasoning_effort` is True, the value is listed in
+   `supported_reasoning_efforts`, AND the value matches the universal safe-token
+   shape (`_REASONING_EFFORT_TOKEN_RE` — lowercase `[a-z][a-z0-9_]{0,15}`), the
+   value is accepted verbatim — the advertised set is authoritative and WIDENS
+   allowlist acceptance beyond the static fallback set
+   (e.g. `minimal` for `gemini-3.5-flash`, advertised by live `list_models` yet
+   absent from the static list). Widening relaxes only allowlist membership,
+   never the lexical safe-token shape: a malformed or secret-shaped token that a
+   poisoned on-disk model cache advertises is NOT early-accepted and instead
+   falls through to the shape check below (rejected, value redacted). Otherwise
+   the model-independent shape gate
+   (`_check_effort_shape`) applies: a value outside the provider fallback allowlist
+   `{"none","low","medium","high","xhigh","max"}` (case-sensitive — rejecting
+   mixed-case, overlong, or unknown tokens) that the model does not early-accept
+   (not cache-confirmed `supports_reasoning_effort=True` and listed in
+   `supported_reasoning_efforts`) raises `kernel_errors.ConfigurationError`, before any SDK call. A shape-valid
+   value the cached model cannot consume
+   (`supports_reasoning_effort=False`, or a non-empty `supported_reasoning_efforts`
+   that excludes the value) is DROPPED to `None` with a WARNING log
+   (the field is omitted and the server falls back to its default) — NOT raised. On cache-miss
+   (`model_info is None`) a shape-valid value is forwarded with an INFO log,
+   deferring final per-model validation to the SDK Layer-2 backstop. Verified by
+   `tests/test_reasoning_effort.py`.
+2. **Provider Layer 2 (SDK-error backstop)** — when a shape-valid value is
+   forwarded without a local capability verdict (cache-miss, or a model whose
+   capability flipped server-side), the SDK raises `JsonRpcError` with
+   `"does not support"` text. `errors.yaml:P4` substring rule maps this to
+   `ConfigurationError` via `error_translation.py`. This backstop raises the same
+   class Layer 1 raises for a malformed token — a genuine server rejection stays
+   loud rather than being silently masked.
 3. **Backend / model runtime** — decides whether to actually allocate
    reasoning tokens. `claude-opus-4.7` family advertises
    `supports_reasoning_effort=True` yet may emit zero `assistant.reasoning*`
@@ -316,11 +346,13 @@ that the model actually reasons. Three layers are in scope:
   lowercase per `Literal["low","medium","high","xhigh"]`.
 
 **Provider obligations under MUST:11:** when not None and not empty, validate
-against the target model's capability descriptor and forward the verbatim
-string to `client.session(reasoning_effort=...)`; both the main completion
-path and the fake-tool correction retry path MUST forward identically.
-`_execute_sdk_completion` MUST accept `reasoning_effort` as an explicit
-keyword argument (no `**kwargs` smuggle).
+against the target model's capability descriptor: forward the verbatim string to
+`client.session(reasoning_effort=...)` when the model can consume it, drop it to
+`None` with a WARNING log when the cached descriptor shows it cannot (server
+falls back), forward-and-defer on cache-miss, and raise only on a malformed
+token. Both the main completion path and the fake-tool correction retry path
+MUST forward identically. `_execute_sdk_completion` MUST accept `reasoning_effort`
+as an explicit keyword argument (no `**kwargs` smuggle).
 
 **Module References (MUST:11):**
 - Layer-1 gate: `request_adapter.validate_reasoning_effort`
@@ -340,8 +372,12 @@ None)` straight into the Anthropic SDK call without a capability gate); this
 provider adds the Layer-1 capability gate because the GitHub Copilot SDK
 exposes per-model capability metadata (`CopilotModelInfo`) that the Anthropic
 provider does not have, and because a server-side rejection here surfaces as a
-remote `JsonRpcError` rather than a local TypeError. Layer 1 keeps the failure
-local and gives a helpful error enumerating the accepted values.
+remote `JsonRpcError` rather than a local TypeError. Layer 1's shape gate keeps
+a malformed or unknown token local with a helpful error enumerating the accepted
+values; a well-formed effort the resolved model merely cannot consume is instead
+dropped to `None` (the field is omitted; the server falls back), not surfaced as
+an error, and a cache miss forwards and defers final validation to the Layer-2
+backstop.
 
 **Provider obligations under MUST:12 (`context_tier`):** when not None and not
 empty, validate against the static SDK literal allowlist `{"default","long_context"}`
@@ -419,10 +455,10 @@ is provider runtime config (mirroring `self._raw` / `use_streaming` /
 | `provider-protocol:complete:MUST:8` | Forwards images as BlobAttachments to SDK |
 | `provider-protocol:complete:MUST:9` | When malformed tool sequences are detected (tool call without matching tool result in current request), MUST insert synthetic tool-result messages before prompt extraction and MUST log one WARNING per repair event; MUST NOT raise |
 | `provider-protocol:complete:MUST:10` | When `ChatRequest.max_output_tokens` is not None, MUST forward it to SDK `create_session()` as `model_capabilities=ModelCapabilitiesOverride(limits=ModelLimitsOverride(max_output_tokens=<value>))`; MUST NOT raise; relies on `github-copilot-sdk>=0.3.0` |
-| `provider-protocol:complete:MUST:11` | When `ChatRequest.reasoning_effort` is not None and not empty, MUST pre-validate the value against the provider's fallback allowlist `{"none","low","medium","high","xhigh","max"}` (case-sensitive) regardless of cache state — a strict superset of the v1.0.2 SDK `ReasoningEffort` Literal that additionally admits `"none"` and `"max"`, which live `list_models` advertises for some models though the SDK Literal does not enumerate them — then against the resolved model's `supports_reasoning_effort` and `supported_reasoning_efforts`; on cache-miss (`CopilotModelInfo` unavailable) MUST emit an INFO log deferring final per-model validation to the SDK Layer-2 backstop; on any mismatch MUST raise `kernel_errors.ConfigurationError` before any SDK call; otherwise MUST forward verbatim to `client.session(reasoning_effort=<value>)` on BOTH the main and fake-tool-retry call sites; relies on `github-copilot-sdk>=0.3.0` |
+| `provider-protocol:complete:MUST:11` | When `ChatRequest.reasoning_effort` is not None and not empty, MUST resolve the value through the capability-aware `validate_reasoning_effort` gate before any SDK call: when the resolved model's `CopilotModelInfo` is cached, `supports_reasoning_effort` is True, the value is listed in `supported_reasoning_efforts`, AND the value matches the universal safe-token shape (`_REASONING_EFFORT_TOKEN_RE`, lowercase `[a-z][a-z0-9_]{0,15}`), the value MUST be accepted verbatim — the model's advertised set is authoritative and WIDENS allowlist acceptance beyond the static fallback set (e.g. `minimal`, advertised by live `list_models` for `gemini-3.5-flash` yet absent from the static list); widening relaxes only allowlist membership, never the lexical safe-token shape, so a malformed or secret-shaped token that a poisoned on-disk model cache advertises is NOT early-accepted and instead falls through to the shape check (rejected, value redacted). Otherwise the shared fallback-allowlist shape check applies (`_check_effort_shape`, case-sensitive against `{"none","low","medium","high","xhigh","max"}` — a strict superset of the SDK `ReasoningEffort` Literal that additionally admits `"none"` and `"max"`, which live `list_models` advertises for some models though the SDK Literal does not enumerate them; a malformed, mixed-case, overlong, or unknown token that the model does not early-accept (not cache-confirmed `supports_reasoning_effort=True` and listed in `supported_reasoning_efforts`) MUST raise `kernel_errors.ConfigurationError`, identically for every such model, before any SDK call). When the model's `CopilotModelInfo` is cached and the model cannot consume a shape-valid value (`supports_reasoning_effort` is False, OR `supported_reasoning_efforts` is non-empty and does not list the value) the caller value MUST be DROPPED to `None` (NOT raised), emitting one WARNING log naming the model and the drop reason so the field is omitted and the server falls back to its default; on cache-miss (`CopilotModelInfo` unavailable) MUST emit an INFO log and forward, deferring final per-model validation to the SDK Layer-2 backstop; otherwise MUST forward verbatim to `client.session(reasoning_effort=<value>)` on BOTH the main and fake-tool-retry call sites. This drop-not-raise leniency for a capability mismatch mirrors `complete:MUST:14` (operator default); only a malformed token stays fail-loud. Relies on `github-copilot-sdk>=0.3.0` |
 | `provider-protocol:complete:MUST:12` | When the request supplies a `context_tier` attribute (via `getattr(request, "context_tier", None)`) that is not None and not empty, MUST pre-validate the value against the static SDK literal allowlist `{"default","long_context"}` (case-sensitive); the empty string is treated as None; there is NO per-model capability gate (the SDK exposes no context-tier descriptor); on any mismatch MUST raise `kernel_errors.ConfigurationError` (rejected value redacted) before any SDK call; otherwise MUST forward the verbatim string to `client.session(context_tier=<value>)` on BOTH the main and fake-tool-retry call sites (`_execute_sdk_completion` accepts `context_tier` as an explicit keyword argument, no `**kwargs` smuggle); MUST forward the string, never the SDK `ContextTier` enum; relies on `github-copilot-sdk>=1.0.2` |
 | `provider-protocol:complete:MUST:13` | The provider reads runtime config `enable_long_context` once in `__init__` via `_parse_raw_flag` (the shared boolean-config parser, reused from the `raw` flag: bool True, or string ∈ {`"true"`,`"1"`,`"yes"`} after `.lower()` → True; every other string (e.g. `"maybe"`, whitespace-padded `" true "`, `""`, `"false"`, `"0"`, `"no"`) and `None` → False; a non-bool/non-str value delegates to Python truthiness, consistent with the `raw` flag and pinned by `test_provider_branches`; MUST NOT raise — fail-safe for the bool/str/None values a boolean config field can hold). In `complete()`, BEFORE the MUST:12 gate, when the request's `context_tier` attribute is absent, None, or empty AND the parsed flag is True, MUST resolve an effective `context_tier` of `"long_context"` (a transient local; MUST NOT mutate the request); a caller-supplied non-empty `context_tier` MUST take precedence; the effective tier MUST pass through `validate_context_tier` before any SDK call and MUST forward identically on BOTH the main and fake-tool-retry call sites; there is NO per-model window gate (forwards even on a small-window model); the flag selects the tier and MUST NOT be described as unlocking capacity; relies on `github-copilot-sdk>=1.0.2` |
-| `provider-protocol:complete:MUST:14` | The provider reads runtime config `reasoning_effort` once in `__init__`; the literal `"model default"` (matched case-insensitively after trimming surrounding whitespace) and the empty string both normalise to `None` (no stored default), and any other string value is stripped of surrounding whitespace (case preserved) and stored, while a non-str config value normalises to `None`. In `complete()`, AFTER the caller's `ChatRequest.reasoning_effort` has been resolved through the MUST:11 gate, when that resolved value is `None` AND a stored default is configured (not `None`), MUST validate the stored default through the same `validate_reasoning_effort` gate (the fallback-allowlist shape check, then the resolved model's `supports_reasoning_effort`/`supported_reasoning_efforts`, with cache-miss deferring final per-model validation to the SDK Layer-2 backstop) before any SDK call; a caller-supplied non-empty `reasoning_effort` MUST take precedence (the stored default is not consulted when the caller supplies one); the validated effective value MUST forward identically on BOTH the main and fake-tool-retry call sites; MUST NOT mutate `ChatRequest`; relies on `github-copilot-sdk>=0.3.0`. Note: the stored `reasoning_effort` is the operator-configured provider default (from config); a model's advertised `defaults["reasoning_effort"]` (from the SDK) is informational for display only and is NOT auto-injected — when no provider default is configured the SDK receives `None` and the server falls back. |
+| `provider-protocol:complete:MUST:14` | The provider reads runtime config `reasoning_effort` once in `__init__`; the literal `"model default"` (matched case-insensitively after trimming surrounding whitespace) and the empty string both normalise to `None` (no stored default), and any other string value is stripped of surrounding whitespace (case preserved) and stored, while a non-str config value normalises to `None`. In `complete()`, when the caller supplied no `reasoning_effort` (`ChatRequest.reasoning_effort` is `None` or empty) AND a stored default is configured (not `None`), MUST resolve the stored default through the capability-aware `resolve_provider_default_effort` gate before any SDK call: when the resolved model's `CopilotModelInfo` is cached, `supports_reasoning_effort` is True, the value is listed in `supported_reasoning_efforts`, AND the value matches the universal safe-token shape (`_REASONING_EFFORT_TOKEN_RE`), the value MUST be accepted verbatim — the model's advertised set is authoritative and WIDENS allowlist acceptance beyond the static fallback set (symmetric with `complete:MUST:11`; e.g. `minimal` for `gemini-3.5-flash`); widening relaxes only allowlist membership, never the lexical safe-token shape, so a malformed or secret-shaped advertised token is NOT early-accepted and instead falls through to the shape check (rejected, value redacted). Otherwise the shared fallback-allowlist shape check applies (`_check_effort_shape`, case-sensitive — a malformed or unknown token that the model does not early-accept (not cache-confirmed `supports_reasoning_effort=True` and listed in `supported_reasoning_efforts`) MUST raise `kernel_errors.ConfigurationError`, identically for every such model, before any SDK call). When the model's `CopilotModelInfo` is cached and the model cannot consume a shape-valid value (`supports_reasoning_effort` is False, OR `supported_reasoning_efforts` is non-empty and does not list the value) the operator default MUST be DROPPED to `None` (NOT raised), emitting one INFO log naming the model and the drop reason so the field is omitted and the server falls back to its default; on cache-miss (`CopilotModelInfo` unavailable) MUST forward the value and emit an INFO log deferring final per-model validation to the SDK Layer-2 backstop; otherwise MUST forward the value. This drop-not-raise leniency for a capability mismatch is symmetric with `complete:MUST:11` (a caller-supplied `reasoning_effort` the resolved model cannot consume is likewise dropped to `None`), differing only in log scope — the caller drop logs at WARNING, the operator-default drop at INFO — and both raise only on a malformed token. The operator default fills in ONLY when the caller supplied no `reasoning_effort`; a caller value dropped for an incapable model does NOT re-trigger the operator default on the same model. A caller-supplied non-empty `reasoning_effort` MUST take precedence (the stored default is not consulted when the caller supplies one); the resolved effective value MUST forward identically on BOTH the main and fake-tool-retry call sites; MUST NOT mutate `ChatRequest`; relies on `github-copilot-sdk>=0.3.0`. Note: the stored `reasoning_effort` is the operator-configured provider default (from config); a model's advertised `defaults["reasoning_effort"]` (from the SDK) is informational for display only and is NOT auto-injected — when no provider default is configured, or when the configured default is dropped for an incapable model, the field is omitted and the server falls back to its default. |
 
 ---
 

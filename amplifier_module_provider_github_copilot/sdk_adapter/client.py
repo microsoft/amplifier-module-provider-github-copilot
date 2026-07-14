@@ -651,14 +651,19 @@ class CopilotClientWrapper:
             )
 
         # Contract: provider-protocol:complete:MUST:11. Membrane passthrough:
-        # value has already been gated by validate_reasoning_effort() in the
-        # provider; we forward verbatim. SDK Literal rejection is translated
-        # by errors.yaml:P4 (Layer-2 backstop).
+        # the value has already been shape-gated by validate_reasoning_effort()
+        # in the provider (including the advertised-widening path, which now
+        # re-checks the safe-token shape). We forward verbatim; SDK Literal
+        # rejection is translated by errors.yaml:P4 (Layer-2 backstop). The
+        # debug log is redacted defensively so no unexpected value can leak
+        # through the forward path.
         if reasoning_effort is not None:
             session_config["reasoning_effort"] = reasoning_effort
             logger.debug(
-                "[CLIENT] Forwarding reasoning_effort=%r to SDK session",
-                reasoning_effort,
+                *self._get_safe_log()(
+                    "[CLIENT] Forwarding reasoning_effort=%s to SDK session",
+                    reasoning_effort,
+                )
             )
 
         # Contract: provider-protocol:complete:MUST:12. Membrane passthrough:

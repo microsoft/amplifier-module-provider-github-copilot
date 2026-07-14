@@ -1,3 +1,56 @@
+# Migration Guide: v2.5.x → v2.6.0
+
+## Overview
+
+v2.6.0 relaxes `reasoning_effort` handling so an effort the model cannot use no
+longer aborts the call. This covers both a provider-level **default** (contract
+`provider-protocol:complete:MUST:14`) and a **caller-supplied** value (contract
+`provider-protocol:complete:MUST:11`) — including one a delegated sub-agent
+**inherits** from its parent session. Previously, when either resolved to a model
+that does not support reasoning effort, the provider raised `ConfigurationError`
+before the SDK call — which broke, for example, a `fast` role delegated to a
+non-reasoning model such as `claude-haiku-4.5`. Both are now **best-effort**:
+applied on models that support the value, **dropped** (the field is omitted and
+the server falls back to its default) on models that do not, forwarded-and-deferred on
+cache-miss, and still fail-loud only on a **malformed** value.
+
+No public API, config key, env var, or CLI flag changes. No action is required
+on upgrade.
+
+---
+
+## What Changed: `reasoning_effort` is best-effort on incapable models
+
+- **What:** Both a configured provider default and a caller-supplied
+  `reasoning_effort` are resolved against the per-call model.
+  - Model supports the value → forwarded verbatim (unchanged).
+  - Model present but `supports_reasoning_effort=False`, or the value is excluded
+    by the model's non-empty advertised levels → **dropped to `None`** (was:
+    `ConfigurationError`).
+  - Model capability unknown (cache-miss) → forwarded verbatim, deferring final
+    validation to the server-side Layer-2 backstop (`errors.yaml:P4`; unchanged).
+  - Malformed value → still raises `ConfigurationError` on any model (a
+    model-independent typo / misconfiguration). "Malformed" means a token outside
+    the static fallback allowlist (`none`/`low`/`medium`/`high`/`xhigh`/`max`)
+    that is *also* not a shape-valid level the resolved model explicitly
+    advertises — a value the model advertises (e.g. `minimal` for
+    `gemini-3.5-flash`) is accepted, not raised; a mixed-case, overlong, or
+    secret-shaped token is always malformed and raises even if advertised.
+- **Caller vs default precedence:** the operator-scope default only fills in when
+  the caller supplied nothing. A caller value that is dropped for an incapable
+  model does not re-trigger the operator default on that model.
+- **Why:** neither a global default nor an effort a delegated sub-agent merely
+  inherited should turn a turn routed to a non-reasoning model into a hard
+  failure; the server already falls back gracefully when it receives `None`.
+- **Observability:** the caller drop logs at WARNING (`[REQUEST_ADAPTER] Dropping
+  caller reasoning_effort=…`); the operator-default drop logs at INFO. Both are
+  distinct from an in-flight failure.
+- **Rollback:** if the previous fail-loud behavior is required, pin
+  `amplifier-module-provider-github-copilot<2.6.0`, or set the provider
+  `reasoning_effort` config to `"model default"` so no default is injected.
+
+---
+
 # Migration Guide: v2.4.x → v2.5.0
 
 ## Overview

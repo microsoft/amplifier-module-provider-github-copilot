@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import logging
 import re
+from enum import Enum
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, assert_never, cast
 
 # Single canonical import for ConfigurationError. Convention from config_loader.py
 # / models.py / streaming.py: top-level only, never re-imported in function bodies.
@@ -60,7 +61,10 @@ _CONTEXT_TIER_ALLOWLIST: frozenset[str] = frozenset({"default", "long_context"})
 # numeric-prefix secrets are out. Human passphrases that happen to fit are
 # out of scope: ChatRequest.reasoning_effort is typed str | None at the
 # kernel boundary, so routing a secret through it is a caller bug.
-_REASONING_EFFORT_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
+# Anchored with \A...\Z (not ^...$) so a trailing newline cannot slip past the
+# gate: Python's $ also matches just before a final '\n', which would let a
+# token like "low\n" pass; \Z matches only the absolute end of the string.
+_REASONING_EFFORT_TOKEN_RE = re.compile(r"\A[a-z][a-z0-9_]{0,15}\Z")
 
 # Pattern matching synthetic role-marker format in user-controlled content.
 # Matches [WORD] where WORD is 2+ uppercase letters/underscores.
@@ -342,6 +346,206 @@ def _redact_token_for_log(value: str) -> str:
     return f"<redacted; len={len(value)}>"
 
 
+def _check_effort_shape(reasoning_effort: str, model_id: str) -> str:
+    """Universal shape gate for a reasoning_effort token.
+
+    Shared by ``validate_reasoning_effort`` (MUST:11, caller-supplied) and
+    ``resolve_provider_default_effort`` (MUST:14, operator-configured default)
+    so the case-sensitive allowlist check is single-sourced.
+
+    The gate keys off the provider fallback allowlist
+    (``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` == ``REASONING_EFFORT_LEVELS``:
+    ``none, low, medium, high, xhigh, max``), which is intentionally wider than
+    the SDK's ``ReasoningEffort`` Literal (``low, medium, high, xhigh``). Any
+    token outside that allowlist (mixed-case ``"High"``, typos, novel values,
+    overlong strings) is rejected here regardless of model_info presence, so the
+    contract's mixed-case rejection clause holds even when
+    ``supported_reasoning_efforts`` is empty. Allowlisted values that are not in
+    the SDK Literal (``none``, ``max``) pass this shape gate and are forwarded,
+    deferred to the backend / ``errors.yaml`` P4 backstop rather than rejected
+    here.
+
+    Returns:
+        The redacted-safe rendering of the value, for reuse in later log and
+        error messages by the caller.
+
+    Raises:
+        ConfigurationError: value not in the provider fallback allowlist.
+    """
+    safe = _redact_token_for_log(reasoning_effort)
+    if reasoning_effort not in _REASONING_EFFORT_FALLBACK_ALLOWLIST:
+        allowed = ", ".join(repr(v) for v in REASONING_EFFORT_LEVELS)
+        raise ConfigurationError(
+            f"reasoning_effort={safe} for model {redact_sensitive_text(model_id)!r} "
+            f"is not in the provider fallback allowlist (case-sensitive). "
+            f"Allowed values: {allowed}.",
+            provider=PROVIDER_ID,
+        )
+    return safe
+
+
+class _EffortDrop(Enum):
+    """Why a resolved model cannot consume a requested ``reasoning_effort``.
+
+    The single enumeration of capability-drop conditions, scope-independent and
+    shared by both resolve scopes: the caller-scope :func:`validate_reasoning_effort`
+    (MUST:11) and operator-scope :func:`resolve_provider_default_effort` (MUST:14),
+    which drop the value and log. Adding a member forces every ``assert_never``
+    guard to handle it (a compile-time type error otherwise), so the caller path
+    and the operator-default path cannot diverge on the drop decision.
+    """
+
+    UNSUPPORTED = "unsupported"
+    NOT_ADVERTISED = "not_advertised"
+
+
+class _EffortScope(Enum):
+    """Which contract governs a reasoning_effort resolution.
+
+    Selects the two scope-specific behaviors of :func:`_resolve_effort`: the drop
+    log level (``CALLER`` → WARNING per provider-protocol:complete:MUST:11,
+    ``PROVIDER_DEFAULT`` → INFO per :MUST:14) and the caller/operator wording of
+    the cache-miss and drop log lines. The resolve logic is otherwise identical
+    across both scopes, so the two public gates cannot diverge.
+    """
+
+    CALLER = "caller"
+    PROVIDER_DEFAULT = "provider_default"
+
+
+def _classify_effort_drop(
+    reasoning_effort: str,
+    model_info: CopilotModelInfo,
+) -> _EffortDrop | None:
+    """Decide whether ``model_info`` drops this value, and why.
+
+    The one place the capability *drop* decision lives, scope-independent: the
+    check is purely a property of the resolved model, identical whether the value
+    came from the caller (MUST:11) or the operator default (MUST:14). Returns
+    ``None`` when the model can consume the value (forward it verbatim), else the
+    drop reason. The WARNING/INFO drops in :func:`validate_reasoning_effort` and
+    :func:`resolve_provider_default_effort` both derive their drop outcome from
+    this result, so the caller and operator-default paths cannot fall out of sync.
+
+    Precondition: ``reasoning_effort`` is truthy and ``model_info`` is not
+    ``None``. Shape-validity is **not** required: the classifier makes only
+    capability-membership checks.
+    """
+    if not model_info.supports_reasoning_effort:
+        return _EffortDrop.UNSUPPORTED
+    if (
+        model_info.supported_reasoning_efforts
+        and reasoning_effort not in model_info.supported_reasoning_efforts
+    ):
+        return _EffortDrop.NOT_ADVERTISED
+    return None
+
+
+def _resolve_effort(
+    value: str | None,
+    model_info: CopilotModelInfo | None,
+    *,
+    model_id: str,
+    scope: _EffortScope,
+) -> str | None:
+    """Shared capability-aware reasoning_effort resolver for both scopes.
+
+    Single-sources the identical resolve skeleton of the caller-scope
+    :func:`validate_reasoning_effort` (provider-protocol:complete:MUST:11) and the
+    operator-scope :func:`resolve_provider_default_effort` (:MUST:14): the
+    empty-guard, the advertised-set early-accept (with its backend-token trust
+    boundary), the shared :func:`_check_effort_shape` gate, the cache-miss
+    Layer-2 forward, and the :func:`_classify_effort_drop` drop decision. The two
+    public gates differ ONLY by ``scope``, which selects the two contract-mandated
+    scope-specific behaviors: the drop log level (caller → WARNING per MUST:11,
+    operator default → INFO per :MUST:14) and the caller/operator wording of the
+    cache-miss and drop log lines. The forwarded value, the shape-gate raise, and
+    the drop-to-``None`` decision are identical across scopes by construction, so
+    the caller and operator-default gates cannot diverge.
+    """
+    if not value:
+        return None
+
+    # The resolved model's advertised capability is authoritative and may WIDEN
+    # ALLOWLIST acceptance beyond the static fallback set: a token the live
+    # endpoint advertises via list_models (e.g. "minimal" for gemini-3.5-flash,
+    # outside the SDK v1.0.6 literal) is accepted verbatim. Trust boundary:
+    # supported_reasoning_efforts is backend-sourced (SDK list_models, persisted
+    # through the on-disk model_cache), never caller-derived. Widening relaxes
+    # only membership, NEVER lexical shape: the value must still match the
+    # safe-token shape (_REASONING_EFFORT_TOKEN_RE), so a poisoned on-disk cache
+    # advertising a malformed or secret-shaped token cannot bypass the shape
+    # check nor be forwarded/logged verbatim. A shape-invalid advertised token
+    # falls through to _check_effort_shape below and is rejected (value redacted)
+    # exactly like any other malformed token.
+    if (
+        model_info is not None
+        and model_info.supports_reasoning_effort
+        and value in model_info.supported_reasoning_efforts
+        and _REASONING_EFFORT_TOKEN_RE.match(value)
+    ):
+        return value
+
+    safe = _check_effort_shape(value, model_id)
+    # Defense-in-depth: redact model_id before logging. ChatRequest.model is
+    # caller-controlled; a misrouted secret would otherwise reach the log.
+    safe_model = redact_sensitive_text(model_id)
+
+    if model_info is None:
+        if scope is _EffortScope.CALLER:
+            logger.info(
+                "[REQUEST_ADAPTER] No CopilotModelInfo for model=%s; deferring "
+                "final reasoning_effort validation to SDK backstop (Layer 2). "
+                "reasoning_effort=%s",
+                safe_model,
+                safe,
+            )
+        else:
+            logger.info(
+                "[REQUEST_ADAPTER] No CopilotModelInfo for model=%s; forwarding "
+                "provider default reasoning_effort=%s and deferring per-model "
+                "validation to SDK backstop (Layer 2).",
+                safe_model,
+                safe,
+            )
+        return value
+
+    drop = _classify_effort_drop(value, model_info)
+    if drop is None:
+        return value
+
+    # Scope-specific per contract: caller drop → WARNING (MUST:11), operator
+    # default drop → INFO (MUST:14); the label renders the identical caller /
+    # operator wording of the original two messages.
+    drop_log = logger.warning if scope is _EffortScope.CALLER else logger.info
+    label = (
+        "caller reasoning_effort"
+        if scope is _EffortScope.CALLER
+        else "provider default reasoning_effort"
+    )
+    if drop is _EffortDrop.UNSUPPORTED:
+        drop_log(
+            "[REQUEST_ADAPTER] Dropping %s=%s for model %s "
+            "(supports_reasoning_effort=False); the field is omitted and the "
+            "server falls back to its default.",
+            label,
+            safe,
+            safe_model,
+        )
+        return None
+    if drop is _EffortDrop.NOT_ADVERTISED:
+        drop_log(
+            "[REQUEST_ADAPTER] Dropping %s=%s for model %s "
+            "(not in supported_reasoning_efforts); the field is omitted and the "
+            "server falls back to its default.",
+            label,
+            safe,
+            safe_model,
+        )
+        return None
+    assert_never(drop)  # pragma: no cover — exhaustive over _EffortDrop
+
+
 def validate_reasoning_effort(
     reasoning_effort: str | None,
     model_info: CopilotModelInfo | None,
@@ -353,89 +557,99 @@ def validate_reasoning_effort(
     Contract: provider-protocol:complete:MUST:11
 
     Layer-1 pre-flight gate, called from ``provider.complete()`` after
-    ``CopilotModelInfo`` lookup but before any SDK call. Returns the value
-    unchanged on success; raises ``ConfigurationError`` on policy violation.
+    ``CopilotModelInfo`` lookup but before any SDK call. Returns the value to
+    forward, or ``None`` when no effort was requested or the resolved model
+    cannot consume the requested value.
 
     Validation lives here (not in the membrane) because the membrane
     deliberately knows nothing about model capability metadata.
 
     Behavior:
         * empty/None → returns ``None``
-        * value not in the provider fallback allowlist
-          ``{"none","low","medium","high","xhigh","max"}`` → raises (universal shape gate;
-          rejects mixed-case and unknown tokens regardless of model_info;
+        * model_info present and the value is in the model's advertised
+          ``supported_reasoning_efforts`` → returns the value verbatim. The
+          advertised set is authoritative and may WIDEN acceptance beyond the
+          static fallback allowlist: a well-formed token the live endpoint
+          advertises (e.g. ``"minimal"`` for gemini-3.5-flash) is accepted even
+          when it is absent from the static allowlist below.
+        * value neither advertised by the model nor in the provider fallback
+          allowlist ``{"none","low","medium","high","xhigh","max"}`` → raises
+          (universal shape gate; rejects mixed-case and unknown tokens;
           value redacted in error message when it doesn't match the safe
           token shape)
         * model_info missing, value passes shape gate → returns value, defers
           final per-model policy to SDK Layer-2 backstop (``errors.yaml:P4``)
-        * model_info present, ``supports_reasoning_effort=False`` → raises
-        * model_info present, non-empty
-          ``supported_reasoning_efforts`` excludes the value → raises
+        * model_info present, ``supports_reasoning_effort=False`` → DROPS to
+          ``None`` with a WARNING log (the field is omitted; the server falls
+          back to its default)
+        * model_info present, non-empty ``supported_reasoning_efforts`` excludes
+          the value → DROPS to ``None`` with a WARNING log
         * model_info present, value accepted → returns value verbatim
+
+    The drop-not-raise leniency for a capability mismatch is symmetric with
+    ``resolve_provider_default_effort`` (MUST:14). A malformed value the model
+    does not advertise (shape gate) stays fail-loud, because it is a
+    model-independent typo.
 
     Args:
         reasoning_effort: Verbatim ``ChatRequest.reasoning_effort``.
         model_info: Resolved capability descriptor; ``None`` on cache miss.
-        model_id: Effective model id, used in error messages.
+        model_id: Effective model id, used in log/error messages.
 
     Returns:
-        The validated string, or ``None`` when no effort was requested.
+        The validated string, or ``None`` when no effort was requested or the
+        value was dropped for an incapable model.
 
     Raises:
-        ConfigurationError: Capability mismatch or value not in the active
-            allowlist.
+        ConfigurationError: Value fails the universal shape gate (malformed or
+            unknown token), independent of the resolved model.
     """
-    if not reasoning_effort:
-        return None
+    return _resolve_effort(
+        reasoning_effort, model_info, model_id=model_id, scope=_EffortScope.CALLER
+    )
 
-    safe = _redact_token_for_log(reasoning_effort)
 
-    # Universal shape gate. The SDK accepts only the fixed lowercase Literal
-    # set; any other token (mixed-case "High", typos, novel values, overlong
-    # strings) is rejected here regardless of model_info presence so the
-    # contract's mixed-case rejection clause holds even when
-    # supported_reasoning_efforts is empty. The redactor above ensures the
-    # error message never echoes a non-token-shape value verbatim.
-    if reasoning_effort not in _REASONING_EFFORT_FALLBACK_ALLOWLIST:
-        allowed = ", ".join(repr(v) for v in REASONING_EFFORT_LEVELS)
-        raise ConfigurationError(
-            f"reasoning_effort={safe} for model {redact_sensitive_text(model_id)!r} "
-            f"is not in the provider fallback allowlist (case-sensitive). "
-            f"Allowed values: {allowed}.",
-            provider=PROVIDER_ID,
-        )
+def resolve_provider_default_effort(
+    provider_default: str | None,
+    model_info: CopilotModelInfo | None,
+    *,
+    model_id: str,
+) -> str | None:
+    """Resolve the operator-configured provider-level reasoning_effort default.
 
-    if model_info is None:
-        # Defense-in-depth: redact model_id before logging. ChatRequest.model is
-        # caller-controlled; a misrouted secret would otherwise reach the log.
-        logger.info(
-            "[REQUEST_ADAPTER] No CopilotModelInfo for model=%s; deferring "
-            "final reasoning_effort validation to SDK backstop (Layer 2). "
-            "reasoning_effort=%s",
-            redact_sensitive_text(model_id),
-            safe,
-        )
-        return reasoning_effort
+    Contract: provider-protocol:complete:MUST:14
 
-    if not model_info.supports_reasoning_effort:
-        raise ConfigurationError(
-            f"Model {redact_sensitive_text(model_id)!r} does not support "
-            f"reasoning_effort={safe}; run 'amplifier provider models "
-            f"github-copilot' and reconfigure.",
-            provider=PROVIDER_ID,
-        )
+    Called from ``provider.complete()`` only when the caller supplied no
+    ``reasoning_effort`` and a stored provider default is configured. Governs
+    the operator-scope default only; the caller value stays governed by
+    :func:`validate_reasoning_effort` (MUST:11). The two gates are symmetric —
+    both derive the drop decision from the shared :func:`_classify_effort_drop`,
+    drop a value the resolved model cannot consume to ``None``, and raise only on
+    a malformed token — and differ only in log scope: the caller drop logs at
+    WARNING, this operator-default drop at INFO.
 
-    allowlist = model_info.supported_reasoning_efforts
-    if allowlist and reasoning_effort not in allowlist:
-        allowed = ", ".join(repr(v) for v in allowlist)
-        raise ConfigurationError(
-            f"Model {redact_sensitive_text(model_id)!r} does not support "
-            f"reasoning_effort={safe}. Allowed values: {allowed}; run "
-            f"'amplifier provider models github-copilot' and reconfigure.",
-            provider=PROVIDER_ID,
-        )
+    An operator default is best-effort per resolved model. When the resolved
+    model advertises the value in its ``supported_reasoning_efforts`` it is
+    applied verbatim — the advertised set is authoritative and may widen
+    acceptance beyond the static fallback allowlist (symmetric with MUST:11). A
+    value the model cannot consume (``supports_reasoning_effort`` false, or
+    excluded from a non-empty ``supported_reasoning_efforts``) is dropped to
+    ``None`` so the server falls back, rather than failing a request that never
+    asked for effort. A malformed value the model does not advertise is still an
+    operator misconfiguration and stays fail-loud on every model; a cache miss
+    forwards the value and defers final
+    validation to the SDK Layer-2 backstop (``errors.yaml:P4``), matching
+    MUST:11.
 
-    return reasoning_effort
+    Returns the effort to forward, or ``None`` when unconfigured or dropped.
+    Raises ``ConfigurationError`` only when the value fails the shape gate.
+    """
+    return _resolve_effort(
+        provider_default,
+        model_info,
+        model_id=model_id,
+        scope=_EffortScope.PROVIDER_DEFAULT,
+    )
 
 
 def validate_context_tier(

@@ -1,7 +1,8 @@
 # Contract: Observability
 
 ## Version
-- **Current:** 1.3 (Raw Debug Payload Defined)
+- **Current:** 1.4 (reasoning_effort drop reclassified as best-effort: a value the resolved model cannot consume is dropped to `None` with a WARNING (caller) / INFO (operator) log and the `reasoningEffort` field omitted on the wire, not a pre-flight `ConfigurationError`; malformed tokens still raise. Event-emission policy unchanged.)
+- **Prior:** 1.3 (Raw Debug Payload Defined)
 - **Module Reference:** provider, completion
 - **Config:** No file — `raw` flag is a provider `config:` key (see behaviors:Retry:MUST:7 for config key format)
 - **Status:** IMPLEMENTED (event emission)
@@ -26,17 +27,22 @@ This contract defines observability policy for provider instrumentation. Observa
 3. **MUST** emit `llm:response` event AFTER accumulator completes
 4. **MUST** work without coordinator (standalone mode)
 5. **MUST NOT** assume coordinator.hooks.emit() exists
-6. **MUST NOT** emit `llm:request`/`llm:response` for pre-flight
+6. **MUST NOT** emit `llm:request`/`llm:response` for a pre-flight
    `ConfigurationError` raised before any SDK interaction. The request/response
    pair invariant frames *the SDK call*, not the public `complete()`
-   invocation. Caller-bug rejections (e.g., `validate_reasoning_effort`
-   raising on `supports_reasoning_effort=False`) are categorically distinct
-   from in-flight failures: the SDK was never reached, so there is no
-   `llm:request` to pair, and no `llm:response` error to emit. Operators
-   tracking caller-bug rates MUST consume the INFO/WARNING log channel
+   invocation. The sole pre-flight raise on this path is the universal shape
+   gate (`_check_effort_shape`) rejecting a malformed or unknown
+   `reasoning_effort` token: the SDK was never reached, so there is no
+   `llm:request` to pair and no `llm:response` error to emit. A well-formed
+   token the resolved model cannot consume (`supports_reasoning_effort=False`,
+   or absent from `supported_reasoning_efforts`) is NOT a raise — it is
+   DROPPED to `None` with a log (WARNING for a caller-scope drop, INFO for an
+   operator-default drop; the field is omitted; the server falls
+   back), and the SDK call proceeds and emits the usual pair. Operators
+   tracking dropped-effort rates consume the INFO/WARNING log channel
    (`[REQUEST_ADAPTER]` prefix) rather than diff `llm:request_count -
    llm:response_count`. See `provider-protocol:complete:MUST:11` for the
-   pre-flight gate that owns this exemption.
+   pre-flight shape gate that owns this exemption.
 
 ### SHOULD Constraints
 
