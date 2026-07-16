@@ -125,6 +125,8 @@ markers = [
     "live: marks tests requiring real credentials (run explicitly with -m live)",
     "sdk_assumption: marks tests verifying SDK types/shapes exist",
     "security: marks tests verifying security invariants (injection, redaction, sanitization)",
+    "posix_only: platform-gated contract; deselected (not skipped) on win32 — policy: run or fail, never skip",
+    "windows_only: platform-gated contract; deselected (not skipped) on non-win32 — policy: run or fail, never skip",
 ]
 
 # Note: [dependency-groups] removed — use [project.optional-dependencies] dev instead

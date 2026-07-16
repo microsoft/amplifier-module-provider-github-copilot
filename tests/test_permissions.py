@@ -6,7 +6,6 @@ Contract: sdk-boundary:BinaryResolution:MUST:6
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -276,21 +275,17 @@ class TestEnsureExecutableErrors:
             f"ensure_executable MUST stat() twice (pre + verify); got {stat_mock.call_count}"
         )
 
+    @pytest.mark.posix_only
     def test_adds_execute_permission_real_filesystem_posix(self, tmp_path: Path) -> None:
         """End-to-end on a real POSIX filesystem: stat -> chmod -> verify-stat -> True.
 
         POSIX-only contract; the sibling test in test_platform.py covers the
-        Windows NTFS tombstone path. On Windows this test fails by design
-        (repo policy: tests run or fail, never skip).
+        Windows NTFS tombstone path. Deselected (not skipped) on win32 via the
+        ``posix_only`` marker (repo policy: tests run or fail, never skip).
 
         Contract: sdk-boundary:BinaryResolution:MUST:6
         Coverage: _permissions.py lines 60-84 (real chmod + verify-stat happy path)
         """
-        if sys.platform == "win32":
-            pytest.fail(
-                "POSIX-only contract; Windows NTFS path is covered by the "
-                "sibling tombstone test in test_platform.py."
-            )
         import stat as stat_mod
 
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
