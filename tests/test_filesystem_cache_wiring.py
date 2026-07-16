@@ -62,7 +62,7 @@ def test_cache_home_xdg_whitespace_falls_through(clean_env: pytest.MonkeyPatch) 
     assert "   " not in str(paths.cache_home)
 
 
-# Contract: filesystem-layout:Paths:MUST:2 + MUST:4 (tilde expands)
+# Contract: filesystem-layout:Paths:MUST:2,4 (tilde expands)
 def test_cache_home_xdg_tilde_expands(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("XDG_CACHE_HOME", "~/xdg-cache-tilde")
     paths = load_provider_paths()

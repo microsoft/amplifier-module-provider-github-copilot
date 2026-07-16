@@ -1302,6 +1302,43 @@ class TestSessionHandleMethods:
 
         raw.abort.assert_awaited_once()
 
+    def test_public_surface_is_exactly_on_send_abort_session_id(self) -> None:
+        """SessionHandle exposes exactly {on, send, abort, session_id}; raw stays private.
+
+        Contract: sdk-boundary:Types:MUST:4 — `_raw_session` is private; no
+        public attribute or accessor exposes it.
+        Contract: sdk-boundary:Types:MUST:5 — public surface is exactly on,
+        send, abort, session_id.
+        Contract: sdk-boundary:Types:MUST:6 — no connect/disconnect/destroy/
+        close; lifecycle is owned by client.session().
+        Mutation check: add a public `raw` accessor or a `connect` method →
+        the surface set diverges (MUST:4/5) or hasattr succeeds (MUST:6).
+        """
+        from unittest.mock import MagicMock
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionHandle
+
+        raw = MagicMock()
+        raw.session_id = "sess-surface"
+        handle = SessionHandle(raw_session=raw, session_id="sess-surface")
+
+        public = {name for name in dir(handle) if not name.startswith("_")}
+        assert public == {"on", "send", "abort", "session_id"}, (
+            "SessionHandle public surface must be exactly "
+            f"{{on, send, abort, session_id}}, got {sorted(public)}"
+        )
+
+        # MUST:4 — the raw SDK session is stored only in the private slot and
+        # is not reachable via any public attribute or accessor.
+        assert "_raw_session" in SessionHandle.__slots__
+
+        # MUST:6 — the façade owns no lifecycle methods.
+        for lifecycle in ("connect", "disconnect", "destroy", "close"):
+            assert not hasattr(handle, lifecycle), (
+                f"SessionHandle must not expose lifecycle method {lifecycle!r}; "
+                "lifecycle is owned by client.session()"
+            )
+
 
 class TestSDKImportError:
     """sdk-boundary:Membrane:MUST:5 — Missing SDK raises ProviderUnavailableError.
