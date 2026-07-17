@@ -20,7 +20,11 @@ class TestSessionYieldsSessionHandle:
 
     @pytest.mark.asyncio
     async def test_session_yields_session_handle(self) -> None:
-        """P2-11: session() yields SessionHandle façade, not raw SDK session."""
+        """P2-11: session() yields SessionHandle façade, not raw SDK session.
+
+        Contract: sdk-boundary:Types:MUST:7 — SessionHandle.session_id is
+        assigned once in __init__ from the raw SDK session's session_id.
+        """
         from amplifier_module_provider_github_copilot.sdk_adapter import SessionHandle
         from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
 

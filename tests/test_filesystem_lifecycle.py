@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import stat
-import sys
 from pathlib import Path
 
 import pytest
@@ -27,7 +26,7 @@ def fresh_paths(tmp_path: Path) -> ProviderPaths:
 
 
 # Contract: filesystem-layout:Lifecycle:MUST:1 (POSIX 0o700)
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only contract")
+@pytest.mark.posix_only
 def test_provider_home_created_with_0700_on_posix(fresh_paths: ProviderPaths) -> None:
     ensure_paths_exist(fresh_paths)
     assert fresh_paths.provider_home.is_dir()
@@ -38,7 +37,7 @@ def test_provider_home_created_with_0700_on_posix(fresh_paths: ProviderPaths) ->
 
 
 # Contract: filesystem-layout:Lifecycle:MUST:1 (symlink refusal)
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only contract")
+@pytest.mark.posix_only
 def test_provider_home_creation_refuses_symlink_on_posix(
     tmp_path: Path,
 ) -> None:
@@ -52,7 +51,7 @@ def test_provider_home_creation_refuses_symlink_on_posix(
 
 
 # Contract: filesystem-layout:Lifecycle:MUST:1 (no umask mutation)
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only contract")
+@pytest.mark.posix_only
 def test_creation_does_not_mutate_global_umask(
     fresh_paths: ProviderPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -73,7 +72,7 @@ def test_creation_does_not_mutate_global_umask(
 
 
 # Contract: filesystem-layout:Lifecycle:MUST:2 (Windows mkdir-only)
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only contract")
+@pytest.mark.windows_only
 def test_provider_home_creation_omits_mode_arg_on_windows(
     fresh_paths: ProviderPaths,
 ) -> None:

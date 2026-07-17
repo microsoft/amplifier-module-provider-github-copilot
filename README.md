@@ -193,7 +193,7 @@ providers:
 | Key | Default | Description |
 | --- | --- | --- |
 | `default_model` | `"claude-opus-4.5"` | Model used when the caller does not specify one. Any ID from `list_models()` is valid. |
-| `reasoning_effort` | `"model default"` | Default reasoning effort applied to completions on models that support it (e.g. `low`, `medium`, `high`). Validated against the target model's advertised levels before the SDK call; an unsupported value raises `ConfigurationError`. Run `amplifier provider models github-copilot` to see each model's levels. `"model default"` (or unset) defers to the model's own default. |
+| `reasoning_effort` | `"model default"` | Reasoning effort forwarded to models that support it (e.g. `low`, `medium`, `high`). Both this default and a caller-supplied value are best-effort: forwarded when the model supports it, dropped (field omitted, server uses its own default) when it does not — so a global or inherited effort never breaks delegation to a non-reasoning model. A malformed value (typo, mixed-case) still raises `ConfigurationError`. `"model default"` or unset defers to the model. Run `amplifier provider models github-copilot` for each model's levels. |
 | `enable_long_context` | `false` | Default to the model's long-context tier when the caller does not set a `context_tier`. Forwarded to the SDK as `long_context`; ignored by models without a long tier. |
 | `raw` | `false` | Include raw SDK payloads as a `"raw"` field in `llm:request` / `llm:response` events. See [Raw Payload Logging](#raw-payload-logging). |
 

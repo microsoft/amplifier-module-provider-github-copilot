@@ -54,6 +54,32 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
+# -- Platform-gated contract deselection --
+#
+# Repo policy (see fixtures below): tests run or fail, never skip. Platform-
+# specific contract tests are therefore DESELECTED (not skipped) on the
+# inapplicable OS so each platform's summary shows 0 skips. Deselection differs
+# from skipif: a deselected item is never collected into the run, so it never
+# appears in the skipped count — while remaining visible via the "N deselected"
+# line and the explicit marker on the test.
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    is_win = sys.platform == "win32"
+    deselected: list[pytest.Item] = []
+    remaining: list[pytest.Item] = []
+    for item in items:
+        if item.get_closest_marker("windows_only") and not is_win:
+            deselected.append(item)
+        elif item.get_closest_marker("posix_only") and is_win:
+            deselected.append(item)
+        else:
+            remaining.append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = remaining
+
+
 # -- Cache Clearing --
 
 

@@ -306,6 +306,10 @@ class TestModelBillingServerShapeTolerance:
         v0.3.0's parser: a ``billing`` block with ``restricted_to`` and
         ``token_prices`` but no ``multiplier``. v1.0.0b4+ returns a
         ``ModelBilling`` with ``multiplier`` absent or ``None``.
+
+        Contract: sdk-boundary:SDKSurface:MUST:7 — ModelBilling.from_dict
+        tolerates the live server shape (restricted_to + token_prices, no
+        multiplier) without raising; multiplier stays optional.
         """
         from copilot.client import ModelBilling  # type: ignore[import-untyped]
 
