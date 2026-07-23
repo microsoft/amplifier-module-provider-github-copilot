@@ -298,6 +298,7 @@ class TestToolForwardingContract:
         assert tool.skip_permission is False
         assert tool.handler is None, "handler MUST be None for SDK to skip registration"
         assert tool.defer is None, "defer MUST default to None (v1.0.1 wire parity)"
+        assert tool.metadata is None, "metadata MUST default to None (v1.0.7 wire parity)"
 
     def test_wrapper_survives_sdk_v102_tool_definition_build(self) -> None:
         """Reproduce the EXACT attribute-read loop SDK v1.0.2 uses to build tool
@@ -357,6 +358,63 @@ class TestToolForwardingContract:
             # True we just wrote one line above.
             assert definition.get("overridesBuiltInTool") == (
                 True if tool.overrides_built_in_tool else None
+            )
+
+    def test_wrapper_survives_sdk_v107_tool_definition_build(self) -> None:
+        """Reproduce the EXACT attribute-read loop SDK v1.0.7 uses to build tool
+        definitions, proving SDKToolWrapper exposes ``metadata`` and preserves the
+        pre-v1.0.7 wire shape when it is None.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+
+        SDK v1.0.7 ``copilot/client.py`` extends the v1.0.2 loop with a trailing
+        ``tool.metadata`` read, in BOTH create_session (client.py:2182-2183) and
+        resume (client.py:2858-2859), immediately after the ``defer`` read::
+
+            if tool.defer is not None: definition["defer"] = tool.defer
+            if tool.metadata is not None: definition["metadata"] = tool.metadata
+
+        v1.0.7 ADDED the ``tool.metadata`` access. A wrapper missing ``metadata``
+        raises ``AttributeError`` on every tool-forwarding turn — the exact failure
+        the ``defer`` field caused at v1.0.2. This test pins the wrapper against the
+        v1.0.7 access sequence so a future regression fails loudly here, and asserts
+        the pre-v1.0.7 wire shape is preserved (no ``metadata`` key emitted when
+        ``metadata is None``, which is the provider's steady state — kernel-layer
+        execution carries no provider-side tool metadata).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import (
+            convert_tools_for_sdk,
+        )
+
+        tools: list[dict[str, object]] = [
+            {"name": "bash", "description": "Run shell commands", "parameters": {"type": "object"}},
+            {"name": "read_file", "description": "Read a file", "parameters": None},
+        ]
+        wrappers = convert_tools_for_sdk(tools)
+
+        for tool in wrappers:
+            # Verbatim replication of the SDK v1.0.7 definition-build loop. If the
+            # wrapper is missing any read attribute this raises AttributeError,
+            # exactly as the live runtime did before `metadata` was added.
+            definition: dict[str, object] = {
+                "name": tool.name,
+                "description": tool.description,
+            }
+            if tool.parameters:
+                definition["parameters"] = tool.parameters
+            if tool.overrides_built_in_tool:
+                definition["overridesBuiltInTool"] = True
+            if tool.skip_permission:
+                definition["skipPermission"] = True
+            if tool.defer is not None:
+                definition["defer"] = tool.defer
+            if tool.metadata is not None:
+                definition["metadata"] = tool.metadata
+
+            # v1.0.6 wire parity: metadata defaults to None, so the key is omitted
+            # and the tool-forwarding payload is byte-identical to pre-v1.0.7.
+            assert "metadata" not in definition, (
+                "metadata=None MUST omit the 'metadata' wire key (v1.0.6 wire parity)"
             )
 
     @pytest.mark.asyncio

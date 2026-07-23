@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 # Provider reasoning-effort levels in ascending intensity order. Single source
 # of truth shared by the request-path fallback allowlist below and the
 # provider's reasoning_effort ConfigField choices (kept in sync by
-# test_reasoning_effort_choices_match_levels). Superset of the v1.0.6 SDK
+# test_reasoning_effort_choices_match_levels). Superset of the v1.0.7 SDK
 # ReasoningEffort Literal {low,medium,high,xhigh}: the live list_models endpoint
-# additionally advertises "none" and "max", neither of which the v1.0.6 SDK
+# additionally advertises "none" and "max", neither of which the v1.0.7 SDK
 # Literal enumerates. Membership is pinned by the SDK-superset test in
 # tests/test_sdk_assumptions.py.
 REASONING_EFFORT_LEVELS: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh", "max")
@@ -45,7 +45,7 @@ _REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset(REASONING_EFFOR
 
 # Static allowlist for context_tier. Mirrors the public SDK annotation
 # ``copilot.session.ContextTier = typing.Literal["default", "long_context"]``
-# (verified against installed github-copilot-sdk 1.0.6). Unlike reasoning_effort
+# (verified against installed github-copilot-sdk 1.0.7). Unlike reasoning_effort
 # there is NO per-model capability descriptor, so this membership set is the only
 # validation possible. Evergreen note: if the SDK Literal grows a tier, update
 # this frozenset — pinned by test_context_tier.TestSDKSourceShape.
@@ -469,7 +469,7 @@ def _resolve_effort(
     # The resolved model's advertised capability is authoritative and may WIDEN
     # ALLOWLIST acceptance beyond the static fallback set: a token the live
     # endpoint advertises via list_models (e.g. "minimal" for gemini-3.5-flash,
-    # outside the SDK v1.0.6 literal) is accepted verbatim. Trust boundary:
+    # outside the SDK v1.0.7 literal) is accepted verbatim. Trust boundary:
     # supported_reasoning_efforts is backend-sourced (SDK list_models, persisted
     # through the on-disk model_cache), never caller-derived. Widening relaxes
     # only membership, NEVER lexical shape: the value must still match the

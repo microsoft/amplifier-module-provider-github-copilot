@@ -237,7 +237,7 @@ class TestSessionForwardsMaxTokens:
     async def test_session_forwards_max_tokens_with_real_sdk_capability_types(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Pin the max_tokens forward path against the REAL SDK 1.0.6 shapes.
+        """Pin the max_tokens forward path against the REAL SDK 1.0.7 shapes.
 
         The sibling test above uses stand-in dataclasses, which would silently
         keep passing if the SDK renamed/removed ``max_output_tokens`` or changed

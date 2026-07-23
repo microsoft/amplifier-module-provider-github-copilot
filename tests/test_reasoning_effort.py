@@ -441,8 +441,8 @@ class TestResolveReasoningEffortGate:
         assert "provider fallback allowlist" in msg
         # Must enumerate accepted values so the caller can self-correct.
         # "none" and "max" are included because the fallback allowlist extends
-        # the v1.0.6 SDK literal with both (advertised by the live list_models
-        # endpoint; absent from the v1.0.6 SDK literal).
+        # the v1.0.7 SDK literal with both (advertised by the live list_models
+        # endpoint; absent from the v1.0.7 SDK literal).
         for v in ("none", "low", "medium", "high", "xhigh", "max"):
             assert f"'{v}'" in msg
 
@@ -639,7 +639,7 @@ class TestResolveProviderDefaultEffort:
 
 class TestReasoningEffortNoneLevel:
     """The "none" effort level (advertised by some live models, absent from the
-    v1.0.6 SDK ``ReasoningEffort`` Literal) passes the universal shape gate and
+    v1.0.7 SDK ``ReasoningEffort`` Literal) passes the universal shape gate and
     is then governed by the per-model allowlist, exactly like "max".
 
     Contract: provider-protocol:complete:MUST:11

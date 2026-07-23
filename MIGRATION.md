@@ -1,3 +1,47 @@
+# Migration Guide: v2.6.x → v2.7.0
+
+## Overview
+
+v2.7.0 advances the pinned `github-copilot-sdk` from `1.0.6` to `1.0.7` (stable).
+The move is **wire-compatible** — no public API, config key, env var, or CLI flag
+changes, and no action is required on upgrade.
+
+Two SDK surface changes are absorbed by the provider:
+
+- **New `Tool.metadata` field.** SDK 1.0.7's `copilot.tools.Tool` dataclass gains a
+  trailing `metadata: dict | None = None` field, which `copilot/client.py` reads by
+  attribute in **both** `create_session` and `resume`
+  (`if tool.metadata is not None: definition["metadata"] = tool.metadata`). The
+  provider hands the SDK a duck-typed `SDKToolWrapper`, so the wrapper now mirrors
+  that field with a `None` default. `None` **omits** the `metadata` key from the
+  wire payload, keeping the tool-forwarding request byte-identical to 1.0.6. This is
+  the same shape as the v1.0.2 `defer` field addition. Without it, every
+  tool-forwarding turn would raise `AttributeError`.
+- **6 new `SessionEventType` members**, all classified **DROP** (no kernel domain
+  mapping): `assistant.server_tool_progress`, `session.auto_mode_resolved`
+  (experimental), `session.managed_settings_resolved` (experimental),
+  `mcp.tools.list_changed`, `mcp.resources.list_changed`, `mcp.prompts.list_changed`.
+
+No provider-side tool metadata is emitted (kernel-layer execution), so the wrapper's
+`metadata` stays `None` in normal operation.
+
+---
+
+## What Changed: SDK requirement is now `github-copilot-sdk==1.0.7`
+
+- **What:** The provider now pins `github-copilot-sdk==1.0.7` (was `==1.0.6`). The
+  import-time support floor is unchanged (`>=1.0.0`; pre-GA beta SDKs remain
+  unsupported). The `1.0.6 → 1.0.7` move is **non-breaking** for the provider's wire
+  behavior — the new `Tool.metadata` field defaults to `None`, which reproduces the
+  1.0.6 tool payload exactly.
+- **Action required:** none. A clean `pip install` of `2.7.0` pulls `1.0.7`
+  automatically via the `pyproject.toml` pin; `amplifier provider install --force
+  github-copilot` reinstalls the pinned SDK for an existing environment.
+- **Rollback:** if the previous SDK pin is required, pin
+  `amplifier-module-provider-github-copilot<2.7.0`.
+
+---
+
 # Migration Guide: v2.5.x → v2.6.0
 
 ## Overview

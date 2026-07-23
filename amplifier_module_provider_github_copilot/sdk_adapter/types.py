@@ -220,6 +220,17 @@ class SDKToolWrapper:
     # AttributeError on every tool-forwarding turn.
     # Contract: sdk-boundary:ToolForwarding:MUST:2
     defer: Literal["auto", "never"] | None = None
+    # SDK v1.0.7 reads tool.metadata when building tool definitions in BOTH
+    # create_session and resume (copilot/client.py:
+    # `if tool.metadata is not None: definition["metadata"] = tool.metadata`,
+    # immediately after the `defer` block). Mirrors the SDK's own
+    # copilot.tools.Tool.metadata field type. None = no metadata: the key is
+    # omitted from the wire payload, which is the exact pre-v1.0.7 behavior.
+    # Amplifier carries no provider-side tool metadata (kernel-layer execution),
+    # so this stays None. Without this attribute the SDK raises AttributeError
+    # on every tool-forwarding turn.
+    # Contract: sdk-boundary:ToolForwarding:MUST:2
+    metadata: dict[str, Any] | None = None
 
 
 def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:

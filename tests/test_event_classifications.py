@@ -195,6 +195,19 @@ class TestExplicitDropEntriesEmitNoUnknownWarning:
             "session.canvas.unavailable",
             "session.canvas.recorded",
             "session.canvas.removed",
+            # SDK v1.0.7 (bundled CLI 1.0.70) enum members added to the
+            # events.yaml DROP block. All lack a kernel domain mapping; see
+            # events.yaml for per-event rationale. server_tool_progress is
+            # partial hosted-server-tool telemetry (result rides
+            # assistant.message); auto_mode_resolved / managed_settings_resolved
+            # are EXPERIMENTAL analytics/policy snapshots; the mcp.*.list_changed
+            # trio are MCP list-change notifications with no subscription surface.
+            "assistant.server_tool_progress",
+            "session.auto_mode_resolved",
+            "session.managed_settings_resolved",
+            "mcp.tools.list_changed",
+            "mcp.resources.list_changed",
+            "mcp.prompts.list_changed",
         ],
     )
     def test_sdk_030_event_types_classified_without_warning(

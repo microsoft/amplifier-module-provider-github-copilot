@@ -459,14 +459,14 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
                 _check_sdk_version(stale)
             msg = str(exc_info.value)
             assert stale in msg, f"Error must echo installed version {stale!r}"
-            assert "1.0.6" in msg, "Error must state the pinned target version"
+            assert "1.0.7" in msg, "Error must state the pinned target version"
 
     def test_accepts_ga_and_above(self) -> None:
         """sdk-boundary:Membrane:MUST:5 — GA (1.0.0) and forward satisfy the floor.
 
         The floor is a support-policy floor at the GA line (1.0.0); the
         symbol-availability minimum (b10) sits below it, and the pyproject pin
-        is 1.0.6. GA and every later release must satisfy the floor.
+        is 1.0.7. GA and every later release must satisfy the floor.
         """
         from amplifier_module_provider_github_copilot import (
             _check_sdk_version,  # type: ignore[reportPrivateUsage]

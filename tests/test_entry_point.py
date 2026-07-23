@@ -245,7 +245,7 @@ class TestSDKVersionCheck:
         """SDK installed in the test environment MUST be >= 1.0.0.
 
         If this fails, the test environment has a stale SDK. Upgrade with:
-            pip install 'github-copilot-sdk==1.0.6'
+            pip install 'github-copilot-sdk==1.0.7'
 
         SKIP_SDK_CHECK bypasses the SDK subprocess at runtime but never exempts
         the test environment from having the correct SDK package installed.
@@ -262,7 +262,7 @@ class TestSDKVersionCheck:
         version = importlib.metadata.version("github-copilot-sdk")
         assert _parse_sdk_version(version) >= _SDK_FLOOR, (
             f"Test environment has SDK {version} which is < 1.0.0. "
-            "Install 'github-copilot-sdk==1.0.6' to run these tests."
+            "Install 'github-copilot-sdk==1.0.7' to run these tests."
         )
 
     def test_version_check_error_message_is_actionable(self) -> None:
@@ -280,7 +280,7 @@ class TestSDKVersionCheck:
 
         error_msg = str(exc_info.value)
         assert "0.1.28" in error_msg, "Error must include the installed version"
-        assert "1.0.6" in error_msg, "Error must state the required version"
+        assert "1.0.7" in error_msg, "Error must state the required version"
         assert "github-copilot-sdk" in error_msg, "Error must name the package"
         assert "amplifier provider install" in error_msg, (
             "Error must include the amplifier provider install command"
