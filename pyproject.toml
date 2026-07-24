@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "2.6.0"
+version = "2.7.0"
 description = "GitHub Copilot provider for Amplifier - Two-Medium Architecture"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,7 +43,15 @@ dependencies = [
     #   same symbols/shapes as 1.0.2 (protocol version unchanged). Surfaces the
     #   server-driven GPT-5.6 model family via list_models (no provider allowlist).
     #   Adds `httpx` as a new runtime dependency (pulled in via uv.lock).
-    "github-copilot-sdk==1.0.6",
+    # - v1.0.7 (stable; bundled CLI 1.0.70): the SDK `copilot.tools.Tool`
+    #   dataclass gains a trailing `metadata: dict | None = None` field, which
+    #   `copilot/client.py` reads by attribute in BOTH create_session and resume
+    #   (`if tool.metadata is not None: definition["metadata"] = tool.metadata`).
+    #   Duck-typed `SDKToolWrapper` MUST mirror it (see sdk_adapter/types.py) or
+    #   every tool-forwarding turn raises AttributeError — same shape as the
+    #   v1.0.2 `defer` regression. Also adds 6 new SessionEventType members
+    #   (all DROP; see config/data/events.yaml). No other import shape changed.
+    "github-copilot-sdk==1.0.7",
     # PyYAML for config loading
     "pyyaml>=6.0",
     # PEP 440 version parser used by the import-time SDK floor check

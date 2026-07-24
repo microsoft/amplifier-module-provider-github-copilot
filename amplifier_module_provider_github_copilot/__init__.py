@@ -62,7 +62,7 @@ def _check_sdk_version(version_str: str) -> None:
     the technical symbol-availability minimum sits *below* this floor. The floor
     is deliberately set higher, at GA, to drop beta-SDK support entirely.
 
-    The exact pyproject pin (``==1.0.6``) is enforced separately by
+    The exact pyproject pin (``==1.0.7``) is enforced separately by
     ``tests/_sdk_version_gate.py``; this guard only enforces the GA floor.
 
     Extracted for testability — module-level code that runs under
@@ -75,8 +75,8 @@ def _check_sdk_version(version_str: str) -> None:
         raise ImportError(
             f"github-copilot-sdk=={version_str} is below the minimum supported "
             "version (>=1.0.0 required; pre-GA beta SDKs are no longer supported). "
-            "Pinned target: ==1.0.6 (pyproject.toml). "
-            "Reinstall with: pip install 'github-copilot-sdk==1.0.6' "
+            "Pinned target: ==1.0.7 (pyproject.toml). "
+            "Reinstall with: pip install 'github-copilot-sdk==1.0.7' "
             f"or: amplifier provider install --force {PROVIDER_ID}"
         )
 
@@ -105,7 +105,7 @@ if not _SKIP_SDK_CHECK:  # pragma: no cover
         # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
-            "Install with:  pip install 'github-copilot-sdk==1.0.6'"
+            "Install with:  pip install 'github-copilot-sdk==1.0.7'"
         ) from _e
     # Contract: sdk-boundary:Membrane:MUST:5 — fail at import time on wrong version.
     _check_sdk_version(_sdk_version)
@@ -126,7 +126,7 @@ from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
 # Contract: provider-protocol:public_api:MUST:1 — must match pyproject.toml [project].version
 # Verified by tests/test_behaviors.py::TestPackageVersionConsistency
-__version__ = "2.6.0"
+__version__ = "2.7.0"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"

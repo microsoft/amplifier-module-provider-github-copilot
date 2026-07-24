@@ -215,6 +215,36 @@ event_classifications:
     - session.canvas.unavailable
     - session.canvas.recorded
     - session.canvas.removed
+    # SDK v1.0.7 (bundled CLI 1.0.70) — 6 new SessionEventType enum members.
+    # All DROP: the provider's domain surface is single-completion + tool-call +
+    # usage + error + content-deltas; none of these carry a kernel domain mapping.
+    # Each is grouped with its already-dropped siblings above.
+    #   assistant.server_tool_progress — live progress signal for a
+    #     provider-hosted SERVER tool (e.g. hosted web search) while it runs
+    #     (AssistantServerToolProgressData: kind/output_index/status), before the
+    #     finalized serverTools envelope lands on the terminal assistant.message.
+    #     Amplifier forwards only kernel-layer tool calls; the completed
+    #     server-tool result rides assistant.message, so this partial telemetry
+    #     has no domain type. Mirrors assistant.tool_call_delta / assistant.idle.
+    #   session.auto_mode_resolved — EXPERIMENTAL. Auto-Intent model-resolution
+    #     analytics (SessionAutoModeResolvedData: chosen_model + routing scores).
+    #     The provider selects models explicitly and never drives auto-mode, so
+    #     this carries no domain value (sibling of the auto_mode_switch.* markers).
+    #   session.managed_settings_resolved — EXPERIMENTAL. Enterprise
+    #     managed-settings snapshot (SessionManagedSettingsResolvedData); an
+    #     ephemeral policy-display signal, not persisted to the event log. No
+    #     kernel domain mapping; the SDK getManagedSettings() API is the pull path.
+    #   mcp.tools.list_changed / mcp.resources.list_changed /
+    #     mcp.prompts.list_changed — MCP list-change notifications
+    #     ({server_name} only). Siblings of the mcp.oauth_* / mcp.headers_*
+    #     lifecycle events already dropped above; Amplifier hosts no MCP list
+    #     subscription surface in this provider.
+    - assistant.server_tool_progress
+    - session.auto_mode_resolved
+    - session.managed_settings_resolved
+    - mcp.tools.list_changed
+    - mcp.resources.list_changed
+    - mcp.prompts.list_changed
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:

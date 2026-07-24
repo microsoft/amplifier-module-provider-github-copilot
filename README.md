@@ -127,7 +127,7 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.6; run `amplifier provider models github-copilot` for the live list. The Context column is the default-tier prompt window; models that advertise a larger long-context tier (shown as `long=` in the live list) are reached by enabling `enable_long_context`.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.7; run `amplifier provider models github-copilot` for the live list. The Context column is the default-tier prompt window; models that advertise a larger long-context tier (shown as `long=` in the live list) are reached by enabling `enable_long_context`.
 
 **Routing:**
 
@@ -527,7 +527,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk==1.0.6`
+- `github-copilot-sdk==1.0.7`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize
