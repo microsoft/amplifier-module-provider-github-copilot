@@ -66,11 +66,9 @@ next-steps.md
 #####################################
 
 # Local developer configuration
-.github/
 *AGENTS.md
 .claude/
 *.code-workspace
-pyrightconfig.json
 .vscode/
 .idea/
 .history/
