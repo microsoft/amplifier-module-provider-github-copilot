@@ -1,0 +1,10 @@
+{
+  "include": [
+    "amplifier_module_provider_github_copilot",
+    "tests"
+  ],
+  "stubPath": "typings",
+  "typeCheckingMode": "standard",
+  "reportMissingModuleSource": "warning",
+  "reportMissingImports": "warning"
+}
