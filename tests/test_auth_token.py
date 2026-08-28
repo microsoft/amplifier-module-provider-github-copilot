@@ -260,6 +260,73 @@ class TestLogAuthSource:
         assert "GITHUB_TOKEN (env var)" not in msg  # lower-priority must not appear as active
 
     @pytest.mark.asyncio
+    async def test_mount_promotes_config_github_token_to_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hand-written config github_token must reach _resolve_token().
+
+        Regression test for the config-key hygiene audit (work item b2a):
+        the github_token ConfigField (provider.py) was never read from
+        `config` by any code path -- only a wizard-collected answer worked,
+        because the wizard's generic secret-field handling separately
+        writes the value into os.environ[env_var]. A hand-written
+        settings.yaml config value for github_token was silently ignored.
+        Fails before the fix (GITHUB_TOKEN never gets set from config) and
+        passes after (mount() promotes it via _apply_config_github_token).
+        """
+        for var in self._AUTH_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+        import amplifier_module_provider_github_copilot as _pkg
+        from amplifier_module_provider_github_copilot.sdk_adapter import client
+
+        dummy_client = object()
+        with (
+            patch.object(_pkg, "_acquire_shared_client", new=AsyncMock(return_value=dummy_client)),
+            patch.object(_pkg, "_release_shared_client", new=AsyncMock()),
+        ):
+            cleanup = await _pkg.mount(
+                self._coordinator(), config={"github_token": "cfg-token-value"}
+            )
+        assert callable(cleanup)
+        await cleanup()
+
+        assert os.environ.get("GITHUB_TOKEN") == "cfg-token-value"
+        assert client._resolve_token() == "cfg-token-value"  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_mount_config_github_token_never_overrides_higher_priority_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An ambient higher-priority auth env var must win over config.
+
+        A stale/unrelated config value must never silently override an
+        already-active credential (e.g. agent-mode COPILOT_AGENT_TOKEN).
+        """
+        for var in self._AUTH_VARS:
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("COPILOT_AGENT_TOKEN", "agent-token")
+
+        import amplifier_module_provider_github_copilot as _pkg
+        from amplifier_module_provider_github_copilot.sdk_adapter import client
+
+        dummy_client = object()
+        with (
+            patch.object(_pkg, "_acquire_shared_client", new=AsyncMock(return_value=dummy_client)),
+            patch.object(_pkg, "_release_shared_client", new=AsyncMock()),
+        ):
+            cleanup = await _pkg.mount(
+                self._coordinator(), config={"github_token": "cfg-token-value"}
+            )
+        assert callable(cleanup)
+        await cleanup()
+
+        assert os.environ.get("GITHUB_TOKEN") is None
+        assert client._resolve_token() == "agent-token"  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
     async def test_mount_succeeds_if_log_auth_source_raises(self) -> None:
         """A logging failure in _log_auth_source never blocks mount.
 

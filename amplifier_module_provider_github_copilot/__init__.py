@@ -299,6 +299,51 @@ async def _release_shared_client() -> None:
             )
 
 
+def _apply_config_github_token(config: dict[str, Any]) -> None:
+    """Promote an explicit config-provided github_token into the environment.
+
+    Cross-repo config-key hygiene audit (work item b2a) traced the
+    `github_token` ConfigField (provider.py, id="github_token") end to end:
+    it is NEVER read from `config` by any code path in this module --
+    not here, not in GitHubCopilotProvider.__init__ (provider.py), not in
+    CopilotClientWrapper/_resolve_token (sdk_adapter/client.py:395-211),
+    which resolves the SDK auth token exclusively from AUTH_ENV_VARS
+    (COPILOT_AGENT_TOKEN, COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN) via
+    os.environ. The apparent "it must flow somehow" signal at
+    sdk_adapter/client.py:438 (`client_kwargs["github_token"] = token`) is a
+    dead end for the config key specifically: `token` there originates
+    solely from _resolve_token()'s environment scan, with zero reference to
+    the `config` dict passed to mount(). CopilotClientWrapper is also a
+    process-level singleton constructed with no arguments (see
+    _acquire_shared_client), so config never reaches it at all today.
+
+    A config answered through the interactive setup wizard happens to work
+    anyway: the wizard's generic secret-field handling
+    (amplifier-app-cli's provider_config_utils.py) writes any `field_type
+    == "secret"` answer directly into `os.environ[env_var]` (plus the OS
+    keyring) at prompt time, and this field declares `env_var="GITHUB_TOKEN"`
+    -- one of the four vars _resolve_token() already checks. That is a
+    side effect of the *generic* secret-handling convention, not anything
+    specific to this provider reading its own config -- so a hand-written
+    settings.yaml config that sets `github_token` directly (bypassing the
+    wizard) was previously silently ignored: the exact
+    "advertised config that does nothing" defect class.
+
+    This function closes that gap by mirroring the wizard's own mechanism
+    generically at mount() time: only promotes the field's own declared
+    env var (GITHUB_TOKEN, the lowest-priority slot in AUTH_ENV_VARS), and
+    only when no auth env var is already present -- so an ambient
+    higher-priority credential (e.g. COPILOT_AGENT_TOKEN in agent mode) is
+    never silently overridden by a stale or unrelated config value.
+    """
+    token = config.get("github_token")
+    if not token:
+        return
+    if any(_os.environ.get(var) for var in AUTH_ENV_VARS):
+        return
+    _os.environ["GITHUB_TOKEN"] = str(token)
+
+
 def _log_auth_source(logger: logging.Logger) -> None:
     """Emit a single INFO line identifying the active auth source at mount time.
 
@@ -350,6 +395,18 @@ async def mount(
     import logging
 
     logger = logging.getLogger(__name__)
+
+    config = config or {}
+
+    # Promote an explicit config-provided github_token into the environment
+    # BEFORE auth-source resolution/logging below, so a hand-written config
+    # value is honored the same way a wizard-collected one already is (see
+    # _apply_config_github_token's docstring for the full trace).
+    # Guarded: never let a malformed config value block mount().
+    try:
+        _apply_config_github_token(config)
+    except Exception:  # pragma: no cover  # best-effort — never propagate out of mount()
+        pass
 
     # Eager auth-source resolution: emit one INFO line naming the active auth
     # source at mount time. Absence of all env vars is still a valid path
