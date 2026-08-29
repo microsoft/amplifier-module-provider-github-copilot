@@ -711,6 +711,43 @@ class TestUseStreamingConfig:
         provider = GitHubCopilotProvider(config={"use_streaming": False})
         assert provider.config.get("use_streaming", True) is False
 
+    def test_use_streaming_string_false_is_coerced(self) -> None:
+        """use_streaming="false" (string, e.g. from YAML/env) must NOT be truthy.
+
+        Regression test for the bool("false") == True footgun: a raw
+        ``self.config.get("use_streaming", True)`` treats any non-empty
+        string as truthy, so a config-provided string "false" was silently
+        treated as "streaming enabled". Parsed once at __init__ via the
+        same ``_parse_raw_flag`` helper used for ``raw`` and
+        ``enable_long_context`` (provider.py:505,509).
+
+        Contract: provider-streaming-contract.md -- use_streaming config.
+        """
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        provider = GitHubCopilotProvider(config={"use_streaming": "false"})
+        assert provider._use_streaming is False
+
+    def test_use_streaming_string_true_is_coerced(self) -> None:
+        """use_streaming="true" (string) parses to bool True (not just truthy)."""
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        provider = GitHubCopilotProvider(config={"use_streaming": "true"})
+        assert provider._use_streaming is True
+
+    def test_use_streaming_bool_still_works(self) -> None:
+        """use_streaming=True/False (native bool) continues to work unchanged."""
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        assert GitHubCopilotProvider(config={"use_streaming": True})._use_streaming is True
+        assert GitHubCopilotProvider(config={"use_streaming": False})._use_streaming is False
+
+    def test_use_streaming_default_when_absent(self) -> None:
+        """use_streaming absent from config defaults to True (unchanged default)."""
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        assert GitHubCopilotProvider(config={})._use_streaming is True
+
     def test_stream_false_metadata_override_logic(self) -> None:
         """metadata={'stream': False} uses identity check (is False, not ==False)."""
         use_streaming = True

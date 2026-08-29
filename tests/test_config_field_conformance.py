@@ -91,4 +91,6 @@ class TestConfigFieldConformance:
         token_field = token_fields[0]
 
         assert token_field.display_name == "GitHub Token"
-        assert token_field.prompt == "Enter your GitHub token (or Copilot agent token)"
+        # Prompt text tightened (see provider.py get_info()) -- id/field_type/
+        # env_var/required are unchanged and covered by the tests above.
+        assert token_field.prompt == "GitHub token (or Copilot agent token)"

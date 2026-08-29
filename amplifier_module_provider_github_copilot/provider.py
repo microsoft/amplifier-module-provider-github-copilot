@@ -508,6 +508,11 @@ class GitHubCopilotProvider:
         self._enable_long_context: bool = _parse_raw_flag(
             self.config.get("enable_long_context", False)
         )
+        # Reuse the bool parser (see _parse_raw_flag) — avoids the same
+        # bool("false")==True footgun for use_streaming; mirrors self._raw
+        # and self._enable_long_context. Default stays True (unchanged).
+        # Contract: provider-streaming-contract.md — use_streaming config
+        self._use_streaming: bool = _parse_raw_flag(self.config.get("use_streaming", True))
         # Parse retry config once at init — allows per-instance user overrides
         self._retry_config: RetryConfig = _build_retry_config(self.config, load_retry_config())
         # Track pending streaming emit tasks for cleanup
@@ -597,7 +602,8 @@ class GitHubCopilotProvider:
                     id="github_token",
                     display_name="GitHub Token",
                     field_type="secret",
-                    prompt="Enter your GitHub token (or Copilot agent token)",
+                    # Prompt-text tightening only -- id/field_type/env_var/required unchanged.
+                    prompt="GitHub token (or Copilot agent token)",
                     env_var="GITHUB_TOKEN",
                     required=True,
                 ),
@@ -605,16 +611,22 @@ class GitHubCopilotProvider:
                     id="enable_long_context",
                     display_name="Long context tier by default",
                     field_type="boolean",
-                    prompt="Default to the long-context tier when the model supports it",
+                    # Prompt-text tightening only -- id/field_type/default/required/
+                    # requires_model unchanged.
+                    prompt="Use the long-context tier by default?",
                     required=False,
                     default="false",
                     requires_model=True,
                 ),
+                # Contract: provider-protocol:get_info:MUST:6 -- MUST appear immediately
+                # after enable_long_context; choices list MUST NOT change.
                 ConfigField(
                     id="reasoning_effort",
                     display_name="Default reasoning effort",
                     field_type="choice",
-                    prompt="Select the default reasoning effort for supported models",
+                    # Prompt-text tightening only -- id/field_type/choices/default/
+                    # required/requires_model unchanged.
+                    prompt="Default reasoning effort",
                     choices=["model default", *REASONING_EFFORT_LEVELS],
                     required=False,
                     default="model default",
@@ -788,9 +800,10 @@ class GitHubCopilotProvider:
 
             # Emit llm:request event (contract: observability:Events:MUST:2)
             # Contract: provider-streaming-contract.md — use_streaming config + metadata override
-            use_streaming: bool = self.config.get("use_streaming", True)
+            # self._use_streaming parsed once in __init__ (see _parse_raw_flag) —
+            # avoids the bool("false")==True footgun for a string config value.
             _meta = getattr(request, "metadata", None)
-            _use_streaming: bool = use_streaming
+            _use_streaming: bool = self._use_streaming
             if isinstance(_meta, dict) and _meta.get("stream") is False:
                 # Identity check per contract: `is False` not `==False`
                 _use_streaming = False
