@@ -112,6 +112,7 @@ if not _SKIP_SDK_CHECK:  # pragma: no cover
 
 # E402: These imports are intentionally after SDK check - we verify SDK
 # installation before importing modules that depend on it (Two-Medium Architecture).
+import difflib  # noqa: E402
 import logging  # noqa: E402
 from collections.abc import Awaitable, Callable  # noqa: E402
 from typing import Any, NoReturn  # noqa: E402
@@ -299,6 +300,93 @@ async def _release_shared_client() -> None:
             )
 
 
+# Contract: config-key hygiene — the exact set of config keys this provider
+# reads or otherwise recognizes as legitimate. Keep in sync with every
+# `self.config.get(...)` (GitHubCopilotProvider.__init__, provider.py) and
+# `config.get(...)` (_build_retry_config, provider.py) call site.
+# Warn-only sweep at mount time (see _warn_unknown_config_keys below) --
+# NEVER raises, so a typo'd or stale key does not block mount().
+_KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        # Read directly by GitHubCopilotProvider.__init__ (provider.py).
+        "github_token",
+        "default_model",
+        "raw",
+        "enable_long_context",
+        "reasoning_effort",
+        "use_streaming",
+        # Read directly by _build_retry_config (provider.py).
+        "max_retries",
+        "min_retry_delay",
+        "max_retry_delay",
+        "retry_jitter",
+        "overloaded_delay_multiplier",
+        # Not read by this module at all, but a legitimate, LIVE-consumed key:
+        # read straight off this same config dict by the orchestrator's own
+        # provider-selection logic (loop-streaming's _select_provider).
+        # Flagging it as "unknown" would tell an operator to delete a
+        # setting that is actively working.
+        "priority",
+        # Not read by this module; reserved by amplifier-app-cli's own
+        # session-config passthrough schema.
+        "extra_request_params",
+    }
+)
+
+# Keys this provider does NOT recognize but that must never get the generic
+# did-you-mean treatment -- either because a "correction" would be nonsensical
+# or because implying a typo would be dishonest.
+# "debug": present in ~9 of the maintainer's own test fixture configs;
+# genuinely unread anywhere in this provider (no `config.get("debug", ...)`
+# call exists). Not added to `_KNOWN_CONFIG_KEYS` above (it is not a key this
+# provider reads) -- instead given an honest, targeted message so test output
+# (and any real caller's logs) stays clean and truthful rather than guessing.
+_TARGETED_UNKNOWN_KEY_MESSAGES: dict[str, str] = {
+    "debug": "not read by this provider",
+}
+
+
+def _warn_unknown_config_keys(config: dict[str, Any]) -> None:
+    """Warn (never raise) about config keys this provider does not recognize.
+
+    A typo'd or stale option (e.g. ``us_streaming`` instead of
+    ``use_streaming``) is silently inert today -- the config author gets no
+    signal their setting had no effect. This surfaces it loudly at mount
+    time: one combined warning naming every offender, each with a
+    nearest-valid-key suggestion (via `difflib`) when one exists, EXCEPT for
+    keys in `_TARGETED_UNKNOWN_KEY_MESSAGES`, which get their own honest
+    message instead of a did-you-mean guess.
+
+    Must stay quiet on every legitimate config: `_KNOWN_CONFIG_KEYS` is the
+    full set of keys this provider (and its live orchestrator/app-cli
+    collaborators) recognize. No false positives are acceptable here --
+    when in doubt, a key belongs in that set, not flagged.
+
+    Args:
+        config: The provider's resolved config dict, as passed to mount().
+    """
+    unknown = sorted(set(config) - _KNOWN_CONFIG_KEYS)
+    if not unknown:
+        return
+    described: list[str] = []
+    for key in unknown:
+        targeted = _TARGETED_UNKNOWN_KEY_MESSAGES.get(key)
+        if targeted is not None:
+            described.append(f"{key!r} ({targeted})")
+            continue
+        match = difflib.get_close_matches(key, _KNOWN_CONFIG_KEYS, n=1)
+        if match:
+            described.append(f"{key!r} (did you mean {match[0]!r}?)")
+        else:
+            described.append(repr(key))
+    logging.getLogger(__name__).warning(
+        "[MOUNT] Unrecognized config key(s) for provider-github-copilot: %s. "
+        "These have no effect -- likely a typo or a stale/removed option. "
+        "See the module README for the full list of accepted config keys.",
+        ", ".join(described),
+    )
+
+
 def _apply_config_github_token(config: dict[str, Any]) -> None:
     """Promote an explicit config-provided github_token into the environment.
 
@@ -397,6 +485,13 @@ async def mount(
     logger = logging.getLogger(__name__)
 
     config = config or {}
+
+    # Warn (never raise) about config keys this provider does not recognize.
+    # Guarded: a logging failure must never block mount().
+    try:
+        _warn_unknown_config_keys(config)
+    except Exception:  # pragma: no cover  # diagnostic only — never propagate out of mount()
+        pass
 
     # Promote an explicit config-provided github_token into the environment
     # BEFORE auth-source resolution/logging below, so a hand-written config
