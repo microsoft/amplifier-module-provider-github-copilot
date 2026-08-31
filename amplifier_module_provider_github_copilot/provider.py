@@ -577,6 +577,15 @@ class GitHubCopilotProvider:
         # singleton from load_models_config(); in-place mutation would poison it
         # for every other provider instance.
         defaults = dict(cfg.defaults)
+        # Report the runtime-effective model, not the packaged static default —
+        # get_info() MUST respect the same model selection priority as the rest
+        # of the provider (behaviors:ModelSelection:MUST:1: request.model >
+        # config["default_model"] > YAML). Set unconditionally (not inside the
+        # `if info is not None:` branch below) so the reported model is correct
+        # even on a cold cache, matching how context_window/max_output_tokens
+        # are already corrected for the effective model just below.
+        # Contract: provider-protocol:get_info:MUST:2
+        defaults["model"] = self._effective_default_model
         # Report the default model's tier-selected PROMPT budget so Amplifier's
         # compaction math matches the active context tier. Cold cache (model not
         # yet discovered) keeps the static fallback from config/_models.py.
