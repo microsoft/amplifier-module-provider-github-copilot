@@ -1096,6 +1096,117 @@ class TestRuntimeConfigOverride:
         # (not mutated by either provider)
         assert cached_config.defaults["model"] == "claude-opus-4.5"
 
+    def test_get_info_reports_runtime_default_model(self) -> None:
+        """get_info() defaults["model"] MUST reflect the runtime-configured model.
+
+        Contract: provider-protocol:get_info:MUST:2
+        Contract: behaviors:ModelSelection:MUST:1
+        Priority 2: config["default_model"] overrides the packaged YAML default.
+        """
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
+
+        routing_model = "gpt-5.4-turbo"
+        mock_client = MockCopilotClientWrapper(events=[])
+
+        provider = GitHubCopilotProvider(
+            config={"default_model": routing_model},
+            client=mock_client,  # type: ignore[arg-type]
+        )
+
+        info = provider.get_info()
+
+        assert info.defaults["model"] == routing_model
+
+    def test_get_info_reports_yaml_default_without_runtime_config(self) -> None:
+        """get_info() defaults["model"] matches YAML default when unconfigured (no regression).
+
+        Contract: provider-protocol:get_info:MUST:2
+        Contract: behaviors:ModelSelection:MUST:1
+        Priority 3: YAML defaults.model (fallback) when config["default_model"] is absent.
+        """
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
+
+        mock_client = MockCopilotClientWrapper(events=[])
+        provider = GitHubCopilotProvider(
+            config={},  # No default_model
+            client=mock_client,  # type: ignore[arg-type]
+        )
+
+        yaml_default = provider._provider_config.defaults["model"]  # pyright: ignore[reportPrivateUsage]
+        info = provider.get_info()
+
+        assert info.defaults["model"] == yaml_default
+
+    def test_get_info_reports_runtime_model_on_cold_cache(self) -> None:
+        """get_info() defaults["model"] is the effective model even on a cold cache.
+
+        Contract: provider-protocol:get_info:MUST:2
+        Proves the model correction is unconditional -- unlike context_window and
+        max_output_tokens (which fall back to the static YAML values when the
+        model cache lookup returns None), the model field MUST always report the
+        runtime-effective model, so the fix must live outside the
+        `if info is not None:` branch.
+        """
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
+
+        routing_model = "mai-code-1.1-flash"
+        mock_client = MockCopilotClientWrapper(events=[])
+
+        provider = GitHubCopilotProvider(
+            config={"default_model": routing_model},
+            client=mock_client,  # type: ignore[arg-type]
+        )
+        # Force a cold-cache lookup: no CopilotModelInfo has been discovered for
+        # this model, so `_lookup_copilot_model_info` MUST return None.
+        assert provider._lookup_copilot_model_info(routing_model) is None  # pyright: ignore[reportPrivateUsage]
+
+        info = provider.get_info()
+
+        assert info.defaults["model"] == routing_model
+        # Cold-cache fallback for the window fields is unchanged (out of scope
+        # for this fix) -- static YAML defaults remain in place.
+        yaml_default = provider._provider_config.defaults  # pyright: ignore[reportPrivateUsage]
+        assert info.defaults["context_window"] == yaml_default["context_window"]
+        assert info.defaults["max_output_tokens"] == yaml_default["max_output_tokens"]
+
+    def test_get_info_does_not_mutate_shared_cached_defaults(self) -> None:
+        """get_info() model correction MUST NOT mutate the shared lru_cached defaults.
+
+        Contract: behaviors:ModelSelection:MUST:2
+        Contract: provider-protocol:get_info:MUST:5 (copy-before-inject)
+        A second provider instance with a different (or no) config must be
+        unaffected by a prior provider's get_info() call.
+        """
+        from amplifier_module_provider_github_copilot.config_loader import load_models_config
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
+
+        mock_client1 = MockCopilotClientWrapper(events=[])
+        mock_client2 = MockCopilotClientWrapper(events=[])
+
+        provider1 = GitHubCopilotProvider(
+            config={"default_model": "gpt-5.4"},
+            client=mock_client1,  # type: ignore[arg-type]
+        )
+        provider2 = GitHubCopilotProvider(
+            config={},  # No default_model -- should see the unmutated YAML default
+            client=mock_client2,  # type: ignore[arg-type]
+        )
+
+        info1 = provider1.get_info()
+        assert info1.defaults["model"] == "gpt-5.4"
+
+        # The process-wide lru_cached singleton must be untouched by provider1's
+        # get_info() call.
+        cached_config = load_models_config()
+        assert cached_config.defaults["model"] == "claude-opus-4.5"
+
+        info2 = provider2.get_info()
+        assert info2.defaults["model"] == "claude-opus-4.5"
+
 
 # =============================================================================
 # C-2: asyncio.CancelledError translation
