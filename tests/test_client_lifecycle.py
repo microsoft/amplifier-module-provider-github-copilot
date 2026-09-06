@@ -660,6 +660,98 @@ class TestCloseOwnershipSemantics:
         assert mock_owned.stop.call_count == 1  # Still just 1 call
 
     @pytest.mark.asyncio
+    async def test_close_is_bounded_when_stop_never_returns(self, caplog) -> None:
+        """A client whose stop() never returns must not hang cleanup.
+
+        Regression guard: close() previously awaited ``_owned_client.stop()``
+        with no ceiling. close() is on the mount()-cleanup path (via the
+        provider's close() and the shared-client refcount release), so a
+        wedged SDK subprocess hung session cleanup for the whole process.
+
+        Contract: sdk-protection:Subprocess:MUST:8
+        """
+        import asyncio
+        import logging
+        import time
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SdkProtectionConfig,
+        )
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        config = SdkProtectionConfig()
+        config.sdk.close_timeout_seconds = 0.05
+
+        wrapper = CopilotClientWrapper()
+        release = asyncio.Event()
+
+        class _UnstoppableClient:
+            async def stop(self) -> None:
+                # Never returns until the test explicitly releases it.
+                await release.wait()
+
+        owned = _UnstoppableClient()
+        wrapper._owned_client = owned  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
+
+        with patch(
+            "amplifier_module_provider_github_copilot.sdk_adapter.client.load_sdk_protection_config",
+            return_value=config,
+        ):
+            started = time.monotonic()
+            with caplog.at_level(logging.WARNING):
+                await wrapper.close()  # must not raise, must not hang
+            elapsed = time.monotonic() - started
+
+        assert elapsed < 2.0, f"close() took {elapsed:.2f}s; expected ~0.05s"
+        assert "did not complete within" in caplog.text
+        assert "abandoning client" in caplog.text
+        # Reference dropped so a second close() does not retry the wedged stop.
+        assert wrapper._owned_client is None  # pyright: ignore[reportPrivateUsage]
+        assert wrapper.is_healthy() is False
+
+        # Let the abandoned stop task finish so the loop shuts down clean.
+        release.set()
+        await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_close_normal_stop_logs_no_warning(self, caplog) -> None:
+        """A well-behaved client stops once, quietly, and is released.
+
+        Contract: sdk-protection:Subprocess:MUST:8
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        wrapper = CopilotClientWrapper()
+        mock_owned = AsyncMock(spec=_MockSDKClient)
+        mock_owned.stop = AsyncMock()
+        wrapper._owned_client = mock_owned  # pyright: ignore[reportPrivateUsage]
+
+        with caplog.at_level(logging.WARNING):
+            await wrapper.close()
+
+        mock_owned.stop.assert_awaited_once()
+        assert caplog.text == ""
+        assert wrapper._owned_client is None  # pyright: ignore[reportPrivateUsage]
+
+    def test_close_timeout_defaults_to_five_seconds(self) -> None:
+        """The shipped policy default is a 5.0s ceiling.
+
+        Contract: sdk-protection:Subprocess:MUST:8
+        """
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SdkProtectionConfig,
+        )
+
+        assert SdkProtectionConfig().sdk.close_timeout_seconds == 5.0
+
+    @pytest.mark.asyncio
     async def test_close_before_any_session(self) -> None:
         """close() called before any session() is safe.
 

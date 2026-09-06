@@ -1492,7 +1492,26 @@ class GitHubCopilotProvider:
         for task in tasks_to_cancel:
             task.cancel()
         if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+            # Bounded: cancelling a task is a REQUEST, not a guarantee. A task
+            # that swallows CancelledError (or is blocked in a shielded await)
+            # never completes, and this gather is on the mount()-cleanup path
+            # -- so an unbounded drain hangs session cleanup exactly like an
+            # unclosable client does. Abandon the stragglers and move on.
+            # Contract: sdk-protection:Subprocess:MUST:8
+            drain_timeout = load_sdk_protection_config().sdk.close_timeout_seconds
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.gather(*tasks_to_cancel, return_exceptions=True)),
+                    timeout=drain_timeout,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "[PROVIDER] %d emit task(s) did not finish cancelling "
+                    "within %.1fs; abandoning them. Raise "
+                    "'sdk.close_timeout_seconds' if a slow drain is expected.",
+                    sum(1 for t in tasks_to_cancel if not t.done()),
+                    drain_timeout,
+                )
         self._pending_emit_tasks.clear()
 
     async def close(self) -> None:

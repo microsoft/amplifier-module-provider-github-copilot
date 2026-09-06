@@ -717,17 +717,51 @@ class CopilotClientWrapper:
                         )
 
     async def close(self) -> None:
-        """Clean up owned client resources. Safe to call multiple times."""
+        """Clean up owned client resources, within a time bound.
+
+        Safe to call multiple times.
+
+        Contract: sdk-protection:Subprocess:MUST:8 -- bound the SDK stop.
+
+        ``stop()`` tears down the SDK's Electron subprocess. A wedged or
+        unresponsive subprocess leaves that await pending forever, and this
+        method sits on the mount()-cleanup path (via the provider's close()
+        and the shared-client refcount release), so an unbounded stop hangs
+        Amplifier's session cleanup for the whole process.
+
+        ``asyncio.shield`` lets the stop run to completion even if the
+        *enclosing* task is cancelled; ``asyncio.wait_for`` caps how long we
+        are willing to wait for it. On timeout we log a WARNING naming this
+        wrapper and the abandoned client, then return -- a slow teardown must
+        never become a hung session. The SDK's own graceful-shutdown bound
+        (v1.0.2's ``_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS``) is the SDK's promise,
+        not ours; this is the guarantee we can actually make.
+
+        ``self._owned_client`` is cleared before the await, so a client that
+        timed out or raised is never retried on a second close().
+        """
         self._stopped = True  # Mark as stopped so is_healthy() returns False
-        if self._owned_client is not None:
-            try:
-                logger.info("[CLIENT] Stopping owned Copilot client...")
-                await self._owned_client.stop()
-                logger.info("[CLIENT] Copilot client stopped")
-            except Exception as e:
-                logger.warning(*self._get_safe_log()("[CLIENT] Error stopping client: %s", e))
-            finally:
-                self._owned_client = None
+        owned_client = self._owned_client
+        if owned_client is None:
+            return
+        self._owned_client = None
+        close_timeout = load_sdk_protection_config().sdk.close_timeout_seconds
+        try:
+            logger.info("[CLIENT] Stopping owned Copilot client...")
+            await asyncio.wait_for(asyncio.shield(owned_client.stop()), timeout=close_timeout)
+            logger.info("[CLIENT] Copilot client stopped")
+        except TimeoutError:
+            logger.warning(
+                "[CLIENT] %s: Copilot client stop did not complete within "
+                "%.1fs; abandoning client %r. Its SDK subprocess may survive "
+                "until the process exits. Raise "
+                "'sdk.close_timeout_seconds' if a slow stop is expected.",
+                type(self).__name__,
+                close_timeout,
+                owned_client,
+            )
+        except Exception as e:
+            logger.warning(*self._get_safe_log()("[CLIENT] Error stopping client: %s", e))
 
     async def list_models(self) -> list[Any]:
         """Fetch available models from SDK backend.
