@@ -7,6 +7,7 @@
 - **Status:** Defensive Enhancement
 - **Created:** 2026-03-21 — Defense-in-depth layer for SDK interaction
 - **Updated:** 2026-03-31 — Added Subprocess Management Invariants (MUST-5,6,7)
+- **Updated:** 2026-09-06 — Added MUST-8: bound client stop and emit-task drain
 
 ---
 
@@ -105,6 +106,19 @@ The provider MUST validate `sdk.log_level` against the allowlist defined in conf
 - YAML: Validation in `load_sdk_protection_config()`
 - ENV: Validation in `_resolve_sdk_log_level()`
 
+### MUST-8: Bound Client Stop and Emit-Task Drain
+
+Every await on the mount()-cleanup path MUST be bounded by `sdk.close_timeout_seconds`. Specifically:
+
+- `CopilotClientWrapper.close()` MUST bound `CopilotClient.stop()`.
+- `GitHubCopilotProvider.cancel_emit_tasks()` MUST bound the `asyncio.gather` that drains cancelled emit tasks.
+
+On timeout, log a WARNING naming the abandoned resource and return. Cleanup MUST NOT raise, and MUST NOT wait indefinitely.
+
+**Rationale:** `stop()` tears down a ~500MB Electron subprocess; a wedged or unresponsive subprocess leaves that await pending forever, hanging Amplifier's session cleanup for the whole process. Likewise, cancelling a task is a *request*, not a guarantee -- a task that swallows `CancelledError` never completes and wedges the drain. The SDK's own graceful-shutdown bound (v1.0.2 `_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS`) is the SDK's promise, not this provider's; MUST-8 is the guarantee this provider makes regardless of SDK version.
+
+**Implementation:** `asyncio.wait_for(asyncio.shield(<awaitable>), timeout=sdk.close_timeout_seconds)`. `shield` lets the operation finish even when the enclosing task is cancelled; `wait_for` caps the wait. Clear the resource reference *before* the await so a timed-out resource is never retried.
+
 ---
 
 ## Architectural Notes
@@ -139,6 +153,7 @@ Deduplication uses O(n) set membership check where n = number of captured tools.
 | `sdk-protection:Subprocess:MUST:5` | Prewarm task tracking | `tests/test_client_lifecycle.py` |
 | `sdk-protection:Subprocess:MUST:6` | Guard re-init after stop | `tests/test_client_lifecycle.py` |
 | `sdk-protection:Subprocess:MUST:7` | Validate SDK config | `tests/test_sdk_protection.py` |
+| `sdk-protection:Subprocess:MUST:8` | Bound client stop + emit drain | `tests/test_client_lifecycle.py`, `tests/test_provider_close.py` |
 
 ---
 
@@ -157,6 +172,7 @@ Policy values are defined in `config/sdk_protection.yaml`. The Python code loads
 | `sdk.log_level` | str | "info" | SDK subprocess log level |
 | `sdk.log_level_env_var` | str | "COPILOT_SDK_LOG_LEVEL" | Env var override |
 | `sdk.prewarm_subprocess` | bool | false | Spawn subprocess at mount() |
+| `sdk.close_timeout_seconds` | float | 5.0 | Ceiling on client stop / emit drain |
 | `sdk.valid_log_levels` | list | see below | Allowlist for validation |
 
 **Valid log levels:** `["none", "error", "warning", "info", "debug", "all"]`

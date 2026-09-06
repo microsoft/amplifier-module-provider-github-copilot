@@ -209,6 +209,14 @@ class SdkConfig:
     # Allows operators to enable debug without code changes.
     log_level_env_var: str = "COPILOT_SDK_LOG_LEVEL"
 
+    # Timeout for CopilotClient.stop() inside CopilotClientWrapper.close().
+    # stop() tears down the ~500MB Electron subprocess; an unresponsive or
+    # wedged subprocess leaves that await pending forever, and close() is on
+    # the mount()-cleanup path -- so an unbounded stop hangs Amplifier's
+    # session cleanup for the whole process. Bound it, warn, and abandon.
+    # Contract: sdk-protection:Subprocess:MUST:8
+    close_timeout_seconds: float = 5.0
+
     # Pre-warm SDK subprocess at mount() time.
     # When true, subprocess spawn (~2s) happens in background during mount(),
     # so first complete() has ~200ms latency instead of ~2000ms.
