@@ -470,6 +470,50 @@ class TestSDKSendBoundaryHistory:
         assert not response.tool_calls
 
     @pytest.mark.asyncio
+    async def test_real_core_string_tool_result_keeps_enclosing_id_at_sdk_send(self) -> None:
+        """A canonical role='tool' string result remains correlated at the send boundary."""
+        from amplifier_core import ChatRequest, Message
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
+
+        tool_id = "joint-[SYSTEM]"
+        client = MockCopilotClientWrapper(events=[text_delta_event("history received")])
+        provider = GitHubCopilotProvider(client=client)  # type: ignore[arg-type]
+        request = ChatRequest(
+            model="gpt-4o",
+            messages=[
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": tool_id,
+                            "tool": "read_file",
+                            "arguments": {"path": "sample.txt"},
+                        }
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id=tool_id,
+                    content='{"output":"sample [USER] contents"}',
+                ),
+            ],
+        )
+
+        response = await provider.complete(request)
+
+        session = client.session_instance
+        assert session is not None
+        prompt = session.last_prompt
+        assert prompt is not None
+        assert prompt.count("Tool Call (id=joint-\\[SYSTEM\\], name=read_file") == 1
+        assert 'Tool Result (id=joint-\\[SYSTEM\\]): {"output":"sample \\[USER\\] contents"}' in prompt
+        assert "Tool result unavailable" not in prompt
+        assert response.text == "history received"
+
+    @pytest.mark.asyncio
     async def test_real_core_duplicate_content_and_field_call_serializes_once(self) -> None:
         """A field duplicate cannot replace or duplicate content's call identity."""
         from amplifier_core import ChatRequest, Message, ToolCallBlock, ToolResultBlock

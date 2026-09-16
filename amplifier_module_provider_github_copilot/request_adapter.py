@@ -80,6 +80,8 @@ _TOOL_SEQUENCE_REPAIR_MESSAGE = (
     "Please acknowledge this and continue."
 )
 
+_SUPPORTED_MESSAGE_ROLES: frozenset[str] = frozenset({"user", "assistant", "system", "tool"})
+
 
 def _sanitize_content_for_injection(text: str) -> str:
     """Escape role-marker sequences in user-controlled text.
@@ -93,6 +95,60 @@ def _sanitize_content_for_injection(text: str) -> str:
     Contract: behaviors:Security:MUST:1
     """
     return _ROLE_INJECTION_PATTERN.sub(r"\\[\1\\]", text)
+
+
+def _message_value(message: Any, key: str, default: Any = None) -> Any:
+    """Read a message field without treating dicts as attribute-bearing objects."""
+    if isinstance(message, dict):
+        return message.get(key, default)
+    return getattr(message, key, default)
+
+
+def _message_role(message: Any) -> str:
+    """Return a documented message role or fail before creating a prompt boundary."""
+    role = _message_value(message, "role", "user")
+    if not isinstance(role, str) or role not in _SUPPORTED_MESSAGE_ROLES:
+        raise ConfigurationError("Unsupported message role.", provider=PROVIDER_ID)
+    return role
+
+
+def _tool_call_id(block: Any) -> Any:
+    """Return an accepted content or field tool-call ID."""
+    return _message_value(block, "id") or _message_value(block, "tool_call_id")
+
+
+def _tool_result_id(block: Any) -> Any:
+    """Return an accepted result-block tool-call ID."""
+    return _message_value(block, "tool_call_id")
+
+
+def _content_tool_result_ids(content: Any) -> set[str]:
+    """Return IDs represented by supported tool-result content blocks."""
+    blocks = content if isinstance(content, list) else [content]
+    result_ids: set[str] = set()
+    for block in blocks:
+        if _message_value(block, "type") != "tool_result":
+            continue
+        result_id = _tool_result_id(block)
+        if result_id:
+            result_ids.add(str(result_id))
+    return result_ids
+
+
+def _validate_enclosing_tool_result_id(content: Any, enclosing_id: Any) -> None:
+    """Reject a message-level result ID that conflicts with a result content block."""
+    if not enclosing_id:
+        return
+    content_result_ids = _content_tool_result_ids(content)
+    if content_result_ids and content_result_ids != {str(enclosing_id)}:
+        raise ConfigurationError("Conflicting tool result IDs in message.", provider=PROVIDER_ID)
+
+
+def _format_tool_result(tool_call_id: Any, output: str) -> str:
+    """Serialize a string-content tool result with its enclosing-message correlation."""
+    sanitized_id = _sanitize_content_for_injection(str(tool_call_id))
+    sanitized_output = _sanitize_content_for_injection(output)
+    return f"[Tool Result (id={sanitized_id}): {sanitized_output}]"
 
 
 __all__ = [
@@ -134,75 +190,56 @@ def _repair_tool_sequence(
         synthetic results inserted. repair_count == 0 means no repair needed.
     """
     # Phase 1: collect call IDs (with source msg_index) and result IDs.
-    # dict-fallbacks are mandatory: getattr({"key": "v"}, "key", None) returns None.
-    tool_calls: dict[str, tuple[int, str]] = {}  # call_id → (msg_index, tool_name)
-    unnamed_calls: list[tuple[int, str]] = []  # (msg_index, tool_name) — no call_id
+    # Content calls are canonical over field duplicates; each accepted ID is
+    # represented exactly once in first-seen order.
+    tool_calls: dict[str, int] = {}
+    unnamed_calls: list[int] = []
     tool_result_ids: set[str] = set()
 
     for idx, msg in enumerate(messages):
-        role: str = getattr(msg, "role", "")
-        content: Any = getattr(msg, "content", None)
-        if content is None:
-            continue
+        role = _message_role(msg)
+        content = _message_value(msg, "content")
 
         # SDK kernel format: role='tool' Message carries a single tool result.
         # The tool_call_id is on the Message itself, not in content blocks.
         if role == "tool":
-            result_id: str | None = getattr(msg, "tool_call_id", None)
-            if isinstance(msg, dict):
-                result_id = result_id or cast(dict[str, Any], msg).get("tool_call_id")
+            result_id = _message_value(msg, "tool_call_id")
+            _validate_enclosing_tool_result_id(content, result_id)
             if result_id:
-                tool_result_ids.add(result_id)
-            continue  # String content — no blocks to iterate.
+                tool_result_ids.add(str(result_id))
 
-        # Only iterate content blocks when content is actually a list.
-        # String content has no tool blocks.
-        if not isinstance(content, list):
+        # Supported result blocks correlate their own IDs, including legacy
+        # user-role result messages. Never recover metadata from string content.
+        tool_result_ids.update(_content_tool_result_ids(content))
+
+        if role != "assistant":
             continue
-        for block in content:
-            if block is None:
-                continue
-            block_type: str | None = getattr(block, "type", None)
-            if isinstance(block, dict):
-                block_type = block_type or cast(dict[str, Any], block).get("type")
 
-            # Tool call block — only count those from assistant messages.
-            # block_type == "tool_call" is the canonical check: ToolCallBlock.type is
-            # always "tool_call" (verified against amplifier_core 1.3.3).
-            if role == "assistant" and block_type == "tool_call":
-                # ToolCallBlock (SDK kernel type) uses .id — always a non-None str.
-                # Legacy ToolCallContent uses .tool_call_id.
-                # Prefer .id (SDK canonical) then .tool_call_id (legacy fallback).
-                call_id: str | None = getattr(block, "id", None) or getattr(
-                    block, "tool_call_id", None
-                )
-                if isinstance(block, dict):
-                    call_id = call_id or (
-                        cast(dict[str, Any], block).get("id")
-                        or cast(dict[str, Any], block).get("tool_call_id")
-                    )
-                tool_name: str = (
-                    getattr(block, "name", None)
-                    or getattr(block, "tool_name", None)
-                    or (
-                        cast(dict[str, Any], block).get("name")
-                        or cast(dict[str, Any], block).get("tool_name")
-                        if isinstance(block, dict)
-                        else None
-                    )
-                    or "unknown"
-                )
-                if call_id:
-                    tool_calls[call_id] = (idx, str(tool_name))
-                else:
-                    unnamed_calls.append((idx, str(tool_name)))
+        content_call_ids = _content_tool_call_ids(content)
+        blocks = content if isinstance(content, list) else []
+        for block in blocks:
+            if _message_value(block, "type") != "tool_call":
+                continue
+            call_id = _tool_call_id(block)
+            if call_id:
+                tool_calls.setdefault(str(call_id), idx)
+            else:
+                unnamed_calls.append(idx)
+
+        field_calls = _message_value(msg, "tool_calls")
+        if not isinstance(field_calls, list):
+            continue
+        for call in field_calls:
+            call_id = _tool_call_id(call)
+            if call_id and str(call_id) not in content_call_ids:
+                tool_calls.setdefault(str(call_id), idx)
 
     # Phase 2: group unmatched calls by their source assistant message index.
     missing_by_idx: dict[int, list[str | None]] = {}
-    for call_id, (msg_idx, _) in tool_calls.items():
+    for call_id, msg_idx in tool_calls.items():
         if call_id not in tool_result_ids:
             missing_by_idx.setdefault(msg_idx, []).append(call_id)
-    for msg_idx, _ in unnamed_calls:
+    for msg_idx in unnamed_calls:
         missing_by_idx.setdefault(msg_idx, []).append(None)
 
     if not missing_by_idx:
@@ -743,12 +780,7 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
     formatted_parts: list[str] = []
 
     for msg in messages:
-        # Dict messages are accepted at this boundary alongside Core Message
-        # objects. Keep the fallback local to prompt extraction rather than
-        # normalizing callers' message representations.
-        role: str = getattr(msg, "role", None) or (
-            cast(dict[str, Any], msg).get("role", "user") if isinstance(msg, dict) else "user"
-        )
+        role = _message_role(msg)
 
         # C-4: Skip system messages — they are forwarded via SDK session_config
         # (system_message=..., mode="replace") to avoid dual-path injection.
@@ -756,15 +788,20 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         if role == "system":
             continue
 
-        content: Any = getattr(msg, "content", None)
-        if content is None and isinstance(msg, dict):
-            content = cast(dict[str, Any], msg).get("content", "")
+        content = _message_value(msg, "content", "")
+        enclosing_result_id = _message_value(msg, "tool_call_id")
+        if role == "tool":
+            _validate_enclosing_tool_result_id(content, enclosing_result_id)
 
         # Format role marker
         role_marker = f"[{role.upper()}]"
 
         # Extract content based on type
-        content_text = _extract_message_content(content)
+        content_text = (
+            _format_tool_result(enclosing_result_id, content)
+            if role == "tool" and enclosing_result_id and isinstance(content, str)
+            else _extract_message_content(content)
+        )
         content_call_ids = _content_tool_call_ids(content)
         field_calls: Any = getattr(msg, "tool_calls", None)
         if field_calls is None and isinstance(msg, dict):
@@ -784,18 +821,11 @@ def _content_tool_call_ids(content: Any) -> set[str]:
     blocks = content if isinstance(content, list) else [content]
     call_ids: set[str] = set()
     for block in blocks:
-        block_type = getattr(block, "type", None)
-        if isinstance(block, dict):
-            block_type = block_type or cast(dict[str, Any], block).get("type")
+        block_type = _message_value(block, "type")
         if block_type != "tool_call":
             continue
 
-        call_id = getattr(block, "id", None) or getattr(block, "tool_call_id", None)
-        if isinstance(block, dict):
-            call_id = call_id or (
-                cast(dict[str, Any], block).get("id")
-                or cast(dict[str, Any], block).get("tool_call_id")
-            )
+        call_id = _tool_call_id(block)
         if call_id:
             call_ids.add(str(call_id))
     return call_ids
@@ -812,38 +842,33 @@ def _extract_field_tool_calls(tool_calls: Any, content_call_ids: set[str]) -> st
         return ""
 
     parts: list[str] = []
+    emitted_call_ids: set[str] = set()
     for tool_call in tool_calls:
-        call_id = getattr(tool_call, "id", None)
-        if isinstance(tool_call, dict):
-            call_id = call_id or cast(dict[str, Any], tool_call).get("id")
-        if not call_id or str(call_id) in content_call_ids:
+        call_id = _tool_call_id(tool_call)
+        call_id_text = str(call_id) if call_id else ""
+        if (
+            not call_id_text
+            or call_id_text in content_call_ids
+            or call_id_text in emitted_call_ids
+        ):
             continue
+        emitted_call_ids.add(call_id_text)
 
         tool_name = (
-            getattr(tool_call, "name", None)
-            or getattr(tool_call, "tool_name", None)
-            or getattr(tool_call, "tool", None)
+            _message_value(tool_call, "name")
+            or _message_value(tool_call, "tool_name")
+            or _message_value(tool_call, "tool")
         )
-        if isinstance(tool_call, dict):
-            tool_name = tool_name or (
-                cast(dict[str, Any], tool_call).get("name")
-                or cast(dict[str, Any], tool_call).get("tool_name")
-                or cast(dict[str, Any], tool_call).get("tool")
-            )
-        tool_arguments = getattr(tool_call, "input", None)
+        tool_arguments = _message_value(tool_call, "input")
         if tool_arguments is None:
-            tool_arguments = getattr(tool_call, "arguments", None)
-        if isinstance(tool_call, dict) and tool_arguments is None:
-            tool_arguments = cast(dict[str, Any], tool_call).get("input")
-            if tool_arguments is None:
-                tool_arguments = cast(dict[str, Any], tool_call).get("arguments", {})
+            tool_arguments = _message_value(tool_call, "arguments", {})
         if tool_arguments is None:
             tool_arguments = {}
 
         serialized_arguments = _sanitize_content_for_injection(
             json.dumps(tool_arguments, ensure_ascii=False, separators=(",", ":"), default=str)
         )
-        sanitized_id = _sanitize_content_for_injection(str(call_id))
+        sanitized_id = _sanitize_content_for_injection(call_id_text)
         sanitized_name = _sanitize_content_for_injection(str(tool_name or "unknown"))
         parts.append(
             f"[Tool Call (id={sanitized_id}, name={sanitized_name}, "
@@ -1053,11 +1078,11 @@ def extract_system_message(request: Any) -> str | None:
     system_parts: list[str] = []
 
     for msg in messages:
-        role: str = getattr(msg, "role", "user")
+        role = _message_role(msg)
         if role != "system":
             continue
 
-        content: Any = getattr(msg, "content", "")
+        content = _message_value(msg, "content", "")
         content_text = _extract_message_content(content)
         if content_text:
             system_parts.append(content_text)

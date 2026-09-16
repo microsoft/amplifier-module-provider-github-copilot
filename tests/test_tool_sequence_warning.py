@@ -802,3 +802,125 @@ class TestKernelRoleToolFormat:
         assert len(warnings) == 1, (
             f"Genuine orphaned ToolCallBlock must trigger repair. Got {len(warnings)} warning(s)."
         )
+
+
+class TestFieldToolCallSequenceRepair:
+    """Accepted Core Message.tool_calls participate in the existing repair phase."""
+
+    def test_field_only_orphan_is_repaired_without_mutating_request(self) -> None:
+        """A field-only call gets one synthetic result and leaves the input list intact."""
+        from amplifier_core.message_models import Message
+
+        from amplifier_module_provider_github_copilot.request_adapter import convert_chat_request
+
+        messages = [
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    {"id": "field-orphan", "tool": "search", "arguments": {}},
+                    {"id": "field-orphan", "tool": "duplicate_search", "arguments": {}},
+                ],
+            )
+        ]
+        request = _make_request(messages)
+
+        result = convert_chat_request(request)
+
+        assert len(request.messages) == 1
+        assert request.messages[0] is messages[0]
+        assert result.prompt.count("Tool Call (id=field-orphan") == 1
+        assert result.prompt.count("[Tool Result (id=field-orphan):") == 1
+        assert result.prompt.count("Tool result unavailable") == 1
+
+    def test_duplicate_content_and_field_call_is_repaired_once(self) -> None:
+        """Content remains canonical when a field repeats its call ID."""
+        from amplifier_core.message_models import Message, ToolCallBlock
+
+        from amplifier_module_provider_github_copilot.request_adapter import convert_chat_request
+
+        messages = [
+            Message(
+                role="assistant",
+                content=[
+                    ToolCallBlock(
+                        type="tool_call",
+                        id="shared-call",
+                        name="read_file",
+                        input={"path": "canonical.txt"},
+                    )
+                ],
+                tool_calls=[
+                    {
+                        "id": "shared-call",
+                        "tool": "conflicting_name",
+                        "arguments": {"path": "conflicting.txt"},
+                    }
+                ],
+            ),
+            Message(role="tool", tool_call_id="shared-call", content="canonical result"),
+        ]
+
+        result = convert_chat_request(_make_request(messages))
+
+        assert result.prompt.count("Tool Call (id=shared-call") == 1
+        assert "conflicting_name" not in result.prompt
+        assert result.prompt.count("[Tool Result (id=shared-call): canonical result]") == 1
+        assert "Tool result unavailable" not in result.prompt
+
+    def test_parallel_field_calls_repair_only_missing_result(self) -> None:
+        """Two real string results leave only the missing parallel field call synthetic."""
+        from amplifier_core.message_models import Message
+
+        from amplifier_module_provider_github_copilot.request_adapter import convert_chat_request
+
+        ids = ("field-alpha", "field-beta", "field-gamma")
+        messages = [
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    {"id": ids[0], "tool": "read_file", "arguments": {"path": "a.txt"}},
+                    {"id": ids[1], "tool": "read_file", "arguments": {"path": "b.txt"}},
+                    {"id": ids[2], "tool": "read_file", "arguments": {"path": "c.txt"}},
+                ],
+            ),
+            Message(role="tool", tool_call_id=ids[0], content="alpha result"),
+            Message(role="tool", tool_call_id=ids[1], content="beta result"),
+        ]
+
+        result = convert_chat_request(_make_request(messages))
+
+        assert result.prompt.count("Tool result unavailable") == 1
+        assert f"[Tool Result (id={ids[2]}):" in result.prompt
+        assert f"[Tool Result (id={ids[0]}): alpha result]" in result.prompt
+        assert f"[Tool Result (id={ids[1]}): beta result]" in result.prompt
+        assert result.prompt.index(f"Tool Call (id={ids[0]}") < result.prompt.index(
+            f"Tool Call (id={ids[1]}"
+        )
+        assert result.prompt.index(f"Tool Call (id={ids[1]}") < result.prompt.index(
+            f"Tool Call (id={ids[2]}"
+        )
+        assert result.prompt.index(f"Tool Call (id={ids[2]}") < result.prompt.index(
+            f"[Tool Result (id={ids[2]}):"
+        )
+
+    def test_field_call_with_matching_string_result_needs_no_repair(self) -> None:
+        """A real enclosing-message ID prevents a phantom synthetic result."""
+        from amplifier_core.message_models import Message
+
+        from amplifier_module_provider_github_copilot.request_adapter import convert_chat_request
+
+        messages = [
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[{"id": "field-paired", "tool": "search", "arguments": {}}],
+            ),
+            Message(role="tool", tool_call_id="field-paired", content="paired result"),
+        ]
+
+        result = convert_chat_request(_make_request(messages))
+
+        assert "Tool result unavailable" not in result.prompt
+        assert "[Tool Result (id=field-paired): paired result]" in result.prompt
