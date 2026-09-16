@@ -80,7 +80,9 @@ _TOOL_SEQUENCE_REPAIR_MESSAGE = (
     "Please acknowledge this and continue."
 )
 
-_SUPPORTED_MESSAGE_ROLES: frozenset[str] = frozenset({"user", "assistant", "system", "tool"})
+_SUPPORTED_MESSAGE_ROLES: frozenset[str] = frozenset(
+    {"user", "assistant", "system", "developer", "tool"}
+)
 
 
 def _sanitize_content_for_injection(text: str) -> str:
