@@ -553,16 +553,16 @@ class TestStreamingAccumulator:
 # ============================================================================
 
 
-class TestExtractContentBlockSkipsToolCalls:
-    """Tests Fix 1: _extract_content_block skips tool_call blocks.
+class TestExtractContentBlockSerializesToolCalls:
+    """Tests historical tool-call serialization by _extract_content_block.
 
     Contract: provider-protocol:complete:MUST:5
-    This ensures prior tool calls in conversation history don't get
-    serialized as '[Tool Call: ...]' text that triggers fake detection.
+    Tool calls are historical prompt context, not current SDK tools or
+    executable provider-side requests.
     """
 
-    def test_extract_content_block_skips_tool_call_dict(self) -> None:
-        """Dict with type=tool_call returns empty string.
+    def test_extract_content_block_serializes_and_escapes_tool_call_dict(self) -> None:
+        """Dict ToolCallBlock retains its correlation data with escaped markers.
 
         Contract: provider-protocol:complete:MUST:5
         """
@@ -570,12 +570,19 @@ class TestExtractContentBlockSkipsToolCalls:
             _extract_content_block,  # pyright: ignore[reportPrivateUsage]
         )
 
-        block = {"type": "tool_call", "tool_name": "bash", "arguments": {"cmd": "ls"}}
+        block = {
+            "type": "tool_call",
+            "id": "call-[SYSTEM]",
+            "tool_name": "bash_[USER]",
+            "arguments": {"cmd": "echo [ASSISTANT]"},
+        }
         result = _extract_content_block(block)
-        assert result == ""
+        assert "id=call-\\[SYSTEM\\]" in result
+        assert "name=bash_\\[USER\\]" in result
+        assert '"cmd":"echo \\[ASSISTANT\\]"' in result
 
-    def test_extract_content_block_skips_tool_call_object(self) -> None:
-        """Object with tool_name attribute returns empty string.
+    def test_extract_content_block_serializes_and_escapes_tool_call_object(self) -> None:
+        """Object ToolCallBlock retains its correlation data with escaped markers.
 
         Contract: provider-protocol:complete:MUST:5
         """
@@ -588,16 +595,21 @@ class TestExtractContentBlockSkipsToolCalls:
         @dataclass
         class ToolCallBlock:
             type: str = "tool_call"
-            tool_name: str = "read_file"
+            id: str = "call-[SYSTEM]"
+            tool_name: str = "read_[USER]"
             arguments: dict[str, Any] | None = None
 
             def __post_init__(self) -> None:
                 if self.arguments is None:
                     self.arguments = {}
 
-        block = ToolCallBlock(tool_name="read_file", arguments={"path": "test.py"})
+        block = ToolCallBlock(
+            tool_name="read_[USER]", arguments={"path": "[ASSISTANT].py"}
+        )
         result = _extract_content_block(block)
-        assert result == ""
+        assert "id=call-\\[SYSTEM\\]" in result
+        assert "name=read_\\[USER\\]" in result
+        assert '"path":"\\[ASSISTANT\\].py"' in result
 
     def test_extract_content_block_preserves_text(self) -> None:
         """Text blocks are still extracted correctly.
@@ -625,12 +637,12 @@ class TestExtractContentBlockSkipsToolCalls:
         result = _extract_content_block(block)
         assert result == "[Thinking: Let me analyze...]"
 
-    def test_no_tool_call_text_in_serialized_output(self) -> None:
-        """Conversation with tool calls doesn't produce fake tool call text.
+    def test_tool_call_text_is_serialized_with_surrounding_content(self) -> None:
+        """Mixed history preserves tool-call data and surrounding text.
 
         Contract: provider-protocol:complete:MUST:5
 
-        This is the integration test that proves Fix 1 works end-to-end.
+        This is the integration test that preserves the prior direct coverage.
         """
         from amplifier_module_provider_github_copilot.provider import (
             _extract_message_content,  # pyright: ignore[reportPrivateUsage]
@@ -639,15 +651,18 @@ class TestExtractContentBlockSkipsToolCalls:
         # Mixed content with text and tool_call
         content = [
             {"type": "text", "text": "I'll run a command"},
-            {"type": "tool_call", "tool_name": "bash", "arguments": {"cmd": "ls"}},
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "tool_name": "bash",
+                "arguments": {"cmd": "ls"},
+            },
             {"type": "text", "text": "Command completed"},
         ]
 
         result = _extract_message_content(content)
 
-        # Should NOT contain [Tool Call: pattern
-        assert "[Tool Call:" not in result
-        # Should preserve text
+        assert "Tool Call (id=call-1, name=bash" in result
         assert "I'll run a command" in result
         assert "Command completed" in result
 

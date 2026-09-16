@@ -358,8 +358,9 @@ See [Retry Events](#retry-events) above.
 - Tool use (function calling)
 - Extended thinking (on supported models)
 - Vision capabilities (on supported models)
-- Token counting and management
-- Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content and tool call IDs are escaped before the request reaches the SDK
+- Context metadata — reports SDK-advertised model prompt windows, but does not
+  perform arbitrary-new-request, pre-dispatch token counting
+- Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content and historical tool call IDs, names, and arguments are escaped before the request reaches the SDK
 - Tool sequence repair — orphaned tool calls are automatically repaired with synthetic results before LLM submission (see [Tool Sequence Repair](#tool-sequence-repair))
 - All log output and observability events pass through secret redaction (tokens, Bearer headers, GitHub token formats, API keys, JWTs, PEM blocks)
 - Raw payload logging — full SDK request/response capture for deep debugging (see [Raw Payload Logging](#raw-payload-logging))
@@ -381,6 +382,21 @@ The provider uses a singleton SDK client shared across all instances, with ephem
 
 For module structure, design decisions, and contract index see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+### Context-safety limitations
+
+- The context values in [Supported Models](#supported-models) are model-window
+  metadata: the provider obtains the selected model's default-tier (or opted-in
+  long-tier) prompt budget from SDK model discovery. They are not a per-request
+  admission decision or a backend acceptance guarantee.
+- GitHub Copilot SDK 1.0.7 exposes experimental `context_info` and
+  `recompute_context_tokens` operations only for an already-created SDK
+  session. They do not accept arbitrary next-request content, so this provider
+  does not advertise a native `provider_count` preflight measurement.
+- `max_output_tokens` is forwarded to `create_session()` as a model-capability
+  override. This is a backend hint, not an enforced output cap; callers must
+  use the returned finish reason and usage rather than assume the runtime
+  honored it.
+
 ## Graceful Error Recovery
 
 The provider translates all SDK errors to typed kernel errors before they reach the caller. Each `complete()` call uses an independent session — no state accumulates between requests. The shared client and disk model cache persist across requests by design.
@@ -394,6 +410,11 @@ The provider automatically detects and repairs incomplete tool call sequences be
 **The Problem:** If a conversation history contains a tool call from the assistant that has no corresponding tool result (due to context compaction bugs, parsing errors, or state corruption), the LLM receives an incoherent message history and may produce confused or repetitive responses. The missing result is invisible to the caller.
 
 **The Solution:** Before prompt extraction, the provider scans assistant messages for tool call blocks without matching tool results. For each unmatched call, a synthetic tool-result message is inserted immediately after the offending assistant message. The LLM receives a coherent history and can acknowledge the gap and continue.
+
+Historical assistant calls are serialized from both `content` `ToolCallBlock`
+entries and the accepted Core `Message.tool_calls` field. If both represent the
+same call ID, the content block is canonical and is serialized once; a
+conflicting field entry is not treated as a second call identity.
 
 **What happens:**
 
