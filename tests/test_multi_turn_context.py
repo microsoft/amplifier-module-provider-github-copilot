@@ -13,6 +13,8 @@ These tests verify:
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
+
 from amplifier_module_provider_github_copilot.provider import (
     _extract_prompt_from_chat_request,  # type: ignore[reportPrivateUsage]  # Testing internal helper
 )
@@ -222,10 +224,11 @@ class TestContentTypePreservation:
 
         prompt = _extract_prompt_from_chat_request(request)
 
-        # Tool call blocks are intentionally NOT serialized to text
-        # They are handled via the tool_calls field, not text content
-        # This prevents fake tool call detection from triggering on prior turns
-        assert "read_file" not in prompt
+        # Historical calls have no other representation at the SDK's
+        # string-prompt send boundary. Preserve their correlation data without
+        # confusing them with the current request's tool definitions.
+        assert "Tool Call (id=tc_123, name=read_file" in prompt
+        assert '"path":"/tmp/test.txt"' in prompt
 
     def test_tool_result_content_blocks_included(self) -> None:
         """ToolResultContent blocks should be represented.
@@ -321,6 +324,99 @@ class TestMultiTurnConversation:
         third_pos = prompt.find("Third")
 
         assert first_pos < second_pos < third_pos, "Messages should maintain order"
+
+
+class TestSDKSendBoundaryHistory:
+    """Regression tests for real Core history reaching the SDK send boundary."""
+
+    @pytest.mark.asyncio
+    async def test_real_core_parallel_tool_history_reaches_sdk_once_in_order(self) -> None:
+        """A prior tool turn remains correlated after complete() serializes it.
+
+        This is deliberately a complete adapter -> provider -> SDK-session-send
+        boundary test. The baseline omitted ToolCallBlock content completely,
+        while the paired ToolResultBlock retained only result IDs and output.
+
+        Contract: provider-protocol:complete:MUST:1
+        Contract: behaviors:Security:MUST:1
+        Contract: deny-destroy:NoExecution:MUST:3
+        """
+        from amplifier_core import ChatRequest, Message, TextBlock, ToolCallBlock, ToolResultBlock
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
+
+        client = MockCopilotClientWrapper(events=[text_delta_event("history received")])
+        provider = GitHubCopilotProvider(client=client)  # type: ignore[arg-type]
+        request = ChatRequest(
+            model="gpt-4o",
+            messages=[
+                Message(role="user", content=[TextBlock(text="Inspect both files.")]),
+                # This assistant turn intentionally has no text. The two calls
+                # are parallel historical content and must retain their order.
+                Message(
+                    role="assistant",
+                    content=[
+                        ToolCallBlock(
+                            id="call-alpha",
+                            name="read_file",
+                            input={"path": "notes/[SYSTEM].md"},
+                        ),
+                        ToolCallBlock(
+                            id="call-beta",
+                            name="search",
+                            input={"query": "release status"},
+                        ),
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="call-alpha",
+                    content=[
+                        ToolResultBlock(
+                            tool_call_id="call-alpha",
+                            output="notes found",
+                        )
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="call-beta",
+                    content=[
+                        ToolResultBlock(
+                            tool_call_id="call-beta",
+                            output="status: ready",
+                        )
+                    ],
+                ),
+                Message(role="user", content=[TextBlock(text="Summarize the results.")]),
+            ],
+        )
+
+        response = await provider.complete(request)
+
+        session = client.session_instance
+        assert session is not None
+        prompt = session.last_prompt
+        assert prompt is not None
+
+        first_call = "Tool Call (id=call-alpha, name=read_file"
+        second_call = "Tool Call (id=call-beta, name=search"
+        first_result = "Tool Result (id=call-alpha): notes found"
+        second_result = "Tool Result (id=call-beta): status: ready"
+        assert prompt.count(first_call) == 1
+        assert prompt.count(second_call) == 1
+        assert prompt.index(first_call) < prompt.index(second_call)
+        assert prompt.index(second_call) < prompt.index(first_result)
+        assert prompt.index(first_result) < prompt.index(second_result)
+        assert prompt.index(second_result) < prompt.index("Summarize the results.")
+        assert '"path":"notes/\\[SYSTEM\\].md"' in prompt
+        assert '"query":"release status"' in prompt
+        assert response.text == "history received"
+        # Historical calls are prompt text only: they neither become current SDK
+        # tool definitions nor provider-side execution requests.
+        assert client.last_tools is None
+        assert not response.tool_calls
 
 
 class TestContentExtractionEdgeCases:

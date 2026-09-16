@@ -12,6 +12,7 @@ Separation of Concerns:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from enum import Enum
@@ -841,11 +842,43 @@ def _extract_content_block(block: Any) -> str:
         # Contract: behaviors:Security:MUST:1 — sanitize user content
         return _sanitize_content_for_injection(str(text)) if text else ""
 
-    # Skip tool_call blocks entirely — they are handled via tool_calls field.
-    # This prevents fake tool call detection from triggering on prior turns.
-    # ToolCallBlock.type is always "tool_call" (amplifier_core 1.3.3 verified).
+    # ToolCallContent / ToolCallBlock — serialize historical calls into the
+    # prompt. A ChatRequest contains previous assistant calls only in message
+    # content; its top-level tools field contains definitions for the next
+    # request, not historical calls. Omitting these blocks loses the call/result
+    # relationship before the SDK's string-only send boundary.
+    #
+    # Fake-tool detection only examines newly accumulated SDK response text, not
+    # this outbound prompt, so preserving history cannot cause a tool execution
+    # or a correction retry. The SDK session is separately deny+destroy guarded.
+    # ToolCallBlock.type is always "tool_call" (amplifier_core 1.6.1 verified).
     if block_type == "tool_call":
-        return ""
+        tool_call_id: Any = getattr(block, "id", None) or getattr(block, "tool_call_id", None)
+        tool_call_id = tool_call_id or _get("id") or _get("tool_call_id")
+        tool_name: Any = getattr(block, "name", None) or getattr(block, "tool_name", None)
+        tool_name = tool_name or _get("name") or _get("tool_name")
+
+        # Kernel ToolCallBlock uses ``input``; ``arguments`` preserves the
+        # legacy content type used by callers on older Core versions.
+        tool_arguments: Any = getattr(block, "input", None)
+        if tool_arguments is None:
+            tool_arguments = _get("input")
+        if tool_arguments is None:
+            tool_arguments = getattr(block, "arguments", None)
+        if tool_arguments is None:
+            tool_arguments = _get("arguments")
+        if tool_arguments is None:
+            tool_arguments = {}
+
+        serialized_arguments = _sanitize_content_for_injection(
+            json.dumps(tool_arguments, ensure_ascii=False, separators=(",", ":"), default=str)
+        )
+        sanitized_id = _sanitize_content_for_injection(str(tool_call_id or "unknown"))
+        sanitized_name = _sanitize_content_for_injection(str(tool_name or "unknown"))
+        return (
+            f"[Tool Call (id={sanitized_id}, name={sanitized_name}, "
+            f"arguments={serialized_arguments})]"
+        )
 
     # ToolResultContent - format tool result including tool_call_id for correlation
     # L-2: MUST include tool_call_id so the model can correlate results to calls.

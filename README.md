@@ -358,7 +358,8 @@ See [Retry Events](#retry-events) above.
 - Tool use (function calling)
 - Extended thinking (on supported models)
 - Vision capabilities (on supported models)
-- Token counting and management
+- Context metadata — reports SDK-advertised model prompt windows, but does not
+  perform arbitrary-new-request, pre-dispatch token counting
 - Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content and tool call IDs are escaped before the request reaches the SDK
 - Tool sequence repair — orphaned tool calls are automatically repaired with synthetic results before LLM submission (see [Tool Sequence Repair](#tool-sequence-repair))
 - All log output and observability events pass through secret redaction (tokens, Bearer headers, GitHub token formats, API keys, JWTs, PEM blocks)
@@ -380,6 +381,21 @@ See [Retry Events](#retry-events) above.
 The provider uses a singleton SDK client shared across all instances, with ephemeral sessions created per `complete()` call and destroyed after each request. Tool execution remains the orchestrator's responsibility — the provider never executes tools directly.
 
 For module structure, design decisions, and contract index see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### Context-safety limitations
+
+- The context values in [Supported Models](#supported-models) are model-window
+  metadata: the provider obtains the selected model's default-tier (or opted-in
+  long-tier) prompt budget from SDK model discovery. They are not a per-request
+  admission decision or a backend acceptance guarantee.
+- GitHub Copilot SDK 1.0.7 exposes experimental `context_info` and
+  `recompute_context_tokens` operations only for an already-created SDK
+  session. They do not accept arbitrary next-request content, so this provider
+  does not advertise a native `provider_count` preflight measurement.
+- `max_output_tokens` is forwarded to `create_session()` as a model-capability
+  override. This is a backend hint, not an enforced output cap; callers must
+  use the returned finish reason and usage rather than assume the runtime
+  honored it.
 
 ## Graceful Error Recovery
 
