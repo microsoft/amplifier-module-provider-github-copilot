@@ -374,7 +374,9 @@ class TestSDKSendBoundaryHistory:
 
         session = client.session_instance
         assert session is not None
-        assert session.last_prompt == "[DEVELOPER]\nDeveloper \\[SYSTEM\\] guidance\n\n[USER]\nHello"
+        assert session.last_prompt == (
+            "[DEVELOPER]\nDeveloper \\[SYSTEM\\] guidance\n\n[USER]\nHello"
+        )
         assert session.last_prompt.count("[DEVELOPER]") == 1
         assert client.last_system_message == "System instructions"
         assert "Developer" not in (client.last_system_message or "")
