@@ -743,7 +743,12 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
     formatted_parts: list[str] = []
 
     for msg in messages:
-        role: str = getattr(msg, "role", "user")
+        # Dict messages are accepted at this boundary alongside Core Message
+        # objects. Keep the fallback local to prompt extraction rather than
+        # normalizing callers' message representations.
+        role: str = getattr(msg, "role", None) or (
+            cast(dict[str, Any], msg).get("role", "user") if isinstance(msg, dict) else "user"
+        )
 
         # C-4: Skip system messages — they are forwarded via SDK session_config
         # (system_message=..., mode="replace") to avoid dual-path injection.
@@ -751,18 +756,100 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         if role == "system":
             continue
 
-        content: Any = getattr(msg, "content", "")
+        content: Any = getattr(msg, "content", None)
+        if content is None and isinstance(msg, dict):
+            content = cast(dict[str, Any], msg).get("content", "")
 
         # Format role marker
         role_marker = f"[{role.upper()}]"
 
         # Extract content based on type
         content_text = _extract_message_content(content)
+        content_call_ids = _content_tool_call_ids(content)
+        field_calls: Any = getattr(msg, "tool_calls", None)
+        if field_calls is None and isinstance(msg, dict):
+            field_calls = cast(dict[str, Any], msg).get("tool_calls")
+        field_call_text = _extract_field_tool_calls(field_calls, content_call_ids)
 
-        if content_text:
-            formatted_parts.append(f"{role_marker}\n{content_text}")
+        message_parts = [part for part in (content_text, field_call_text) if part]
+        if message_parts:
+            message_text = "\n".join(message_parts)
+            formatted_parts.append(f"{role_marker}\n{message_text}")
 
     return "\n\n".join(formatted_parts)
+
+
+def _content_tool_call_ids(content: Any) -> set[str]:
+    """Return IDs of content ToolCallBlocks so field duplicates stay singular."""
+    blocks = content if isinstance(content, list) else [content]
+    call_ids: set[str] = set()
+    for block in blocks:
+        block_type = getattr(block, "type", None)
+        if isinstance(block, dict):
+            block_type = block_type or cast(dict[str, Any], block).get("type")
+        if block_type != "tool_call":
+            continue
+
+        call_id = getattr(block, "id", None) or getattr(block, "tool_call_id", None)
+        if isinstance(block, dict):
+            call_id = call_id or (
+                cast(dict[str, Any], block).get("id")
+                or cast(dict[str, Any], block).get("tool_call_id")
+            )
+        if call_id:
+            call_ids.add(str(call_id))
+    return call_ids
+
+
+def _extract_field_tool_calls(tool_calls: Any, content_call_ids: set[str]) -> str:
+    """Serialize accepted Core Message.tool_calls entries missing from content.
+
+    Content ToolCallBlocks are canonical for a matching ID. A field entry with
+    that ID is therefore omitted even if its name or arguments disagree: the
+    provider cannot safely invent a second historical identity from conflict.
+    """
+    if not isinstance(tool_calls, list):
+        return ""
+
+    parts: list[str] = []
+    for tool_call in tool_calls:
+        call_id = getattr(tool_call, "id", None)
+        if isinstance(tool_call, dict):
+            call_id = call_id or cast(dict[str, Any], tool_call).get("id")
+        if not call_id or str(call_id) in content_call_ids:
+            continue
+
+        tool_name = (
+            getattr(tool_call, "name", None)
+            or getattr(tool_call, "tool_name", None)
+            or getattr(tool_call, "tool", None)
+        )
+        if isinstance(tool_call, dict):
+            tool_name = tool_name or (
+                cast(dict[str, Any], tool_call).get("name")
+                or cast(dict[str, Any], tool_call).get("tool_name")
+                or cast(dict[str, Any], tool_call).get("tool")
+            )
+        tool_arguments = getattr(tool_call, "input", None)
+        if tool_arguments is None:
+            tool_arguments = getattr(tool_call, "arguments", None)
+        if isinstance(tool_call, dict) and tool_arguments is None:
+            tool_arguments = cast(dict[str, Any], tool_call).get("input")
+            if tool_arguments is None:
+                tool_arguments = cast(dict[str, Any], tool_call).get("arguments", {})
+        if tool_arguments is None:
+            tool_arguments = {}
+
+        serialized_arguments = _sanitize_content_for_injection(
+            json.dumps(tool_arguments, ensure_ascii=False, separators=(",", ":"), default=str)
+        )
+        sanitized_id = _sanitize_content_for_injection(str(call_id))
+        sanitized_name = _sanitize_content_for_injection(str(tool_name or "unknown"))
+        parts.append(
+            f"[Tool Call (id={sanitized_id}, name={sanitized_name}, "
+            f"arguments={serialized_arguments})]"
+        )
+    return "\n".join(parts)
 
 
 def _extract_message_content(content: Any) -> str:
@@ -848,9 +935,10 @@ def _extract_content_block(block: Any) -> str:
     # request, not historical calls. Omitting these blocks loses the call/result
     # relationship before the SDK's string-only send boundary.
     #
-    # Fake-tool detection only examines newly accumulated SDK response text, not
-    # this outbound prompt, so preserving history cannot cause a tool execution
-    # or a correction retry. The SDK session is separately deny+destroy guarded.
+    # Fake-tool detection examines only newly accumulated SDK response text, not
+    # this outbound prompt. History cannot directly create a tool request, though
+    # a model may still echo it and trigger the normal correction path. The SDK
+    # session is separately deny+destroy guarded.
     # ToolCallBlock.type is always "tool_call" (amplifier_core 1.6.1 verified).
     if block_type == "tool_call":
         tool_call_id: Any = getattr(block, "id", None) or getattr(block, "tool_call_id", None)

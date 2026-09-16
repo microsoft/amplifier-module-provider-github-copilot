@@ -360,7 +360,7 @@ See [Retry Events](#retry-events) above.
 - Vision capabilities (on supported models)
 - Context metadata — reports SDK-advertised model prompt windows, but does not
   perform arbitrary-new-request, pre-dispatch token counting
-- Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content and tool call IDs are escaped before the request reaches the SDK
+- Prompt injection prevention — role-marker sequences (`[USER]`, `[SYSTEM]`, etc.) in user content and historical tool call IDs, names, and arguments are escaped before the request reaches the SDK
 - Tool sequence repair — orphaned tool calls are automatically repaired with synthetic results before LLM submission (see [Tool Sequence Repair](#tool-sequence-repair))
 - All log output and observability events pass through secret redaction (tokens, Bearer headers, GitHub token formats, API keys, JWTs, PEM blocks)
 - Raw payload logging — full SDK request/response capture for deep debugging (see [Raw Payload Logging](#raw-payload-logging))
@@ -410,6 +410,11 @@ The provider automatically detects and repairs incomplete tool call sequences be
 **The Problem:** If a conversation history contains a tool call from the assistant that has no corresponding tool result (due to context compaction bugs, parsing errors, or state corruption), the LLM receives an incoherent message history and may produce confused or repetitive responses. The missing result is invisible to the caller.
 
 **The Solution:** Before prompt extraction, the provider scans assistant messages for tool call blocks without matching tool results. For each unmatched call, a synthetic tool-result message is inserted immediately after the offending assistant message. The LLM receives a coherent history and can acknowledge the gap and continue.
+
+Historical assistant calls are serialized from both `content` `ToolCallBlock`
+entries and the accepted Core `Message.tool_calls` field. If both represent the
+same call ID, the content block is canonical and is serialized once; a
+conflicting field entry is not treated as a second call identity.
 
 **What happens:**
 

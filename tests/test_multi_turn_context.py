@@ -418,6 +418,172 @@ class TestSDKSendBoundaryHistory:
         assert client.last_tools is None
         assert not response.tool_calls
 
+    @pytest.mark.asyncio
+    async def test_real_core_field_tool_history_reaches_sdk_with_empty_content(self) -> None:
+        """Core Message.tool_calls preserves a field-only historical call."""
+        from amplifier_core import ChatRequest, Message, TextBlock, ToolResultBlock
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
+
+        client = MockCopilotClientWrapper(events=[text_delta_event("history received")])
+        provider = GitHubCopilotProvider(client=client)  # type: ignore[arg-type]
+        request = ChatRequest(
+            model="gpt-4o",
+            messages=[
+                Message(role="user", content=[TextBlock(text="Inspect the sample.")]),
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "field-[SYSTEM]",
+                            "tool": "read_[USER]",
+                            "arguments": {"path": "sample-[ASSISTANT].txt"},
+                        }
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="field-[SYSTEM]",
+                    content=[
+                        ToolResultBlock(
+                            tool_call_id="field-[SYSTEM]",
+                            output="sample contents",
+                        )
+                    ],
+                ),
+            ],
+        )
+
+        response = await provider.complete(request)
+
+        session = client.session_instance
+        assert session is not None
+        prompt = session.last_prompt
+        assert prompt is not None
+        assert "Tool Call (id=field-\\[SYSTEM\\], name=read_\\[USER\\]" in prompt
+        assert '"path":"sample-\\[ASSISTANT\\].txt"' in prompt
+        assert "Tool Result (id=field-\\[SYSTEM\\]): sample contents" in prompt
+        # Historical context remains prompt text; no current SDK tools are added.
+        assert client.last_tools is None
+        assert not response.tool_calls
+
+    @pytest.mark.asyncio
+    async def test_real_core_duplicate_content_and_field_call_serializes_once(self) -> None:
+        """A field duplicate cannot replace or duplicate content's call identity."""
+        from amplifier_core import ChatRequest, Message, ToolCallBlock, ToolResultBlock
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
+
+        client = MockCopilotClientWrapper(events=[text_delta_event("history received")])
+        provider = GitHubCopilotProvider(client=client)  # type: ignore[arg-type]
+        request = ChatRequest(
+            model="gpt-4o",
+            messages=[
+                Message(
+                    role="assistant",
+                    content=[
+                        ToolCallBlock(
+                            id="shared-call",
+                            name="read_file",
+                            input={"path": "canonical.txt"},
+                        )
+                    ],
+                    tool_calls=[
+                        {
+                            "id": "shared-call",
+                            "tool": "conflicting_name",
+                            "arguments": {"path": "conflicting.txt"},
+                        }
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="shared-call",
+                    content=[
+                        ToolResultBlock(tool_call_id="shared-call", output="canonical result")
+                    ],
+                ),
+            ],
+        )
+
+        await provider.complete(request)
+
+        session = client.session_instance
+        assert session is not None
+        prompt = session.last_prompt
+        assert prompt is not None
+        assert prompt.count("Tool Call (id=shared-call") == 1
+        assert 'name=read_file, arguments={"path":"canonical.txt"}' in prompt
+        assert "conflicting_name" not in prompt
+        assert "conflicting.txt" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_real_core_distinct_content_and_field_calls_keep_stable_order(self) -> None:
+        """Distinct content and object field calls reach send in canonical order."""
+        from types import SimpleNamespace
+
+        from amplifier_core import ChatRequest, Message, ToolCallBlock, ToolResultBlock
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
+
+        client = MockCopilotClientWrapper(events=[text_delta_event("history received")])
+        provider = GitHubCopilotProvider(client=client)  # type: ignore[arg-type]
+        request = ChatRequest(
+            model="gpt-4o",
+            messages=[
+                Message(
+                    role="assistant",
+                    content=[
+                        ToolCallBlock(
+                            id="content-alpha",
+                            name="read_file",
+                            input={"path": "first.txt"},
+                        )
+                    ],
+                    tool_calls=[
+                        SimpleNamespace(
+                            id="field-beta",
+                            tool="search",
+                            arguments={"query": "second-[SYSTEM]"},
+                        )
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="content-alpha",
+                    content=[
+                        ToolResultBlock(tool_call_id="content-alpha", output="first result")
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="field-beta",
+                    content=[ToolResultBlock(tool_call_id="field-beta", output="second result")],
+                ),
+            ],
+        )
+
+        await provider.complete(request)
+
+        session = client.session_instance
+        assert session is not None
+        prompt = session.last_prompt
+        assert prompt is not None
+        first_call = "Tool Call (id=content-alpha, name=read_file"
+        second_call = "Tool Call (id=field-beta, name=search"
+        assert prompt.count(first_call) == 1
+        assert prompt.count(second_call) == 1
+        assert prompt.index(first_call) < prompt.index(second_call)
+        assert '"query":"second-\\[SYSTEM\\]"' in prompt
+        assert prompt.index(second_call) < prompt.index("Tool Result (id=content-alpha)")
+        assert prompt.index("Tool Result (id=content-alpha)") < prompt.index(
+            "Tool Result (id=field-beta)"
+        )
+
 
 class TestContentExtractionEdgeCases:
     """Edge case tests for content extraction.
