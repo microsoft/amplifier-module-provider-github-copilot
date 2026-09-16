@@ -509,7 +509,10 @@ class TestSDKSendBoundaryHistory:
         prompt = session.last_prompt
         assert prompt is not None
         assert prompt.count("Tool Call (id=joint-\\[SYSTEM\\], name=read_file") == 1
-        assert 'Tool Result (id=joint-\\[SYSTEM\\]): {"output":"sample \\[USER\\] contents"}' in prompt
+        assert (
+            'Tool Result (id=joint-\\[SYSTEM\\]): {"output":"sample \\[USER\\] contents"}'
+            in prompt
+        )
         assert "Tool result unavailable" not in prompt
         assert response.text == "history received"
 
