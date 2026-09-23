@@ -65,11 +65,11 @@ The provider MUST bound the abort call by `session.abort_timeout_seconds`. If ab
 
 ### SHOULD-2: Idle Timeout (Safety Bound Only)
 
-The provider SHOULD NOT use `session.idle_timeout_seconds` for the main idle wait. SDK API calls can take 60+ seconds for complex operations (e.g., agent delegation). Use the caller's request timeout instead.
+The provider MUST NOT impose a default elapsed-time deadline on healthy generation. `defaults.timeout` is `None`; an explicit per-call `_timeout_seconds` or provider `timeout` value still sets a deadline. An explicit per-call `None` disables an inherited deadline. The provider MUST NOT use `session.idle_timeout_seconds` for the main idle wait.
 
 The `idle_timeout_seconds` config is retained for abort operations only.
 
-**Implementation:** `asyncio.wait_for(idle_event.wait(), timeout=timeout)` — uses caller's timeout
+**Implementation:** one outer `asyncio.timeout(timeout)` with `None` by default; await `idle_event.wait()` directly. The SDK `send()` RPC has a genuine unlimited default. A public SDK `ping()` watcher detects actual connection errors after submission without assigning a ping deadline. Slow pings are not failures. On explicit cancellation or deadline expiration, abort native work, unsubscribe handlers, cancel/join the connection watcher and stream consumer, then disconnect. Existing bounded abort/disconnect/close cleanup remains in force.
 
 ---
 

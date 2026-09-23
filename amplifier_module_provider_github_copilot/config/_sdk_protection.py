@@ -167,6 +167,10 @@ class SessionProtectionConfig:
     # Contract: streaming-contract:abort-on-capture:MUST:1
     idle_timeout_seconds: float = 30.0
 
+    # Public SDK ping cadence while waiting for completion. This is not a timeout:
+    # a slow ping or long generation is never failed because of elapsed time.
+    connection_check_interval_seconds: float = 1.0
+
     # Timeout for session.disconnect() call.
     # Prevents indefinite hang on stubborn sessions during cleanup.
     # Contract: sdk-protection:Session:MUST:3

@@ -153,7 +153,7 @@ class SessionWrapper:
 ```python
 # ✓ Façade hides the SDK session; raw reference is private
 class SessionHandle:
-    __slots__ = ("_raw_session", "session_id")
+    __slots__ = ("_raw_session", "session_id", "_ping", "_connection_check_interval")
 
     def __init__(self, raw_session: Any, session_id: str | None = None) -> None:
         self._raw_session = raw_session  # private — never exposed
@@ -187,7 +187,7 @@ class SessionHandle:
 ```
 
 - `Types:MUST:4` — **MUST** keep `_raw_session` private: no public attribute, no accessor returning it (`sdk_adapter/types.py:74,83`).
-- `Types:MUST:5` — **MUST** expose only `on(handler) → unsubscribe`, `await send(prompt, *, attachments=None)`, `await abort()`, plus the attribute `session_id: str` (`sdk_adapter/types.py:86-120`).
+- `Types:MUST:5` — **MUST** expose only `on(handler) → unsubscribe`, `await send(prompt, *, attachments=None)`, `await abort()`, `await wait_for_disconnect()`, plus the attribute `session_id: str`. The connection waiter uses an injected public SDK `ping` callable and raises only for real transport failures; it must never convert elapsed time into failure or expose the raw client/session.
 - `Types:MUST:6` — **MUST NOT** expose lifecycle (`connect` / `disconnect` / `destroy` / `close`) on the handle; lifecycle is owned by the `client.session()` async context manager in `sdk_adapter/client.py`.
 - `Types:MUST:7` — **MUST** assign `session_id` exactly once in `__init__` from the raw SDK session (`copilot.session.CopilotSession.session_id`); provider code MUST NOT reassign it. Callers **SHOULD** treat it as read-only — `__slots__` constrains attribute names but does not block reassignment of declared slots; a `__setattr__` guard or `frozen` dataclass is tracked as a code-level follow-up.
 

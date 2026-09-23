@@ -695,7 +695,14 @@ class CopilotClientWrapper:
             from .types import SessionHandle
 
             session_id = str(getattr(sdk_session, "session_id", "unknown"))
-            yield SessionHandle(sdk_session, session_id)
+            yield SessionHandle(
+                sdk_session,
+                session_id,
+                ping=getattr(client, "ping", None),
+                connection_check_interval=(
+                    load_sdk_protection_config().session.connection_check_interval_seconds
+                ),
+            )
         finally:
             if sdk_session is not None:
                 try:
