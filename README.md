@@ -327,7 +327,7 @@ Emitted immediately before the SDK call.
 | `message_count` | int | Number of messages in the conversation |
 | `tool_count` | int | Number of tools available |
 | `streaming` | bool | Whether streaming is enabled (default: `true`) |
-| `timeout` | float | Request timeout in seconds |
+| `timeout` | float or null | Explicit request timeout in seconds; null waits for completion, cancellation or failure |
 
 ### `llm:response`
 

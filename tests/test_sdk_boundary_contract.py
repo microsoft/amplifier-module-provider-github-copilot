@@ -1360,13 +1360,13 @@ class TestSessionHandleMethods:
 
         raw.abort.assert_awaited_once()
 
-    def test_public_surface_is_exactly_on_send_abort_session_id(self) -> None:
-        """SessionHandle exposes exactly {on, send, abort, session_id}; raw stays private.
+    def test_public_surface_includes_connection_wait_without_raw_sdk_access(self) -> None:
+        """The connection waiter extends the narrow façade; raw SDK stays private.
 
         Contract: sdk-boundary:Types:MUST:4 — `_raw_session` is private; no
         public attribute or accessor exposes it.
         Contract: sdk-boundary:Types:MUST:5 — public surface is exactly on,
-        send, abort, session_id.
+        send, abort, wait_for_disconnect, session_id.
         Contract: sdk-boundary:Types:MUST:6 — no connect/disconnect/destroy/
         close; lifecycle is owned by client.session().
         Mutation check: add a public `raw` accessor or a `connect` method →
@@ -1381,9 +1381,9 @@ class TestSessionHandleMethods:
         handle = SessionHandle(raw_session=raw, session_id="sess-surface")
 
         public = {name for name in dir(handle) if not name.startswith("_")}
-        assert public == {"on", "send", "abort", "session_id"}, (
+        assert public == {"on", "send", "abort", "wait_for_disconnect", "session_id"}, (
             "SessionHandle public surface must be exactly "
-            f"{{on, send, abort, session_id}}, got {sorted(public)}"
+            f"{{on, send, abort, wait_for_disconnect, session_id}}, got {sorted(public)}"
         )
 
         # MUST:4 — the raw SDK session is stored only in the private slot and

@@ -54,7 +54,7 @@ class TestLoadModelsConfig:
         config = _load_models_config()
         assert config.provider_id == "github-copilot"
         assert config.defaults["model"] == "claude-opus-4.5"
-        assert config.defaults["timeout"] == 3600
+        assert config.defaults["timeout"] is None
 
     # NOTE: Fallback tests removed - config validation now uses fail-fast pattern.
     # Missing/empty config raises ConfigurationError instead of silent fallback.
@@ -197,5 +197,5 @@ class TestModelsYamlDefaultValues:
 
         # Values should match config/_models.py
         assert config.defaults["model"] == "claude-opus-4.5"
-        assert config.defaults["timeout"] == 3600
+        assert config.defaults["timeout"] is None
         assert config.defaults["context_window"] == 200000

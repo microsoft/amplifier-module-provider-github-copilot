@@ -176,8 +176,8 @@ class TestTimeoutEnforcement:
 class TestTimeoutConfigValue:
     """Tests for timeout configuration values."""
 
-    def test_yaml_timeout_is_3600(self) -> None:
-        """YAML timeout value is 3600 (1 hour for reasoning models).
+    def test_default_completion_timeout_is_unlimited(self) -> None:
+        """Healthy generation has no default elapsed-time cutoff.
 
         Contract: behaviors:Config:MUST:2
         Three-Medium: YAML is authoritative source.
@@ -188,4 +188,4 @@ class TestTimeoutConfigValue:
 
         config = load_models_config()
         timeout = config.defaults["timeout"]
-        assert timeout == 3600
+        assert timeout is None

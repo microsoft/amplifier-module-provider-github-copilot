@@ -28,7 +28,8 @@ PROVIDER: dict = {
     "defaults": {
         "model": "claude-opus-4.5",
         "max_tokens": 4096,
-        "timeout": 3600,
+        # Healthy generation has no elapsed-time deadline unless the caller sets one.
+        "timeout": None,
         "context_window": 200000,
         "max_output_tokens": 32000,
     },
