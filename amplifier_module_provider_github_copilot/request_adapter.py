@@ -33,10 +33,12 @@ logger = logging.getLogger(__name__)
 # Provider reasoning-effort levels in ascending intensity order. Single source
 # of truth shared by the request-path fallback allowlist below and the
 # provider's reasoning_effort ConfigField choices (kept in sync by
-# test_reasoning_effort_choices_match_levels). Superset of the v1.0.7 SDK
-# ReasoningEffort Literal {low,medium,high,xhigh}: the live list_models endpoint
-# additionally advertises "none" and "max", neither of which the v1.0.7 SDK
-# Literal enumerates. Membership is pinned by the SDK-superset test in
+# test_reasoning_effort_choices_match_levels). Superset of the v1.0.14 SDK
+# ReasoningEffort Literal {low,medium,high,xhigh,max}: the live list_models
+# endpoint additionally advertises "none", which the v1.0.14 SDK Literal does
+# not enumerate. ("max" was also such an extra through v1.0.7 and became
+# SDK-native at v1.0.14 — the provider's forwarded set is unchanged.)
+# Membership is pinned by the SDK-superset test in
 # tests/test_sdk_assumptions.py.
 REASONING_EFFORT_LEVELS: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh", "max")
 

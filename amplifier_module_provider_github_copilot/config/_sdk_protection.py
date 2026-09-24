@@ -113,6 +113,27 @@ class MinimalModeConfig:
     # sdk-boundary:MinimalMode SDK-introspection closure).
     memory: dict[str, Any] = field(default_factory=lambda: {"enabled": False})
 
+    # MUST:17 — Confine custom-agent resolution to the local session; never let
+    # the SDK resolve agents from shared/remote sources. Added at v1.0.14 as a
+    # new mode-gated create_session kwarg with empty-mode default helper
+    # `_custom_agents_local_only_default` returning True ONLY when
+    # `mode == "empty"`. Our adapter ships `mode="copilot-cli"`, where the
+    # helper returns None and the bundled-CLI default would otherwise apply —
+    # so this explicit pin IS the wire shape. Complements MUST:5 (which only
+    # empties the custom_agents list). Value mirrors the SDK empty-mode default
+    # exactly (contract: sdk-boundary:MinimalMode SDK-introspection closure).
+    custom_agents_local_only: bool = True
+
+    # MUST:18 — Keep SDK experimental features off. Added at v1.0.14 as a new
+    # mode-gated create_session kwarg with empty-mode default helper
+    # `_enable_experimental_mode_default` returning False ONLY when
+    # `mode == "empty"`. Under `mode="copilot-cli"` the helper returns None and
+    # the bundled-CLI default applies, so without this pin a CLI upgrade could
+    # silently switch experimental behavior on underneath the provider — the
+    # wire shape must be owned here, not inherited. Value mirrors the SDK
+    # empty-mode default exactly.
+    enable_experimental_mode: bool = False
+
 
 @dataclass(frozen=True)
 class ToolCaptureConfig:

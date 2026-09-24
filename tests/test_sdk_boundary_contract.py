@@ -417,6 +417,70 @@ class TestToolForwardingContract:
                 "metadata=None MUST omit the 'metadata' wire key (v1.0.6 wire parity)"
             )
 
+    def test_wrapper_survives_sdk_v1014_tool_definition_build(self) -> None:
+        """Reproduce the EXACT attribute-read loop SDK v1.0.14 uses to build tool
+        definitions, proving SDKToolWrapper exposes ``is_terminal`` and preserves
+        the pre-v1.0.14 wire shape when it is False.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+
+        SDK v1.0.14 ``copilot/client.py`` extends the v1.0.7 loop with a trailing
+        ``tool.is_terminal`` read, in BOTH create_session (client.py:2570) and
+        resume (client.py:3355), immediately after the ``metadata`` read::
+
+            if tool.metadata is not None: definition["metadata"] = tool.metadata
+            if tool.is_terminal: definition["isTerminal"] = True
+
+        v1.0.14 ADDED the ``tool.is_terminal`` access. A wrapper missing
+        ``is_terminal`` raises ``AttributeError`` on every tool-forwarding turn —
+        the exact failure the ``defer`` field caused at v1.0.2 and ``metadata`` at
+        v1.0.7.
+
+        NOTE the guard shape differs from its two predecessors: this is a bare
+        TRUTHINESS test, not ``is not None``. A wrapper defaulting ``is_terminal``
+        to ``None`` would therefore also omit the key — but ``False`` is used to
+        mirror the SDK's own ``Tool.is_terminal: bool = False`` field type. The
+        provider's steady state is False: Amplifier owns turn control at the
+        kernel layer and never delegates turn termination to the SDK.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import (
+            convert_tools_for_sdk,
+        )
+
+        tools: list[dict[str, object]] = [
+            {"name": "bash", "description": "Run shell commands", "parameters": {"type": "object"}},
+            {"name": "read_file", "description": "Read a file", "parameters": None},
+        ]
+        wrappers = convert_tools_for_sdk(tools)
+
+        for tool in wrappers:
+            # Verbatim replication of the SDK v1.0.14 definition-build loop. If the
+            # wrapper is missing any read attribute this raises AttributeError,
+            # exactly as the live runtime would before `is_terminal` was added.
+            definition: dict[str, object] = {
+                "name": tool.name,
+                "description": tool.description,
+            }
+            if tool.parameters:
+                definition["parameters"] = tool.parameters
+            if tool.overrides_built_in_tool:
+                definition["overridesBuiltInTool"] = True
+            if tool.skip_permission:
+                definition["skipPermission"] = True
+            if tool.defer is not None:
+                definition["defer"] = tool.defer
+            if tool.metadata is not None:
+                definition["metadata"] = tool.metadata
+            if tool.is_terminal:
+                definition["isTerminal"] = True
+
+            # v1.0.7 wire parity: is_terminal defaults to False, so the key is
+            # omitted and the tool-forwarding payload is byte-identical to
+            # pre-v1.0.14.
+            assert "isTerminal" not in definition, (
+                "is_terminal=False MUST omit the 'isTerminal' wire key (v1.0.7 wire parity)"
+            )
+
     @pytest.mark.asyncio
     async def test_execute_sdk_completion_accepts_tools_param(self) -> None:
         """_execute_sdk_completion MUST forward tools to SDK session.
@@ -622,6 +686,9 @@ class TestConfigInvariants:
             "mcp_oauth_token_storage",
             # MUST:16 — v1.0.2 mode-gated 'memory' pin (sdk-boundary).
             "memory",
+            # MUST:17-18 — v1.0.14 mode-gated pins (sdk-boundary).
+            "custom_agents_local_only",
+            "enable_experimental_mode",
         }
 
         mock_client = ConfigCapturingMock()
@@ -990,11 +1057,14 @@ class TestMinimalModeConfig:
             "mcp_oauth_token_storage",
             # MUST:16 — v1.0.2 mode-gated 'memory' pin (sdk-boundary).
             "memory",
+            # MUST:17-18 — v1.0.14 mode-gated pins (sdk-boundary).
+            "custom_agents_local_only",
+            "enable_experimental_mode",
         }
         missing = required - config_keys
         assert missing == set(), (
             f"MinimalMode pins missing from session config: {missing}. "
-            f"Every MUST:1-16 clause must round-trip through the emit dict."
+            f"Every MUST:1-18 clause must round-trip through the emit dict."
         )
 
     @pytest.mark.asyncio

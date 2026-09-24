@@ -280,7 +280,7 @@ class TestSDKVersionCheck:
 
         error_msg = str(exc_info.value)
         assert "0.1.28" in error_msg, "Error must include the installed version"
-        assert "1.0.7" in error_msg, "Error must state the required version"
+        assert "1.0.14" in error_msg, "Error must state the required version"
         assert "github-copilot-sdk" in error_msg, "Error must name the package"
         assert "amplifier provider install" in error_msg, (
             "Error must include the amplifier provider install command"

@@ -245,6 +245,79 @@ event_classifications:
     - mcp.tools.list_changed
     - mcp.resources.list_changed
     - mcp.prompts.list_changed
+    # SDK v1.0.14 (bundled CLI 1.0.77) — 27 new SessionEventType enum members.
+    # All DROP, for the same standing reason as the v1.0.7 block above: the
+    # provider's domain surface is single-completion + tool-call + usage + error
+    # + content-deltas. None of the members below carry a kernel domain mapping,
+    # and each is a sibling of an already-dropped family.
+    #
+    #   Fusion pipeline (SDK-internal multi-model routing; the provider selects
+    #   models explicitly and never drives fusion — siblings of the already
+    #   dropped session.auto_mode_resolved / auto_mode_switch.* analytics):
+    - session.fusion_route_started
+    - session.fusion_route_failed
+    - session.fusion_resolved
+    - session.fusion_completed
+    - assistant.fusion_phase_started
+    - assistant.fusion_phase_activity
+    - assistant.fusion_phase_completed
+    - assistant.fusion_phase_failed
+    #
+    #   Auto-tier advisories (model/tier selection is Amplifier's; these are
+    #   recommendation + failure notices, siblings of session.auto_mode_resolved):
+    - session.auto_tier_recommendation
+    - session.auto_tier_switch_failed
+    #
+    #   Model call lifecycle — start/finish granularity for an upstream model
+    #   call. Dropped for the SAME reason as model.call_failure above: the
+    #   provider surfaces completion via its own turn accounting and errors via
+    #   the session.error → ERROR bridge; bridging these would double-emit.
+    - model.call_start
+    - model.call_finished
+    #
+    #   Turn/agent interruption + retry markers. Amplifier owns turn control and
+    #   carries its own retry policy (retry_utils.py); these are SDK-internal
+    #   progress telemetry, siblings of assistant.idle / assistant.turn_*.
+    - assistant.turn_retry
+    - agent.interrupted
+    #
+    #   Session lifecycle/state notices with no kernel domain mapping — siblings
+    #   of the session.context_changed / session.info / session.mode_changed /
+    #   session.managed_settings_resolved entries already dropped above.
+    #   (session.context_cleared in particular: Amplifier owns context
+    #   construction, so an SDK-side clear notice carries no domain value.)
+    - session.context_cleared
+    - session.completion_receipt
+    - session.mode_notice_delivered
+    - session.managed_settings_enforced
+    #
+    #   MCP server lifecycle — siblings of the already-dropped
+    #   session.mcp_server_status_changed / session.mcp_servers_loaded.
+    #   The provider pins mcp_servers to {} (MinimalMode MUST:3).
+    - session.mcp_server_removed
+    - session.mcp_server_needs_reconnect
+    #
+    #   Factory run lifecycle (SDK-internal background run bookkeeping;
+    #   siblings of the dropped session.background_tasks_changed).
+    - factory.run_started
+    - factory.run_updated
+    - factory.run_settled
+    #
+    #   Remaining singletons:
+    #     prompt_cache_break — upstream prompt-cache boundary marker; a
+    #       performance/telemetry signal with no domain type.
+    #     tool_search.activated — SDK lazy tool-search activation. The provider
+    #       pre-loads all tools and pins defer=None, so this never fires in
+    #       practice; classified explicitly rather than left to fall through.
+    #     sandbox.decision — SDK-side sandbox policy decision. Amplifier
+    #       registers a single deny-all hook and owns permissioning, so this is
+    #       a sibling of the dropped permission.* family.
+    #     ui.ephemeral_query — host UI prompt surface; the provider hosts no UI
+    #       (sibling of the dropped elicitation.* / user_input.* families).
+    - prompt_cache_break
+    - tool_search.activated
+    - sandbox.decision
+    - ui.ephemeral_query
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:
