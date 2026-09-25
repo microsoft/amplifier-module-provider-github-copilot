@@ -102,6 +102,10 @@ def _minimal_mode_session_config() -> dict[str, Any]:
         # MUST:16 — v1.0.2 mode-gated 'memory' kwarg; pinned off (mirrors the
         # SDK empty-mode default {"enabled": False}).
         "memory": dict(minimal_mode.memory),
+        # MUST:17-18 — v1.0.14 mode-gated kwargs. See _sdk_protection.py for
+        # mode="copilot-cli" rationale (empty-mode default helpers do not fire).
+        "custom_agents_local_only": minimal_mode.custom_agents_local_only,
+        "enable_experimental_mode": minimal_mode.enable_experimental_mode,
     }
 
 

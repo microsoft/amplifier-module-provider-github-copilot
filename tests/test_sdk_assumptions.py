@@ -603,9 +603,10 @@ class TestReasoningEffortLiteralPin:
         ``frozenset(get_args(ReasoningEffort))``: every SDK Literal member must
         be present, and the only permitted extras are in ``_KNOWN_EXTRAS``.
 
-        The provider allowlist extends the v1.0.7 SDK Literal with ``"max"``
-        (advertised by the live list_models endpoint; absent from the v1.0.7
-        SDK Literal). Only values documented in
+        The provider allowlist extends the v1.0.14 SDK Literal with ``"none"``
+        (advertised by the live list_models endpoint; absent from the v1.0.14
+        SDK Literal). ``"max"`` was also such an extra through v1.0.7 and became
+        SDK-native at v1.0.14. Only values documented in
         ``_KNOWN_EXTRAS`` are allowed to differ from the SDK Literal — any
         unreviewed addition is a bug.
 
@@ -625,8 +626,11 @@ class TestReasoningEffortLiteralPin:
             _REASONING_EFFORT_FALLBACK_ALLOWLIST,
         )
 
-        # Values the provider forwards beyond the v1.0.7 SDK Literal.
-        _KNOWN_EXTRAS: frozenset[str] = frozenset({"none", "max"})
+        # Values the provider forwards beyond the v1.0.14 SDK Literal.
+        # ``"max"`` was a known extra through v1.0.7; v1.0.14 adds it to the SDK
+        # Literal, so it is now covered by the "every SDK member must be present"
+        # assertion below and is no longer an extra. ``"none"`` remains one.
+        _KNOWN_EXTRAS: frozenset[str] = frozenset({"none"})
 
         sdk_members = frozenset(get_args(ReasoningEffort))
 
@@ -666,13 +670,20 @@ class TestReasoningEffortLiteralPin:
             f"'/'-joined reasoning= token is unambiguous; offenders: {bad!r}"
         )
 
-    def test_reasoning_effort_type_is_literal_4_values(self, sdk_module: Any) -> None:
-        """SDK ``ReasoningEffort`` MUST be a Literal with exactly 4 members.
+    def test_reasoning_effort_type_is_literal_5_values(self, sdk_module: Any) -> None:
+        """SDK ``ReasoningEffort`` MUST be a Literal with exactly 5 members.
 
-        Pins the v1.0.7 SDK surface {low, medium, high, xhigh}. The test goes
-        red if the installed SDK's ``ReasoningEffort`` Literal differs from that
-        set, signalling that the provider allowlist and Layer-1 gate need
+        Pins the v1.0.14 SDK surface {low, medium, high, xhigh, max}. The test
+        goes red if the installed SDK's ``ReasoningEffort`` Literal differs from
+        that set, signalling that the provider allowlist and Layer-1 gate need
         re-evaluation against the changed SDK surface.
+
+        History: v1.0.7 enumerated 4 members {low, medium, high, xhigh}; the
+        live list_models endpoint already advertised ``"max"``, which the
+        provider carried as a documented fallback-allowlist extra. v1.0.14 adds
+        ``"max"`` to the SDK Literal, closing that gap — the provider's
+        forwarded surface is unchanged, ``"max"`` merely moved from
+        provider-extra to SDK-native. ``"none"`` remains a provider extra.
 
         Contract: sdk-boundary:SDKSurface:MUST:3 (pin SDK Literal surface)
         """
@@ -680,7 +691,7 @@ class TestReasoningEffortLiteralPin:
 
         from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
 
-        expected = frozenset({"low", "medium", "high", "xhigh"})
+        expected = frozenset({"low", "medium", "high", "xhigh", "max"})
         actual = frozenset(get_args(ReasoningEffort))
         assert get_origin(ReasoningEffort) is Literal, (
             f"ReasoningEffort is no longer a Literal; got {ReasoningEffort!r}. "
@@ -694,34 +705,16 @@ class TestReasoningEffortLiteralPin:
             f"Follow the migration steps in this test's docstring."
         )
 
-    def test_max_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
-        """Pins that ``"max"`` is advertised by the live GitHub Copilot endpoint
-        and is absent from the v1.0.7 SDK ``ReasoningEffort`` Literal.
-
-        The provider's ``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` includes ``"max"``
-        so cache-miss paths forward it to the SDK's Layer-2 backstop instead of
-        raising a ``ConfigurationError``.
-
-        Contract: provider-protocol:complete:MUST:11 (provider fallback allowlist)
-        """
-        from typing import get_args
-
-        from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
-
-        from amplifier_module_provider_github_copilot.request_adapter import (
-            _REASONING_EFFORT_FALLBACK_ALLOWLIST,
-        )
-
-        sdk_members = frozenset(get_args(ReasoningEffort))
-        assert "max" not in sdk_members, (
-            "SDK ReasoningEffort now includes 'max'. Delete this test, remove "
-            "'max' from _KNOWN_EXTRAS in test_fallback_allowlist_is_superset*, "
-            "and sync contracts/provider-protocol.md MUST:11."
-        )
-        assert "max" in _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
-            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'max'; the v1.0.7 "
-            "fallback path forwards it to the SDK Layer-2 backstop."
-        )
+    # NOTE: ``test_max_support_in_live_sdk_but_not_in_literal`` was deleted at the
+    # v1.0.7 → v1.0.14 SDK bump, per its own migration instruction. It pinned that
+    # ``"max"`` was advertised by the live endpoint but ABSENT from the SDK
+    # ``ReasoningEffort`` Literal. v1.0.14 adds ``"max"`` to the Literal, so the
+    # gap the test guarded no longer exists and the assertion is unsatisfiable by
+    # construction. ``"max"`` is now covered by
+    # ``test_reasoning_effort_type_is_literal_5_values`` (SDK-native membership)
+    # and by the superset test below (which no longer lists it as a known extra).
+    # The provider's forwarded surface did not change. ``"none"`` remains a
+    # provider extra and keeps its own pin, directly below.
 
     def test_none_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
         """Pins that ``"none"`` is advertised by the live GitHub Copilot endpoint
@@ -904,8 +897,19 @@ class TestCopilotSessionSendSignaturePin:
         )
 
         keyword_names = frozenset(p.name for p in keyword_only)
+        # v1.0.14 adds the keyword-only ``source`` parameter (purely additive;
+        # nothing was removed or renamed). The provider does not pass it — the
+        # SDK default preserves the pre-v1.0.14 wire behavior — but the pin must
+        # record the true surface so a future REMOVAL still goes red.
         expected = frozenset(
-            {"agent_mode", "attachments", "display_prompt", "mode", "request_headers"}
+            {
+                "agent_mode",
+                "attachments",
+                "display_prompt",
+                "mode",
+                "request_headers",
+                "source",
+            }
         )
         assert keyword_names == expected, (
             f"CopilotSession.send keyword-only parameters drifted.\n"

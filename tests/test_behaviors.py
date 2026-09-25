@@ -459,7 +459,7 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
                 _check_sdk_version(stale)
             msg = str(exc_info.value)
             assert stale in msg, f"Error must echo installed version {stale!r}"
-            assert "1.0.7" in msg, "Error must state the pinned target version"
+            assert "1.0.14" in msg, "Error must state the pinned target version"
 
     def test_accepts_ga_and_above(self) -> None:
         """sdk-boundary:Membrane:MUST:5 — GA (1.0.0) and forward satisfy the floor.

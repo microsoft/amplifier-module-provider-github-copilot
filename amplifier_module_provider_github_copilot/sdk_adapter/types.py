@@ -231,6 +231,20 @@ class SDKToolWrapper:
     # on every tool-forwarding turn.
     # Contract: sdk-boundary:ToolForwarding:MUST:2
     metadata: dict[str, Any] | None = None
+    # SDK v1.0.14 reads tool.is_terminal when building tool definitions in BOTH
+    # create_session and resume (copilot/client.py:2570 and :3355,
+    # `if tool.is_terminal: definition["isTerminal"] = True`, immediately after
+    # the `metadata` block). Mirrors the SDK's own copilot.tools.Tool.is_terminal
+    # field type. Note this is a TRUTHINESS gate, not `is not None` like `defer`
+    # and `metadata` above: False = the key is omitted from the wire payload,
+    # which is the exact pre-v1.0.14 behavior.
+    # A terminal tool ends the agent turn on a successful call. Amplifier owns
+    # turn control at the kernel layer and never delegates it to the SDK, so
+    # this stays False. Without this attribute the SDK raises AttributeError on
+    # every tool-forwarding turn (same shape as the v1.0.2 `defer` and v1.0.7
+    # `metadata` regressions).
+    # Contract: sdk-boundary:ToolForwarding:MUST:2
+    is_terminal: bool = False
 
 
 def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:

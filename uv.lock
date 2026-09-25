@@ -4,7 +4,7 @@ requires-python = ">=3.11"
 
 [[package]]
 name = "amplifier-core"
-version = "1.3.3"
+version = "2.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -14,19 +14,17 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/9b/c1831daf9f19f819c552fe8a9fd1c11366413e543b1d2b41c60f910c4f1b/amplifier_core-1.3.3-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:eef372360758b28966bde5488422ce097b1c12cae2bdd5f0736dbc5eb19e6f6c", size = 8101195, upload-time = "2026-03-23T14:44:41.21Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/19/0348e6b9e7731f5d17ec15cfc155118f12602bd13be264f511d7d262d973/amplifier_core-1.3.3-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:514edd6fcb59299049730ecf7e5fc1760ac8be73b8ac35c72aafbebb1caf4e92", size = 7220842, upload-time = "2026-03-23T14:44:43.829Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/bc/80abe390d5023b2bedb0e79235075c43dc6dfd93fa5d6819f674157a71fb/amplifier_core-1.3.3-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2e6b1ce4c39993d1aa510719051d1864726ba603179a0ed830180d3b6798cc55", size = 7599714, upload-time = "2026-03-23T14:44:46.855Z" },
-    { url = "https://files.pythonhosted.org/packages/16/03/7299e57a263f6ef3a77dc9fd94384f4b9f7e44111a0119037c1b0ea25e69/amplifier_core-1.3.3-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:09adf35c52461b297b1aef119dda6c8b209af1b2eb82bd00702c228db8458937", size = 8637800, upload-time = "2026-03-23T14:44:49.138Z" },
-    { url = "https://files.pythonhosted.org/packages/85/62/09d8c57fd97bd9b9e5851da13cd902fc431c80d7a364476b8aae70f2b2c0/amplifier_core-1.3.3-cp311-abi3-win_amd64.whl", hash = "sha256:c09cadb6fe104645386742ebef893f549ffa779f7acc7ec42d5bd949348f2eea", size = 8894201, upload-time = "2026-03-23T14:44:51.892Z" },
-    { url = "https://files.pythonhosted.org/packages/63/80/816f0aec391e20218340fe108c95208e236297c80903d58a9290d83c902c/amplifier_core-1.3.3-cp311-abi3-win_arm64.whl", hash = "sha256:263c43010e1e78668ff34ecddfa0444727bd9a8787d8dc2286a8d3fa619b48de", size = 7666984, upload-time = "2026-03-23T14:44:54.508Z" },
-    { url = "https://files.pythonhosted.org/packages/ab/9a/61003612d9c94b22dd4470f0fe82c1e68f52e7868c8f76b71cdc76471665/amplifier_core-1.3.3-cp313-cp313t-win_arm64.whl", hash = "sha256:883779eb5acf298048a6afa3178a59cfc29d1f05c413d8446e0f6f2340cda794", size = 7659998, upload-time = "2026-03-23T14:44:56.638Z" },
-    { url = "https://files.pythonhosted.org/packages/36/36/ff422fab371c63bde16c8fb2f913265a9e2d2fef61bcce665a5d59124907/amplifier_core-1.3.3-cp314-cp314t-win_arm64.whl", hash = "sha256:2407881ca22feb23f92f7b2606b7b5e99f7f4fccf8b9908dad6c0640ee6a3f64", size = 7663014, upload-time = "2026-03-23T14:44:59.025Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/53/90edfa9ff6b213f0be37d1cd2ee49df7b644b7d19ac7c8d0331f1ff43775/amplifier_core-2.0.1-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:445f1e009d2411d55d6dac2ad88484844e688b2cb2901501096faae8a2ac8fdd", size = 8330603, upload-time = "2026-09-23T19:04:47.971Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/0f/f865096994e1777274ffc13895efc0c70fb085f96f017083cf2bb6a17562/amplifier_core-2.0.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:e9aa0664c2b349e0d90cf20cb2e5e663c37cd54b04fd0cb9776f57ecf31f6ea4", size = 7424176, upload-time = "2026-09-23T19:04:49.99Z" },
+    { url = "https://files.pythonhosted.org/packages/af/d3/fd2653b45a6aba6667ad13113713b7fabfd93200a7a655ecc81dcb7ed162/amplifier_core-2.0.1-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d2ac4f49bf2858d83bc6ab541ca3fc8042dd17807d25b97f598a1f06b7c305e7", size = 7775409, upload-time = "2026-09-23T19:04:51.956Z" },
+    { url = "https://files.pythonhosted.org/packages/75/92/a0360024275c1e214a5d65370ffdb87b35986bd6a1681e1e1c62e34197ac/amplifier_core-2.0.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e1a8e7183260b738c32ca16b64f5aacc3e71de2c51918702eae5424ab4f07906", size = 8793506, upload-time = "2026-09-23T19:04:54.038Z" },
+    { url = "https://files.pythonhosted.org/packages/42/c0/dbdd12f77d8ded4d76d0170606056d2f493d1d86d08db3b89b579d79904a/amplifier_core-2.0.1-cp311-abi3-win_amd64.whl", hash = "sha256:7d3ea206b6d3f9537115a2afc8b99f5d9e34e9f3236fdc48d8dd6d2d8a631184", size = 9085723, upload-time = "2026-09-23T19:04:56.293Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/f3/3042735327bc6fb6216b92632e1d096b6a312c2c0e8f6d111f1b259a56f7/amplifier_core-2.0.1-cp311-abi3-win_arm64.whl", hash = "sha256:7834782f88b764ffb6374b734b74f2e55bc9e57e99197a1ed3d1ab8ae6562e89", size = 7798444, upload-time = "2026-09-23T19:04:58.493Z" },
 ]
 
 [[package]]
 name = "amplifier-module-provider-github-copilot"
-version = "2.7.0"
+version = "2.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "github-copilot-sdk" },
@@ -46,8 +44,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amplifier-core", marker = "extra == 'dev'", specifier = ">=1.3.0" },
-    { name = "github-copilot-sdk", specifier = "==1.0.7" },
+    { name = "amplifier-core", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "github-copilot-sdk", specifier = "==1.0.14" },
     { name = "packaging", specifier = ">=20" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.350" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
@@ -204,7 +202,7 @@ toml = [
 
 [[package]]
 name = "github-copilot-sdk"
-version = "1.0.7"
+version = "1.0.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -212,7 +210,7 @@ dependencies = [
     { name = "python-dateutil" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/ec/734b0d28abbf7d26eb1a60810deedbcc0719910d64f018477010baf3e3f3/github_copilot_sdk-1.0.7-py3-none-any.whl", hash = "sha256:6f3e74e1779a4508dd6636e06fd0aa55eb6244805a66d61a4f21b30c958e2985", size = 421447, upload-time = "2026-07-16T15:21:04.636Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/e2/4d8c622545f55f06773548cf86ffe60f59e6a4cedcc412ff84fcac244b2b/github_copilot_sdk-1.0.14-py3-none-any.whl", hash = "sha256:9f4538cec7295f24507c650d794307396458a51f280a0fbbcd840da177109050", size = 614607, upload-time = "2026-09-16T05:11:14.572Z" },
 ]
 
 [[package]]

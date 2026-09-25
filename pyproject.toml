@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "2.7.0"
+version = "2.8.0"
 description = "GitHub Copilot provider for Amplifier - Two-Medium Architecture"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,7 +51,35 @@ dependencies = [
     #   every tool-forwarding turn raises AttributeError — same shape as the
     #   v1.0.2 `defer` regression. Also adds 6 new SessionEventType members
     #   (all DROP; see config/data/events.yaml). No other import shape changed.
-    "github-copilot-sdk==1.0.7",
+    # - v1.0.14 (stable; bundled CLI 1.0.77): the 5 quarantined SDK imports
+    #   (CopilotClient, ModelCapabilitiesOverride, ModelLimitsOverride,
+    #   PermissionDecisionReject, PermissionRequestResult) are UNCHANGED in
+    #   name, location and shape. Nothing was removed or renamed across
+    #   1.0.8 -> 1.0.14: `CopilotClient.__init__`, `create_session` and
+    #   `CopilotSession.send` are all purely additive (verified by signature
+    #   set-difference; REMOVED == none for each). Four absorbed changes:
+    #   1. `copilot.tools.Tool` gains a trailing `is_terminal: bool = False`,
+    #      which `copilot/client.py` reads by attribute in BOTH create_session
+    #      (:2570) and resume (:3355) as `if tool.is_terminal:`. Duck-typed
+    #      `SDKToolWrapper` MUST mirror it (see sdk_adapter/types.py) or every
+    #      tool-forwarding turn raises AttributeError -- same shape as the
+    #      v1.0.2 `defer` and v1.0.7 `metadata` regressions. NOTE this one is a
+    #      truthiness gate, not `is not None`; False omits the wire key.
+    #   2. Two NEW mode-gated create_session capabilities --
+    #      `custom_agents_local_only` (empty-mode default True) and
+    #      `enable_experimental_mode` (empty-mode default False). Both pinned
+    #      (MinimalMode:MUST:17-18); under mode="copilot-cli" the empty-mode
+    #      helpers return None, so unpinned they would inherit bundled-CLI
+    #      defaults.
+    #   3. `ReasoningEffort` Literal grows to 5 members: "max" is now
+    #      SDK-native (was a documented provider fallback-allowlist extra
+    #      through 1.0.7). The provider's forwarded set is UNCHANGED; "none"
+    #      remains the sole remaining extra.
+    #   4. 27 new SessionEventType members (all DROP; see
+    #      config/data/events.yaml). `CopilotSession.send` gains keyword-only
+    #      `source` (additive; the provider does not pass it, so the SDK
+    #      default preserves pre-1.0.14 wire behavior).
+    "github-copilot-sdk==1.0.14",
     # PyYAML for config loading
     "pyyaml>=6.0",
     # PEP 440 version parser used by the import-time SDK floor check
@@ -78,12 +106,24 @@ dev = [
     "pytest-asyncio>=0.21",
     "pytest-cov>=7.0.0",
     # amplifier-core from PyPI (binary wheels, no Rust compilation needed)
-    # Floor bumped from 1.0.7 → 1.3.0 to align with the runtime version actually
-    # injected by the Amplifier CLI (1.4.x). The 1.0.7 floor predated several
-    # kernel iterations and was no longer representative of the tested surface.
-    # Note: amplifier-core public message_models are byte-identical across
-    # 1.2.6→1.4.1; the bump reflects policy alignment, not new field usage.
-    "amplifier-core>=1.3.0",
+    # Floor bumped 1.3.0 → 2.0.0 to align with the runtime version actually
+    # injected by the Amplifier CLI, which ships **2.0.1** (verified on a live
+    # host and inside a clean DTU). The previous floor's rationale was stale in
+    # a way that mattered: it claimed alignment with a CLI shipping "1.4.x" and
+    # that message_models were "byte-identical across 1.2.6→1.4.1". Because the
+    # constraint was an unbounded `>=1.3.0`, uv.lock resolved **1.3.3** — so the
+    # entire test suite validated against 1.3.3 while production ran 2.0.1, a
+    # full major version apart, silently. Re-locked to 2.x so the tested surface
+    # is the shipped surface; suite verified green against 2.0.1 (1586 passed).
+    #
+    # NOTE (deliberately left for maintainer judgement): this floor is still
+    # unbounded, which is the exact shape that allowed the 1.x→2.x drift above
+    # to go unnoticed. A `,<3.0.0` cap would convert the next major-version
+    # divergence into a loud resolution failure instead of a silent one,
+    # consistent with how the SDK pin (`==`) and the mode-gated-capability test
+    # force conscious decisions. Not applied here: capping is a policy call for
+    # a dev-only dependency, and this change-set is an SDK bump.
+    "amplifier-core>=2.0.0",
 ]
 
 [project.entry-points."amplifier.modules"]

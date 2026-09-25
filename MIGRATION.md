@@ -1,3 +1,87 @@
+# Migration Guide: v2.7.x → v2.8.0
+
+## Overview
+
+v2.8.0 advances the pinned `github-copilot-sdk` from `1.0.7` to `1.0.14` (stable).
+The move is **wire-compatible** — no public API, config key, env var, or CLI flag
+changes, and no action is required on upgrade.
+
+The 5 quarantined SDK imports (`CopilotClient`, `ModelCapabilitiesOverride`,
+`ModelLimitsOverride`, `PermissionDecisionReject`, `PermissionRequestResult`) are
+unchanged in name, location and shape. Nothing was removed or renamed across the
+`1.0.8 → 1.0.14` span: `CopilotClient.__init__`, `CopilotClient.create_session`
+and `CopilotSession.send` are each purely additive (verified by signature
+set-difference — removed == none for all three).
+
+Four SDK surface changes are absorbed by the provider:
+
+- **New `Tool.is_terminal` field.** SDK 1.0.14's `copilot.tools.Tool` dataclass
+  gains a trailing `is_terminal: bool = False` field, which `copilot/client.py`
+  reads by attribute in **both** `create_session` (`:2570`) and `resume`
+  (`:3355`) as `if tool.is_terminal:`. The provider hands the SDK a duck-typed
+  `SDKToolWrapper`, so the wrapper now mirrors that field with a `False` default.
+  Note this read is a **truthiness** gate, not the `is not None` test used for
+  `defer` and `metadata`: `False` **omits** the `isTerminal` key from the wire
+  payload, keeping the tool-forwarding request byte-identical to 1.0.7. This is
+  the same shape as the v1.0.2 `defer` and v1.0.7 `metadata` field additions.
+  Without it, every tool-forwarding turn would raise `AttributeError`.
+- **Two new mode-gated capabilities**, both pinned (MinimalMode MUST:17-18):
+  `custom_agents_local_only=True` and `enable_experimental_mode=False`. Each
+  mirrors the SDK's own empty-mode default. Under `mode="copilot-cli"` the
+  empty-mode helpers return `None`, so leaving either unset would hand the
+  setting to the bundled CLI — for `enable_experimental_mode` that means a CLI
+  upgrade could silently switch experimental behavior on underneath the provider.
+- **`ReasoningEffort` Literal grows to 5 members.** `"max"` is now SDK-native; it
+  was a documented provider fallback-allowlist extra through 1.0.7. **The
+  provider's forwarded set is unchanged** — `"max"` simply moved from
+  provider-extra to SDK-native, and `"none"` remains the sole remaining extra.
+- **27 new `SessionEventType` members**, all classified **DROP** (no kernel domain
+  mapping): the fusion pipeline (`session.fusion_*`, `assistant.fusion_phase_*`),
+  auto-tier advisories, `model.call_start`/`model.call_finished`,
+  `assistant.turn_retry`, `agent.interrupted`, four `session.*` state notices, two
+  MCP server-lifecycle events, `factory.run_*`, plus `prompt_cache_break`,
+  `tool_search.activated`, `sandbox.decision` and `ui.ephemeral_query`. See
+  `config/data/events.yaml` for the per-family reasoning.
+
+`CopilotSession.send` also gains a keyword-only `source` parameter. The provider
+does not pass it, so the SDK default preserves pre-1.0.14 wire behavior; the
+signature pin was widened to record the true surface.
+
+### Also in this release: dev-dependency floor `amplifier-core>=2.0.0`
+
+**Contributors only — no runtime impact.** `amplifier-core` is injected by the
+Amplifier runtime when the module is loaded; it is declared under
+`[project.optional-dependencies] dev` for type hints and tests, not installed at
+runtime by this package.
+
+The floor moves `1.3.0 → 2.0.0` to match what the CLI actually ships (**2.0.1**).
+The previous constraint was an unbounded `>=1.3.0`, so `uv.lock` resolved
+**1.3.3** — meaning the test suite validated against 1.3.3 while production ran
+2.0.1, a full major version apart, with nothing reporting the divergence. The
+lock is regenerated to 2.0.1 and the suite is green against it (1586 passed).
+
+**Action required:** none for users. Contributors with an existing dev
+environment should re-sync (`uv sync --extra dev`) to pick up `amplifier-core`
+2.x.
+
+---
+
+## What Changed: SDK requirement is now `github-copilot-sdk==1.0.14`
+
+- **What:** The provider now pins `github-copilot-sdk==1.0.14` (was `==1.0.7`).
+  The import-time support floor is unchanged (`>=1.0.0`; pre-GA beta SDKs remain
+  unsupported). The `1.0.7 → 1.0.14` move is **non-breaking** for the provider's
+  wire behavior — `Tool.is_terminal` defaults to `False`, which reproduces the
+  1.0.7 tool payload exactly, and the two new MinimalMode pins mirror the SDK's
+  own empty-mode defaults.
+- **Action required:** none. A clean `pip install` of `2.8.0` pulls `1.0.14`
+  automatically via the `pyproject.toml` pin; `amplifier provider install --force
+  github-copilot` reinstalls the pinned SDK for an existing environment.
+- **Rollback:** if the previous SDK pin is required, pin
+  `amplifier-module-provider-github-copilot<2.8.0`.
+
+---
+
 # Migration Guide: v2.6.x → v2.7.0
 
 ## Overview
