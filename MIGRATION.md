@@ -47,6 +47,23 @@ Four SDK surface changes are absorbed by the provider:
 does not pass it, so the SDK default preserves pre-1.0.14 wire behavior; the
 signature pin was widened to record the true surface.
 
+### Also in this release: dev-dependency floor `amplifier-core>=2.0.0`
+
+**Contributors only — no runtime impact.** `amplifier-core` is injected by the
+Amplifier runtime when the module is loaded; it is declared under
+`[project.optional-dependencies] dev` for type hints and tests, not installed at
+runtime by this package.
+
+The floor moves `1.3.0 → 2.0.0` to match what the CLI actually ships (**2.0.1**).
+The previous constraint was an unbounded `>=1.3.0`, so `uv.lock` resolved
+**1.3.3** — meaning the test suite validated against 1.3.3 while production ran
+2.0.1, a full major version apart, with nothing reporting the divergence. The
+lock is regenerated to 2.0.1 and the suite is green against it (1586 passed).
+
+**Action required:** none for users. Contributors with an existing dev
+environment should re-sync (`uv sync --extra dev`) to pick up `amplifier-core`
+2.x.
+
 ---
 
 ## What Changed: SDK requirement is now `github-copilot-sdk==1.0.14`
