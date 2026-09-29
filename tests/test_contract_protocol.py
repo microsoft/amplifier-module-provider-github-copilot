@@ -82,8 +82,8 @@ class TestProtocolGetInfo:
             "get_info() defaults must include 'context_window' for kernel budget calculation. "
             "See provider-protocol:get_info:MUST:2"
         )
-        assert info.defaults["context_window"] == 200000, (
-            f"context_window is {info.defaults['context_window']!r} but should be 200000. "
+        assert info.defaults["context_window"] == 128000, (
+            f"context_window is {info.defaults['context_window']!r} but should be 128000. "
             "Value comes from config/_models.py PROVIDER['defaults']['context_window']."
         )
 

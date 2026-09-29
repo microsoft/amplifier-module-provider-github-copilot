@@ -3,8 +3,9 @@
 ## Overview
 
 v2.8.0 advances the pinned `github-copilot-sdk` from `1.0.7` to `1.0.15` (stable;
-bundled CLI 1.0.89). The move is **wire-compatible for tool forwarding**: no public
-API, config key, env var, or CLI flag changes, and no action is required on upgrade.
+bundled CLI 1.0.89) and changes the packaged default model to `auto`. The SDK move is
+**wire-compatible for tool forwarding**: no public API, config key, env var, or CLI
+flag changes.
 
 SDK surface changes absorbed by the provider:
 
@@ -32,6 +33,23 @@ SDK surface changes absorbed by the provider:
   `assistant.turn_retry`, `agent.interrupted`, `session.completion_receipt`); the
   other 10 fall under the existing `permission.*`, `skill.*`, and `subagent.*`
   wildcards.
+
+---
+
+## What Changed: default model is now `auto`
+
+- **What:** The packaged default model (used when neither the request nor the
+  `default_model` config sets one) changes from `claude-opus-4.5` to `auto`,
+  Copilot's server-side router and the Copilot CLI's own default. Each turn is
+  dispatched to a concrete model chosen by the service. Because `auto`
+  advertises no limits, `get_info()` now reports `context_window=128000` and
+  `max_output_tokens=16384` for the default (was `200000` / `32000`), matching
+  the policy fallbacks the provider already applied to `auto` at runtime.
+  `auto` advertises no reasoning levels, so a `reasoning_effort` (caller value
+  or provider default) is dropped with a log once the model list is cached.
+- **Action required:** none for configurations that set `default_model` or pass
+  a model per request. To use a fixed model, set `default_model` to an explicit
+  model ID that `list_models()` reports.
 
 ---
 

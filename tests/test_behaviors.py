@@ -1094,7 +1094,7 @@ class TestRuntimeConfigOverride:
         cached_config = load_models_config()
         # Cached config should still have original YAML default
         # (not mutated by either provider)
-        assert cached_config.defaults["model"] == "claude-opus-4.5"
+        assert cached_config.defaults["model"] == "auto"
 
     def test_get_info_reports_runtime_default_model(self) -> None:
         """get_info() defaults["model"] MUST reflect the runtime-configured model.
@@ -1202,10 +1202,10 @@ class TestRuntimeConfigOverride:
         # The process-wide lru_cached singleton must be untouched by provider1's
         # get_info() call.
         cached_config = load_models_config()
-        assert cached_config.defaults["model"] == "claude-opus-4.5"
+        assert cached_config.defaults["model"] == "auto"
 
         info2 = provider2.get_info()
-        assert info2.defaults["model"] == "claude-opus-4.5"
+        assert info2.defaults["model"] == "auto"
 
 
 # =============================================================================

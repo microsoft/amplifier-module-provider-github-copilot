@@ -957,7 +957,7 @@ class TestNoHardcodedModelLists:
         models_config = load_models_config()
 
         # Should have defaults (policy) with correct default model
-        assert models_config.defaults["model"] == "claude-opus-4.5"
+        assert models_config.defaults["model"] == "auto"
 
         # ProviderConfig no longer exposes a .models field — catalog comes from SDK
         assert not hasattr(models_config, "models"), (

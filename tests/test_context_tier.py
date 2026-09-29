@@ -783,7 +783,7 @@ class TestGetInfoTierAwareWindow:
     Contract: provider-protocol:get_info:MUST:5
 
     Mutation check: reverting get_info() to return cfg.defaults verbatim makes
-    the long-tier assertion read 200000 (the static literal) instead of 936000 — red.
+    the long-tier assertion read 128000 (the static literal) instead of 936000, so it goes red.
     """
 
     def test_default_tier_reports_default_budget(self) -> None:
@@ -805,8 +805,8 @@ class TestGetInfoTierAwareWindow:
             enable_long_context=True, default_model="model-not-in-cache"
         )
         info = provider.get_info()
-        assert info.defaults["context_window"] == 200_000
-        assert info.defaults["max_output_tokens"] == 32_000
+        assert info.defaults["context_window"] == 128_000
+        assert info.defaults["max_output_tokens"] == 16_384
 
     def test_old_cache_zero_sentinel_reports_static_not_ceiling(self) -> None:
         # Regression guard: a pre-tier (old) cache yields 0 tier budgets while the
@@ -835,7 +835,7 @@ class TestGetInfoTierAwareWindow:
             )
         ]
         info = provider.get_info()
-        assert info.defaults["context_window"] == 200_000
+        assert info.defaults["context_window"] == 128_000
         assert info.defaults["context_window"] != 1_000_000
         # max_output_tokens stays the model's real value (never inflated).
         assert info.defaults["max_output_tokens"] == 64_000
@@ -852,8 +852,8 @@ class TestGetInfoTierAwareWindow:
         # The lru_cached singleton defaults must be pristine — get_info copies
         # before injecting the tier window.
         singleton = load_models_config().defaults
-        assert singleton["context_window"] == 200_000
-        assert singleton["max_output_tokens"] == 32_000
+        assert singleton["context_window"] == 128_000
+        assert singleton["max_output_tokens"] == 16_384
 
     def test_two_providers_isolated_by_tier(self) -> None:
         from amplifier_module_provider_github_copilot.config_loader import (
@@ -869,4 +869,4 @@ class TestGetInfoTierAwareWindow:
         assert short_info.defaults["context_window"] == 200_000
         assert long_info.defaults["context_window"] == 936_000
         # Neither provider poisoned the shared singleton for the other.
-        assert load_models_config().defaults["context_window"] == 200_000
+        assert load_models_config().defaults["context_window"] == 128_000
