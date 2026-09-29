@@ -623,7 +623,7 @@ and turns red if the live SDK surface drifts.
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:ModelDiscovery:MUST:1` | Fetches from SDK list_models() API |
+| `sdk-boundary:ModelDiscovery:MUST:1` | Fetches from SDK typed rpc.models.list() API |
 | `sdk-boundary:ModelDiscovery:MUST:2` | Translates SDK → CopilotModelInfo |
 | `sdk-boundary:ModelDiscovery:MUST:3` | Translates CopilotModelInfo → amplifier_core.ModelInfo |
 | `sdk-boundary:ModelDiscovery:MUST_NOT:1` | No hardcoded model lists |
@@ -639,7 +639,7 @@ and turns red if the live SDK surface drifts.
 | `sdk-boundary:Auth:MUST:3` | An explicitly-resolved token MUST be passed as the `github_token` kwarg to CopilotClient. b10 keeps the direct-kwarg surface (no intermediate config object that could silently drop the token); the only residual fail-closed sentinel is the test-mode case where CopilotClient itself is unavailable (`SKIP_SDK_CHECK` + pytest), which raises ConfigurationError to prevent silent fall-through to ambient auth. |
 | `sdk-boundary:Events:MUST:1` | Provider uses session.on() + session.send(prompt, attachments=...) pattern |
 | `sdk-boundary:Send:MUST:1` | session.send(prompt: str, attachments=...) replaces send({"prompt":...}) |
-| `sdk-boundary:Models:MUST:1` | SDK CopilotClient.list_models() returns list[ModelInfo] |
+| `sdk-boundary:Models:MUST:1` | SDK `CopilotClient.rpc.models.list(ModelsListRequest())` returns typed models with explicit `capabilities.limits.max_output_tokens` |
 
 ---
 
@@ -651,32 +651,32 @@ Model discovery MUST fetch models dynamically from the SDK backend. The provider
 
 ### MUST Constraints
 
-1. **MUST** fetch models from SDK `list_models()` API
-2. **MUST** translate SDK `ModelInfo` to domain `CopilotModelInfo` (isolation layer)
+1. **MUST** fetch models from SDK's public typed `rpc.models.list()` API; `CopilotClient.list_models()` loses the advertised output limit. The typed RPC MUST be cached and serialized per connected wrapper, as the SDK convenience method is, to avoid redundant successful requests and rate limiting.
+2. **MUST** translate SDK typed `Model` to domain `CopilotModelInfo` (isolation layer)
 3. **MUST** translate `CopilotModelInfo` to `amplifier_core.ModelInfo` (kernel contract)
 4. **MUST NOT** use hardcoded model lists in production code
 
 ### Type Translation Chain
 
 ```
-SDK ModelInfo          →  CopilotModelInfo       →  amplifier_core.ModelInfo
-(copilot.client)          (internal isolation)      (kernel expects this)
+SDK typed Model        →  CopilotModelInfo       →  amplifier_core.ModelInfo
+(copilot.rpc)             (internal isolation)      (kernel expects this)
 ```
 
 **Why Three Types?**
-- **SDK ModelInfo**: SDK's type structure (may change with SDK versions)
+- **SDK typed Model**: SDK's public typed RPC model (may change with SDK versions)
 - **CopilotModelInfo**: Our isolation layer — insulates us from SDK changes
 - **amplifier_core.ModelInfo**: What the kernel expects from `provider.list_models()`
 
 ### Type Translation
 
 ```python
-# SDK ModelInfo (from copilot.client) — INPUT
+# SDK typed Model (from copilot.rpc) — INPUT
 @dataclass
-class ModelInfo:
+class Model:
     id: str
     name: str
-    capabilities: ModelCapabilities  # contains .limits.max_context_window_tokens
+    capabilities: ModelCapabilities  # limits include max_output_tokens
 
 # Domain CopilotModelInfo (in models.py) — ISOLATION LAYER
 @dataclass(frozen=True)
@@ -690,22 +690,22 @@ class CopilotModelInfo:
     context_window_default: int = 0   # prompt budget: billing.token_prices.context_max OR limits.max_prompt_tokens OR static; 0 => use context_window
     context_window_long: int = 0      # long-tier prompt budget: billing.token_prices.long_context.context_max OR context_window_default; 0 => no long tier
 
-# context_window_default / context_window_long are populated by sdk_model_to_copilot_model from the
-# SDK billing surface; the 0 defaults preserve positional construction in fixtures and tolerant
-# disk-cache reads at _SUPPORTED_CACHE_VERSION = "1.0" (no version bump).
+# context_window_default / context_window_long are populated from SDK billing.
+# Old 1.0 caches are invalidated because they lack reliable output limits.
 
 # amplifier_core.ModelInfo — OUTPUT (what kernel expects)
 # Imported from amplifier_core, NOT defined by us
 from amplifier_core import ModelInfo as AmplifierModelInfo
 ```
 
-### Limit Derivation
+### Limit Selection
 
 ```python
-# max_output_tokens = context_window - max_prompt_tokens
-context_window = capabilities.limits.max_context_window_tokens
-max_prompt = capabilities.limits.max_prompt_tokens
-max_output_tokens = context_window - max_prompt
+# The explicit Copilot limit wins, even if max_prompt_tokens equals the ceiling.
+# When missing/non-positive, derive context_window - max_prompt_tokens;
+# if that is also unavailable/non-positive, use the conservative policy fallback.
+# A zero/absent context window (e.g. auto) uses the policy fallback window.
+max_output_tokens = capabilities.limits.max_output_tokens
 ```
 
 ### Test Anchors

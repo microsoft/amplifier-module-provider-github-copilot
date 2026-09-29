@@ -38,6 +38,7 @@ PermissionDecisionReject: Any
 PermissionRequestResult: Any
 ModelCapabilitiesOverride: Any
 ModelLimitsOverride: Any
+ModelsListRequest: Any
 
 if _SKIP_SDK_CHECK:
     # Test mode: provide None stubs that tests can mock
@@ -46,6 +47,7 @@ if _SKIP_SDK_CHECK:
     PermissionRequestResult = None  # type: ignore[misc,assignment]
     ModelCapabilitiesOverride = None  # type: ignore[misc,assignment]
     ModelLimitsOverride = None  # type: ignore[misc,assignment]
+    ModelsListRequest = None  # type: ignore[misc,assignment]
 else:
     try:
         from copilot import CopilotClient  # type: ignore[import-untyped,no-redef]
@@ -66,6 +68,7 @@ else:
     from copilot.generated.rpc import (  # type: ignore[import-untyped,no-redef]
         PermissionDecisionReject,
     )
+    from copilot.rpc import ModelsListRequest  # type: ignore[import-untyped,no-redef]
 
     # b10 type alias: PermissionDecision | PermissionNoResult. Not a constructor.
     # Contract: sdk-boundary:SDKSurface:MUST:1a
@@ -93,6 +96,13 @@ def make_permission_denied() -> Any:
     if PermissionDecisionReject is not None:
         return PermissionDecisionReject()  # type: ignore[return-value]
     return SimpleNamespace(kind="reject", feedback=None)
+
+
+def make_models_list_request() -> Any:
+    """Build the SDK's public typed model-discovery request inside the membrane."""
+    if ModelsListRequest is not None:
+        return ModelsListRequest()
+    return SimpleNamespace()  # Test-mode stand-in; mocked RPC ignores the request.
 
 
 # SDK v1.0.0b10 (and b9 before it) keeps SubprocessConfig out of the public

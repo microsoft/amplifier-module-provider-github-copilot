@@ -281,6 +281,30 @@ class TestSDKImportAssumptions:
         assert capabilities.default is dataclasses.MISSING
         assert capabilities.default_factory is dataclasses.MISSING
 
+    def test_typed_model_retains_advertised_output_limit(self, sdk_module: Any) -> None:
+        """The public typed SDK model preserves a limit its convenience API drops."""
+        from copilot.rpc import Model  # type: ignore[import-untyped]
+
+        from amplifier_module_provider_github_copilot.models import sdk_model_to_copilot_model
+
+        model = Model.from_dict(
+            {
+                "id": "claude-opus-5.5",
+                "name": "Claude Opus 5.5",
+                "capabilities": {
+                    "limits": {
+                        "max_context_window_tokens": 1_000_000,
+                        "max_prompt_tokens": 1_000_000,
+                        "max_output_tokens": 128_000,
+                    },
+                    "supports": {},
+                },
+            }
+        )
+        assert model.capabilities.limits is not None
+        assert model.capabilities.limits.max_output_tokens == 128_000
+        assert sdk_model_to_copilot_model(model).max_output_tokens == 128_000
+
 
 @pytest.mark.sdk_assumption
 class TestModelBillingServerShapeTolerance:

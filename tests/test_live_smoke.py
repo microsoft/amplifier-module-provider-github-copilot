@@ -276,13 +276,13 @@ def _bind_real_sdk_override_types(monkeypatch: pytest.MonkeyPatch) -> None:
     silently leaving the override types unbound.
     """
     copilot = require_sdk()
+    from copilot.rpc import ModelsListRequest
 
     from amplifier_module_provider_github_copilot.sdk_adapter import _imports
 
+    monkeypatch.setattr(_imports, "ModelsListRequest", ModelsListRequest)
     monkeypatch.setattr(_imports, "ModelLimitsOverride", copilot.ModelLimitsOverride)
-    monkeypatch.setattr(
-        _imports, "ModelCapabilitiesOverride", copilot.ModelCapabilitiesOverride
-    )
+    monkeypatch.setattr(_imports, "ModelCapabilitiesOverride", copilot.ModelCapabilitiesOverride)
 
 
 # =============================================================================
@@ -306,6 +306,28 @@ class TestRealApiProof:
         models = await provider.list_models()
 
         _assert_real_model_list(models)
+
+    @pytest.mark.asyncio
+    async def test_model_list_preserves_advertised_output_limits(
+        self,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """No advertised per-model output limit is lost by SDK/provider translation."""
+        from copilot.rpc import ModelsListRequest
+
+        provider = _make_live_provider(live_client, monkeypatch)
+        models = {model.id: model for model in await provider.list_models()}
+        advertised = (await live_client.rpc.models.list(ModelsListRequest())).models
+        checked = 0
+        for model in advertised:
+            limits = model.capabilities.limits
+            if limits is None or not limits.max_output_tokens:
+                continue
+            checked += 1
+            assert models[model.id].max_output_tokens == limits.max_output_tokens, model.id
+        assert checked > 0
 
     @pytest.mark.asyncio
     async def test_provider_complete_returns_content_finish_reason_and_usage(
