@@ -109,6 +109,15 @@ class TestSDKImportAssumptions:
                 # pinning it here makes a future SDK rename/removal FAIL at this
                 # signature guard instead of silently escaping to live/prod.
                 "memory",
+                # v1.0.14 MinimalMode:MUST:17-18 — the two mode-gated kwargs
+                # added by SDK v1.0.14, forwarded by _minimal_mode_session_config()
+                # (sdk_adapter/client.py:107-108) alongside the pins above.
+                # create_session declares them as `custom_agents_local_only: bool |
+                # None` and `enable_experimental_mode: bool | None`; pinning them
+                # here makes a future SDK rename/removal FAIL at this signature
+                # guard instead of silently escaping to live/prod.
+                "custom_agents_local_only",
+                "enable_experimental_mode",
             }
         )
 

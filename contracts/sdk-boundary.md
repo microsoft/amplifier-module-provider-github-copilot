@@ -337,7 +337,16 @@ for tool in tools:
         definition["defer"] = tool.defer
     if tool.metadata is not None:     # ← SDK v1.0.7 reads tool.metadata (client.py:2182-2183, :2858-2859)
         definition["metadata"] = tool.metadata
+    if tool.is_terminal:              # ← SDK v1.0.14 reads tool.is_terminal (client.py:2570, :3355)
+        definition["isTerminal"] = True
 ```
+
+> **Note the shape of the `is_terminal` read.** Unlike `defer` and `metadata`, which
+> the SDK guards with `is not None`, `is_terminal` is a bare **truthiness** gate. A
+> `False` default therefore omits the `"isTerminal"` key entirely, keeping the wire
+> payload byte-identical to pre-v1.0.14. The attribute must still **exist** — the
+> read is unconditional, so a wrapper lacking the field raises `AttributeError` on
+> every tool-forwarding turn, on both the create and resume paths.
 
 **Required attributes on each tool object:**
 - `name: str` — tool name
@@ -348,6 +357,7 @@ for tool in tools:
 - `handler: None` — **MUST exist** (SDK checks handler attribute); set to `None` so SDK skips handler registration (Amplifier handles tools at kernel layer)
 - `defer: Literal["auto", "never"] | None` — **MUST exist** (SDK v1.0.2 reads `tool.defer` when building tool definitions); set to `None` so the `defer` key is omitted from the wire payload (exact pre-v1.0.2 behavior). Amplifier pre-loads all tools at the kernel layer, so the SDK's lazy tool-search deferral stays off. Mirrors the SDK's own `copilot.tools.Tool.defer` field.
 - `metadata: dict[str, Any] | None` — **MUST exist** (SDK v1.0.7 reads `tool.metadata` when building tool definitions — `client.py:2182-2183` create, `:2858-2859` resume); set to `None` so the `metadata` key is omitted from the wire payload (exact pre-v1.0.7 behavior). Opaque host-defined tool metadata; Amplifier attaches none. Mirrors the SDK's own `copilot.tools.Tool.metadata` field (installed v1.0.7 `tools.py:78`).
+- `is_terminal: bool` — **MUST exist** (SDK v1.0.14 reads `tool.is_terminal` when building tool definitions — `client.py:2570` create, `:3355` resume); set to `False` so the `isTerminal` key is omitted from the wire payload (exact pre-v1.0.14 behavior). Amplifier owns turn control at the kernel layer and never delegates turn termination to the SDK. Mirrors the SDK's own `copilot.tools.Tool.is_terminal` field (installed v1.0.14 `tools.py:93`). **This read is a bare truthiness gate, not `is not None`** — see the note above the attribute list.
 
 **Implementation:** Use `SDKToolWrapper` dataclass from `sdk_adapter/types.py`:
 ```python
@@ -362,6 +372,7 @@ class SDKToolWrapper:
     handler: Any = None  # SDK checks this; None skips handler registration
     defer: Literal["auto", "never"] | None = None  # SDK v1.0.2 reads tool.defer; None = not deferred (omitted from wire)
     metadata: dict[str, Any] | None = None  # SDK v1.0.7 reads tool.metadata; None = omitted from wire (pre-v1.0.7 payload)
+    is_terminal: bool = False  # SDK v1.0.14 reads tool.is_terminal (truthiness, not `is not None`); False = omitted from wire (pre-v1.0.14 payload)
 
 def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:
     # Handles both ToolSpec objects (attribute access) and dicts

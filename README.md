@@ -388,7 +388,7 @@ For module structure, design decisions, and contract index see [docs/ARCHITECTUR
   metadata: the provider obtains the selected model's default-tier (or opted-in
   long-tier) prompt budget from SDK model discovery. They are not a per-request
   admission decision or a backend acceptance guarantee.
-- GitHub Copilot SDK 1.0.7 exposes experimental `context_info` and
+- GitHub Copilot SDK 1.0.14 exposes experimental `context_info` and
   `recompute_context_tokens` operations only for an already-created SDK
   session. They do not accept arbitrary next-request content, so this provider
   does not advertise a native `provider_count` preflight measurement.
@@ -548,7 +548,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk==1.0.7`
+- `github-copilot-sdk==1.0.14`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize
