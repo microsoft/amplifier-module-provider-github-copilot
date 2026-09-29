@@ -80,6 +80,19 @@ _TOOL_SEQUENCE_REPAIR_MESSAGE = (
     "Please acknowledge this and continue."
 )
 
+# The SDK delivers the whole serialized conversation as one user message. Without
+# this framing, models read the leading user request as the live instruction and
+# repeat tool calls whose results are already in the history.
+# Contract: provider-protocol:complete:MUST:15
+HISTORY_PREAMBLE = (
+    "The conversation so far follows, one block per message, each block starting "
+    "with a role marker. Tool Call entries are tool calls you already made, and "
+    "Tool Result entries are their completed results. Continue the conversation "
+    "as the assistant from the last block."
+)
+
+_HISTORY_ROLES: frozenset[str] = frozenset({"assistant", "tool"})
+
 _SUPPORTED_MESSAGE_ROLES: frozenset[str] = frozenset(
     {"user", "assistant", "system", "developer", "tool"}
 )
@@ -780,6 +793,7 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         return ""
 
     formatted_parts: list[str] = []
+    has_history = False
 
     for msg in messages:
         role = _message_role(msg)
@@ -814,6 +828,10 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         if message_parts:
             message_text = "\n".join(message_parts)
             formatted_parts.append(f"{role_marker}\n{message_text}")
+            has_history = has_history or role in _HISTORY_ROLES
+
+    if has_history:
+        formatted_parts.insert(0, HISTORY_PREAMBLE)
     return "\n\n".join(formatted_parts)
 
 

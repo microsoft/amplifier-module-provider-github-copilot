@@ -47,6 +47,12 @@ _TOKEN_ENV_VARS = ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "G
 _MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+\-]{0,127}$")
 _KNOWN_MOCK_MODEL_IDS = frozenset({"claude-opus-4.5", "claude-sonnet-4"})
 _VALID_FINISH_REASONS = frozenset({"stop", "tool_calls", "length", "content_filter"})
+# Comma-separated model IDs for the live tool round trip.
+_ROUND_TRIP_MODELS = tuple(
+    model.strip()
+    for model in os.environ.get("COPILOT_LIVE_ROUND_TRIP_MODELS", "gpt-6-sol").split(",")
+    if model.strip()
+)
 
 
 def _get_token() -> str:
@@ -398,6 +404,86 @@ class TestRealApiProof:
         )
         assert response.finish_reason == "tool_calls", (
             f"Tool-call completion must finish with 'tool_calls'; got {response.finish_reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model_id", _ROUND_TRIP_MODELS)
+    async def test_provider_tool_round_trip_ends_with_text(
+        self,
+        model_id: str,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """A tool result fed back through complete() MUST yield a final answer.
+
+        Mirrors the orchestrator: the first leg returns a bash call, the caller
+        runs it, and the second leg sends the call and its result as history.
+        With the history unframed, gpt-6-sol repeated the completed call on
+        every leg.
+
+        Contract: provider-protocol:complete:MUST:15
+        """
+        from amplifier_core import ChatRequest, Message, ToolCallBlock, ToolSpec
+
+        provider = _make_live_provider(live_client, monkeypatch)
+        available = {model.id for model in await provider.list_models()}
+        assert model_id in available, (
+            f"{model_id!r} is not available to this token; set "
+            f"COPILOT_LIVE_ROUND_TRIP_MODELS to models from {sorted(available)!r}"
+        )
+
+        tools = [
+            ToolSpec(
+                name="bash",
+                description="Run a bash command and return its output.",
+                parameters={
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            )
+        ]
+        user = Message(
+            role="user",
+            content=(
+                "Use the bash tool to run exactly this command: echo packaged-42   "
+                "Then reply with only the command's output."
+            ),
+        )
+
+        first = await provider.complete(
+            ChatRequest(model=model_id, messages=[user], tools=tools), _timeout_seconds=60.0
+        )
+        assert first.tool_calls, f"{model_id}: first leg returned no tool call"
+        call = first.tool_calls[0]
+        assert call.name == "bash", f"{model_id}: unexpected tool {call.name!r}"
+
+        history = [
+            user,
+            Message(
+                role="assistant",
+                content=[ToolCallBlock(id=call.id, name=call.name, input=call.arguments)],
+            ),
+            Message(
+                role="tool",
+                tool_call_id=call.id,
+                content='{"stdout": "packaged-42\\n", "stderr": "", "returncode": 0}',
+            ),
+        ]
+        second = await provider.complete(
+            ChatRequest(model=model_id, messages=history, tools=tools), _timeout_seconds=60.0
+        )
+
+        assert not second.tool_calls, (
+            f"{model_id}: repeated a completed tool call: "
+            f"{[(c.name, c.arguments) for c in second.tool_calls]!r}"
+        )
+        assert second.finish_reason == "stop", (
+            f"{model_id}: final leg must finish with 'stop'; got {second.finish_reason!r}"
+        )
+        assert "packaged-42" in (second.text or ""), (
+            f"{model_id}: final text lacks the tool output: {second.text!r}"
         )
 
 
