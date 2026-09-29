@@ -210,6 +210,10 @@ class TestF035P4ConfigurationError:
             "gpt-3.5-turbo does not support reasoning effort configuration",
             "Model configuration error: invalid parameter",
             "does not support extended thinking",
+            # SDK v1.0.15 send-time rejection, as surfaced by the SDK and by
+            # event_router's session.error handling.
+            "Session error: Execution failed: Reasoning effort 'high' is not "
+            "supported for model 'claude-haiku-4.5'.",
         ],
     )
     def test_config_error_patterns(

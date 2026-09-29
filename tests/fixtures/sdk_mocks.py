@@ -186,17 +186,21 @@ class MockSDKSession:
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        source: Any | None = None,
         mode: Any | None = None,
         agent_mode: Any | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: Any | None = None,
     ) -> str:
         """Send message and trigger events via handlers.
 
-        Signature mirrors the live SDK ``CopilotSession.send`` (v1.0.0b10):
-        ``mode``, ``agent_mode``, ``request_headers``, and ``display_prompt``
-        are accepted so tests that exercise the full call surface do not
-        silently lose data. ``display_prompt`` is the new b10 kwarg.
+        Signature mirrors the live SDK ``CopilotSession.send`` (v1.0.15):
+        ``source``, ``mode``, ``agent_mode``, ``request_headers``,
+        ``display_prompt``, and ``response_schema`` are accepted so tests that
+        exercise the full call surface do not silently lose data.
+        ``display_prompt`` was added in b10; ``source`` and ``response_schema``
+        in v1.0.15.
 
         SDK v0.2.0 API: send(prompt, attachments=...) replaces send({"prompt": ...})
 
@@ -360,17 +364,20 @@ class MockSDKSessionWithError(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        source: Any | None = None,
         mode: Any | None = None,
         agent_mode: Any | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: Any | None = None,
     ) -> str:
         """Send message but raise error after some events.
 
-        Signature mirrors the live SDK ``CopilotSession.send`` (v1.0.0b10);
-        ``mode`` / ``agent_mode`` / ``request_headers`` / ``display_prompt``
-        are accepted but unused by this fault injector — included so
-        error-path tests can pass the full kwarg set.
+        Signature mirrors the live SDK ``CopilotSession.send`` (v1.0.15);
+        ``source`` / ``mode`` / ``agent_mode`` / ``request_headers`` /
+        ``display_prompt`` / ``response_schema`` are accepted but unused by
+        this fault injector, included so error-path tests can pass the full
+        kwarg set.
 
         Args:
             prompt: The message prompt text.

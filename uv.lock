@@ -26,7 +26,7 @@ wheels = [
 
 [[package]]
 name = "amplifier-module-provider-github-copilot"
-version = "2.7.0"
+version = "2.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "github-copilot-sdk" },
@@ -47,7 +47,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "amplifier-core", marker = "extra == 'dev'", specifier = ">=1.3.0" },
-    { name = "github-copilot-sdk", specifier = "==1.0.7" },
+    { name = "github-copilot-sdk", specifier = "==1.0.15" },
     { name = "packaging", specifier = ">=20" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.350" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
@@ -204,7 +204,7 @@ toml = [
 
 [[package]]
 name = "github-copilot-sdk"
-version = "1.0.7"
+version = "1.0.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -212,7 +212,7 @@ dependencies = [
     { name = "python-dateutil" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/ec/734b0d28abbf7d26eb1a60810deedbcc0719910d64f018477010baf3e3f3/github_copilot_sdk-1.0.7-py3-none-any.whl", hash = "sha256:6f3e74e1779a4508dd6636e06fd0aa55eb6244805a66d61a4f21b30c958e2985", size = 421447, upload-time = "2026-07-16T15:21:04.636Z" },
+    { url = "https://files.pythonhosted.org/packages/14/7e/e6e926b3219cb95a501ad87d038c0257cf636d238f81ea44da9ff3db68f2/github_copilot_sdk-1.0.15-py3-none-any.whl", hash = "sha256:419162ec98b4a818c1a0d617fea0dd08345c24c5f2d4c29f38091ebd1b33e630", size = 704307, upload-time = "2026-09-28T19:33:55.654Z" },
 ]
 
 [[package]]

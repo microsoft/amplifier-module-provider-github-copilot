@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "2.7.0"
+version = "2.8.0"
 description = "GitHub Copilot provider for Amplifier - Two-Medium Architecture"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,7 +51,18 @@ dependencies = [
     #   every tool-forwarding turn raises AttributeError — same shape as the
     #   v1.0.2 `defer` regression. Also adds 6 new SessionEventType members
     #   (all DROP; see config/data/events.yaml). No other import shape changed.
-    "github-copilot-sdk==1.0.7",
+    # - v1.0.15 (stable; bundled CLI 1.0.89): the SDK `copilot.tools.Tool`
+    #   dataclass gains a trailing `is_terminal: bool = False` field, which
+    #   `copilot/client.py` reads by attribute in BOTH create_session and resume
+    #   (`if tool.is_terminal: definition["isTerminal"] = True`). Duck-typed
+    #   `SDKToolWrapper` MUST mirror it (see sdk_adapter/types.py) or every
+    #   tool-forwarding turn raises AttributeError (same shape as the v1.0.2
+    #   `defer` / v1.0.7 `metadata` regressions). Two new mode-gated
+    #   create_session defaults (`custom_agents_local_only`,
+    #   `enable_experimental_mode`) are pinned (MinimalMode:MUST:17-18).
+    #   `ReasoningEffort` Literal gains "max". Adds 40 new SessionEventType
+    #   members (all DROP; see config/data/events.yaml).
+    "github-copilot-sdk==1.0.15",
     # PyYAML for config loading
     "pyyaml>=6.0",
     # PEP 440 version parser used by the import-time SDK floor check

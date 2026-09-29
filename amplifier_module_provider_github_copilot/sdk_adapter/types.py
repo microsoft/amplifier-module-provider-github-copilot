@@ -231,6 +231,18 @@ class SDKToolWrapper:
     # on every tool-forwarding turn.
     # Contract: sdk-boundary:ToolForwarding:MUST:2
     metadata: dict[str, Any] | None = None
+    # SDK v1.0.15 reads tool.is_terminal when building tool definitions in BOTH
+    # create_session and resume (copilot/client.py:
+    # `if tool.is_terminal: definition["isTerminal"] = True`, immediately after
+    # the `metadata` block). Mirrors the SDK's own copilot.tools.Tool.is_terminal
+    # field type. False = the key is omitted from the wire payload, which is the
+    # exact pre-v1.0.15 behavior. A terminal tool asks the runtime to end the
+    # agent turn after a successful call; the provider never asks for that,
+    # because Amplifier's orchestrator owns tool execution and the SDK never
+    # executes a forwarded tool (deny-destroy:NoExecution:MUST:3). Without this
+    # attribute the SDK raises AttributeError on every tool-forwarding turn.
+    # Contract: sdk-boundary:ToolForwarding:MUST:2
+    is_terminal: bool = False
 
 
 def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:

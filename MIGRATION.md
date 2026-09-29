@@ -1,3 +1,53 @@
+# Migration Guide: v2.7.x → v2.8.0
+
+## Overview
+
+v2.8.0 advances the pinned `github-copilot-sdk` from `1.0.7` to `1.0.15` (stable;
+bundled CLI 1.0.89). The move is **wire-compatible for tool forwarding**: no public
+API, config key, env var, or CLI flag changes, and no action is required on upgrade.
+
+SDK surface changes absorbed by the provider:
+
+- **New `Tool.is_terminal` field.** SDK 1.0.15's `copilot.tools.Tool` dataclass gains
+  a trailing `is_terminal: bool = False` field, which `copilot/client.py` reads by
+  attribute in **both** `create_session` and `resume`
+  (`if tool.is_terminal: definition["isTerminal"] = True`). The provider hands the
+  SDK a duck-typed `SDKToolWrapper`, so the wrapper now mirrors that field with a
+  `False` default, which omits the `isTerminal` key and keeps the tool-forwarding
+  request byte-identical to 1.0.7. Same shape as the v1.0.2 `defer` and v1.0.7
+  `metadata` additions. Without it, every tool-forwarding turn would raise
+  `AttributeError`. The provider never marks a tool terminal: Amplifier's
+  orchestrator owns tool execution.
+- **Two new mode-gated session defaults pinned** (sdk-boundary MinimalMode:MUST:17-18):
+  `custom_agents_local_only=True` and `enable_experimental_mode=False`, mirroring
+  the SDK's own empty-mode defaults. Because `custom_agents_local_only` is non-None,
+  the SDK applies it with one extra `session.options.update` RPC after each session
+  is created.
+- **`ReasoningEffort` Literal gains `"max"`.** The provider's fallback allowlist
+  already accepted `"max"`, so behavior is unchanged; `"none"` is now the only
+  allowlist value outside the SDK Literal.
+- **40 new `SessionEventType` members**, all classified **DROP** (no kernel domain
+  mapping). 30 are listed explicitly in `config/data/events.yaml` (fusion,
+  auto-tier, workflow-run, model-call, MCP-server, sandbox, and UI telemetry, plus
+  `assistant.turn_retry`, `agent.interrupted`, `session.completion_receipt`); the
+  other 10 fall under the existing `permission.*`, `skill.*`, and `subagent.*`
+  wildcards.
+
+---
+
+## What Changed: SDK requirement is now `github-copilot-sdk==1.0.15`
+
+- **What:** The provider now pins `github-copilot-sdk==1.0.15` (was `==1.0.7`). The
+  import-time support floor is unchanged (`>=1.0.0`; pre-GA beta SDKs remain
+  unsupported).
+- **Action required:** none. A clean `pip install` of `2.8.0` pulls `1.0.15`
+  automatically via the `pyproject.toml` pin; `amplifier provider install --force
+  github-copilot` reinstalls the pinned SDK for an existing environment.
+- **Rollback:** if the previous SDK pin is required, pin
+  `amplifier-module-provider-github-copilot<2.8.0`.
+
+---
+
 # Migration Guide: v2.6.x → v2.7.0
 
 ## Overview

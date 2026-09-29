@@ -61,27 +61,32 @@ class CopilotSession:
     def on(
         self, handler: Callable[[Any], None]
     ) -> Callable[[], None]: ...
-    # from b10 session.py:L1185-L1194 — five keyword-only kwargs (display_prompt
-    # added in b10; SDKSurface:MUST:6 pins the full set).
+    # from v1.0.15 session.py:L1759-L1770: seven keyword-only kwargs
+    # (display_prompt added in b10; source and response_schema added in v1.0.15;
+    # SDKSurface:MUST:6 pins the full set).
     async def send(
         self,
         prompt: str,
         *,
         attachments: list[Any] | None = None,
+        source: Any | None = None,
         mode: Any | None = None,
         agent_mode: Any | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: Any | None = None,
     ) -> str: ...
     async def send_and_wait(
         self,
         prompt: str,
         *,
         attachments: list[Any] | None = None,
+        source: Any | None = None,
         mode: Any | None = None,
         agent_mode: Any | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: Any | None = None,
         timeout: float = 60.0,
     ) -> Any: ...
     async def disconnect(self) -> None: ...

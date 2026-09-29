@@ -245,6 +245,89 @@ event_classifications:
     - mcp.tools.list_changed
     - mcp.resources.list_changed
     - mcp.prompts.list_changed
+    # SDK v1.0.15 (bundled CLI 1.0.89): 40 new SessionEventType enum members
+    # since v1.0.7. All DROP: the provider's domain surface is single-completion
+    # + tool-call + usage + error + content-deltas; none of these carry a kernel
+    # domain mapping. Ten are already covered by the existing wildcards above:
+    # permission.assentDetected / .carriedForward / .contextualAuthorization /
+    # .messageAuthorization / .messageAuthorizationDegraded /
+    # .messageAuthorizationRead (permission.*), skill.context_delivered /
+    # .context_delivered_ref / .invoked_ref (skill.*), subagent.configured
+    # (subagent.*). The remaining 30 are listed explicitly:
+    #   assistant.turn_retry: extra model inference attempt inside an existing
+    #     turn (turn_id/model/reason). The retried output still arrives via the
+    #     bridged message/usage events; bridging this marker would add nothing.
+    #   agent.interrupted: user-interrupt telemetry (activity/elapsed/tool
+    #     names). The provider aborts sessions itself after tool capture; turn
+    #     completion and failures travel via session.idle / session.error.
+    #   model.call_start / model.call_finished: per-dispatch model lifecycle
+    #     telemetry; siblings of model.call_failure (DROP above). Usage rides
+    #     assistant.usage -> USAGE_UPDATE.
+    #   prompt_cache_break: prompt-cache loss diagnostics; no domain value.
+    #   session.completion_receipt: behavior-neutral record of runtime facts at
+    #     completion; TURN_COMPLETE already comes from assistant.message /
+    #     session.idle, so bridging would double-emit.
+    #   session.context_cleared: host-initiated history clear; the provider never
+    #     clears SDK history (ephemeral per-complete() sessions).
+    #   assistant.fusion_phase_started / _activity / _completed / _failed,
+    #     session.fusion_route_started / _route_failed / _resolved / _completed:
+    #     EXPERIMENTAL HydraFusion multi-model routing telemetry; the provider
+    #     selects models explicitly.
+    #   session.auto_tier_recommendation / session.auto_tier_switch_failed:
+    #     Auto-tier preference signals; siblings of auto_mode_switch.* and
+    #     session.auto_mode_resolved (DROP above).
+    #   session.model_deselected: explicit model withdrawn by its publishing host;
+    #     the provider passes the model on every create_session.
+    #   session.mode_notice_delivered: mode-transition notice bookkeeping for
+    #     resume; sibling of session.mode_changed (DROP above).
+    #   session.permission_recovery: Autopilot permission-recovery snapshot;
+    #     sibling of session.permissions_changed (DROP above). The provider
+    #     denies every permission request (deny-destroy).
+    #   sandbox.decision: process-sandbox governance record; the SDK executes no
+    #     tools under deny-destroy, so there is nothing to surface.
+    #   session.indexed_search: transient indexed-search diagnostics; Amplifier
+    #     owns retrieval (skip_embedding_retrieval=True).
+    #   session.managed_settings_enforced: enterprise-policy enforcement notice;
+    #     sibling of session.managed_settings_resolved (DROP above).
+    #   session.mcp_server_removed / session.mcp_server_needs_reconnect: MCP
+    #     server lifecycle; siblings of session.mcp_server_status_changed (DROP
+    #     above). mcp_servers={} (MinimalMode:MUST:3).
+    #   tool_search.activated: lazy tool-search activations restored on resume;
+    #     the provider sets defer=None on every tool and never resumes sessions.
+    #   ui.ephemeral_query: transient side-query output that does not modify
+    #     conversation history; no UI host.
+    #   workflow.run_started / _updated / _settled: ephemeral workflow-run
+    #     lifecycle signals; Amplifier orchestrates its own workflows.
+    - assistant.turn_retry
+    - agent.interrupted
+    - model.call_start
+    - model.call_finished
+    - prompt_cache_break
+    - session.completion_receipt
+    - session.context_cleared
+    - assistant.fusion_phase_started
+    - assistant.fusion_phase_activity
+    - assistant.fusion_phase_completed
+    - assistant.fusion_phase_failed
+    - session.fusion_route_started
+    - session.fusion_route_failed
+    - session.fusion_resolved
+    - session.fusion_completed
+    - session.auto_tier_recommendation
+    - session.auto_tier_switch_failed
+    - session.model_deselected
+    - session.mode_notice_delivered
+    - session.permission_recovery
+    - sandbox.decision
+    - session.indexed_search
+    - session.managed_settings_enforced
+    - session.mcp_server_removed
+    - session.mcp_server_needs_reconnect
+    - tool_search.activated
+    - ui.ephemeral_query
+    - workflow.run_started
+    - workflow.run_updated
+    - workflow.run_settled
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:

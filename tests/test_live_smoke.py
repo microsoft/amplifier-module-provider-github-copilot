@@ -262,7 +262,7 @@ def _bind_real_sdk_override_types(monkeypatch: pytest.MonkeyPatch) -> None:
     those types this raises ``TypeError: 'NoneType' object is not callable`` —
     a test-harness artifact, NOT a production defect. In production
     ``SKIP_SDK_CHECK`` is unset and ``_imports`` already holds the real classes
-    (verified against github-copilot-sdk==1.0.7). ``client.py`` looks these up
+    (verified against github-copilot-sdk==1.0.15). ``client.py`` looks these up
     via the membrane at call time, so patching ``_imports`` is sufficient.
 
     Fail-closed: uses ``require_sdk()`` (which fails, never skips, on a missing
@@ -341,6 +341,64 @@ class TestRealApiProof:
             "No tools were provided; live completion must not call tools"
         )
         _assert_response_usage(response.usage)
+
+    @pytest.mark.asyncio
+    async def test_provider_complete_forwards_tool_and_captures_tool_call(
+        self,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """Provider.complete() with a tool MUST build real SDK tool definitions
+        and return the captured tool call to the orchestrator.
+
+        This is the only live path that drives the SDK's real tool-definition
+        builder (``copilot/client.py`` reads every ``SDKToolWrapper`` attribute,
+        including ``defer`` / ``metadata`` / ``is_terminal``), so a wrapper
+        missing an SDK-read attribute fails here with ``AttributeError``.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+        Contract: deny-destroy:NoExecution:MUST:2
+        """
+        provider = _make_live_provider(live_client, monkeypatch)
+        models = await provider.list_models()
+        _assert_real_model_list(models)
+        model_id = models[0].id
+
+        request = SimpleNamespace(
+            model=model_id,
+            messages=[
+                SimpleNamespace(
+                    role="user",
+                    content="Call get_weather with city set to Paris. Do not reply with text.",
+                )
+            ],
+            tools=[
+                SimpleNamespace(
+                    name="get_weather",
+                    description="Get the current weather for a city.",
+                    parameters={
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                )
+            ],
+            max_output_tokens=256,
+            reasoning_effort=None,
+            context_tier=None,
+            metadata={"stream": False},
+        )
+
+        response = await provider.complete(request, model=model_id, _timeout_seconds=60.0)
+
+        assert response.tool_calls, "Live completion with a forwarded tool returned no tool calls"
+        assert response.tool_calls[0].name == "get_weather", (
+            f"Unexpected tool call name: {response.tool_calls[0].name!r}"
+        )
+        assert response.finish_reason == "tool_calls", (
+            f"Tool-call completion must finish with 'tool_calls'; got {response.finish_reason!r}"
+        )
 
 
 # =============================================================================
