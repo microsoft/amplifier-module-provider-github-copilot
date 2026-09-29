@@ -208,6 +208,54 @@ class TestExplicitDropEntriesEmitNoUnknownWarning:
             "mcp.tools.list_changed",
             "mcp.resources.list_changed",
             "mcp.prompts.list_changed",
+            # SDK v1.0.15 (bundled CLI 1.0.89) enum members added to the
+            # events.yaml DROP block. All lack a kernel domain mapping; see
+            # events.yaml for per-event rationale. turn_retry /
+            # completion_receipt / model.call_* are DROP so they do NOT
+            # double-emit TURN_COMPLETE / USAGE_UPDATE / ERROR; the rest are
+            # experimental fusion, auto-tier, MCP, sandbox, workflow, and UI
+            # telemetry. The wildcard-covered permission.* / skill.* /
+            # subagent.configured members are pinned by the last ten entries.
+            "assistant.turn_retry",
+            "agent.interrupted",
+            "model.call_start",
+            "model.call_finished",
+            "prompt_cache_break",
+            "session.completion_receipt",
+            "session.context_cleared",
+            "assistant.fusion_phase_started",
+            "assistant.fusion_phase_activity",
+            "assistant.fusion_phase_completed",
+            "assistant.fusion_phase_failed",
+            "session.fusion_route_started",
+            "session.fusion_route_failed",
+            "session.fusion_resolved",
+            "session.fusion_completed",
+            "session.auto_tier_recommendation",
+            "session.auto_tier_switch_failed",
+            "session.model_deselected",
+            "session.mode_notice_delivered",
+            "session.permission_recovery",
+            "sandbox.decision",
+            "session.indexed_search",
+            "session.managed_settings_enforced",
+            "session.mcp_server_removed",
+            "session.mcp_server_needs_reconnect",
+            "tool_search.activated",
+            "ui.ephemeral_query",
+            "workflow.run_started",
+            "workflow.run_updated",
+            "workflow.run_settled",
+            "permission.assentDetected",
+            "permission.carriedForward",
+            "permission.contextualAuthorization",
+            "permission.messageAuthorization",
+            "permission.messageAuthorizationDegraded",
+            "permission.messageAuthorizationRead",
+            "skill.context_delivered",
+            "skill.context_delivered_ref",
+            "skill.invoked_ref",
+            "subagent.configured",
         ],
     )
     def test_sdk_030_event_types_classified_without_warning(

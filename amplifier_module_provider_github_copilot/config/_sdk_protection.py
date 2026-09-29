@@ -26,7 +26,7 @@ __all__ = [
 class MinimalModeConfig:
     """Minimal mode session configuration policy.
 
-    Contract: sdk-boundary:MinimalMode:MUST:1-16
+    Contract: sdk-boundary:MinimalMode:MUST:1-18
 
     Disables SDK features that Amplifier handles, ensuring Amplifier is the sole
     orchestrator. Evidence: 57% wall-clock improvement (12.5s → 5.4s) confirmed
@@ -112,6 +112,26 @@ class MinimalModeConfig:
     # Value mirrors the SDK empty-mode default exactly (contract:
     # sdk-boundary:MinimalMode SDK-introspection closure).
     memory: dict[str, Any] = field(default_factory=lambda: {"enabled": False})
+
+    # MUST:17: Restrict custom-agent loading to local definitions only; Amplifier
+    # orchestrates agents (complements MUST:5 `custom_agents=[]`). Mode-gated
+    # create_session kwarg with empty-mode default helper
+    # `_custom_agents_local_only_default` (v1.0.15 `_mode.py:254-259`) that
+    # returns True ONLY when `mode == "empty"`. Under `mode="copilot-cli"` the
+    # helper returns None and the bundled-CLI default would otherwise apply.
+    # The SDK emits the value in the create payload and, because it is non-None,
+    # also applies it via one post-create `session.options.update` RPC
+    # (`_post_create_options_patch`, v1.0.15 `_mode.py:295-340`). Value mirrors
+    # the SDK empty-mode default.
+    custom_agents_local_only: bool = True
+
+    # MUST:18: Disable SDK experimental features; Amplifier needs a stable,
+    # reproducible runtime surface. Mode-gated create_session kwarg with
+    # empty-mode default helper `_enable_experimental_mode_default` (v1.0.15
+    # `_mode.py:262-267`) that returns False ONLY when `mode == "empty"`; under
+    # `mode="copilot-cli"` the runtime decides when omitted. Value mirrors the
+    # SDK empty-mode default.
+    enable_experimental_mode: bool = False
 
 
 @dataclass(frozen=True)

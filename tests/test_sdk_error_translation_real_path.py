@@ -235,8 +235,8 @@ class TestF078ContextWindowFromYaml:
 
         # Key assertion: context_window must exist
         assert "context_window" in config.defaults
-        # claude-opus-4.5 with 200000 context window
-        assert config.defaults["context_window"] == 200000
+        # Default model "auto" reports the 128000 policy fallback window
+        assert config.defaults["context_window"] == 128000
 
     def test_yaml_config_budget_calculation_succeeds(self) -> None:
         """Budget calculation should work with YAML config values.

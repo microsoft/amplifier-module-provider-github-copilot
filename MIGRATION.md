@@ -1,3 +1,79 @@
+# Migration Guide: v2.7.x → v2.8.0
+
+## Overview
+
+v2.8.0 advances the pinned `github-copilot-sdk` from `1.0.7` to `1.0.15` (stable;
+bundled CLI 1.0.89) and changes the packaged default model to `auto`. The SDK move is
+**wire-compatible for tool forwarding**: no public API, config key, env var, or CLI
+flag changes.
+
+SDK surface changes absorbed by the provider:
+
+- **New `Tool.is_terminal` field.** SDK 1.0.15's `copilot.tools.Tool` dataclass gains
+  a trailing `is_terminal: bool = False` field, which `copilot/client.py` reads by
+  attribute in **both** `create_session` and `resume`
+  (`if tool.is_terminal: definition["isTerminal"] = True`). The provider hands the
+  SDK a duck-typed `SDKToolWrapper`, so the wrapper now mirrors that field with a
+  `False` default, which omits the `isTerminal` key and keeps the tool-forwarding
+  request byte-identical to 1.0.7. Same shape as the v1.0.2 `defer` and v1.0.7
+  `metadata` additions. Without it, every tool-forwarding turn would raise
+  `AttributeError`. The provider never marks a tool terminal: Amplifier's
+  orchestrator owns tool execution.
+- **Two new mode-gated session defaults pinned** (sdk-boundary MinimalMode:MUST:17-18):
+  `custom_agents_local_only=True` and `enable_experimental_mode=False`, mirroring
+  the SDK's own empty-mode defaults. Because `custom_agents_local_only` is non-None,
+  the SDK applies it with one extra `session.options.update` RPC after each session
+  is created.
+- **`ReasoningEffort` Literal gains `"max"`.** The provider's fallback allowlist
+  already accepted `"max"`, so behavior is unchanged; `"none"` is now the only
+  allowlist value outside the SDK Literal.
+- **40 new `SessionEventType` members**, all classified **DROP** (no kernel domain
+  mapping). 30 are listed explicitly in `config/data/events.yaml` (fusion,
+  auto-tier, workflow-run, model-call, MCP-server, sandbox, and UI telemetry, plus
+  `assistant.turn_retry`, `agent.interrupted`, `session.completion_receipt`); the
+  other 10 fall under the existing `permission.*`, `skill.*`, and `subagent.*`
+  wildcards.
+
+### Also in this release: development dependency on `amplifier-core>=2.0.0`
+
+This affects contributors, not users: the provider does not install `amplifier-core`
+as a runtime dependency. The `dev` extra now requires 2.x, and `uv.lock` resolves
+2.0.1 rather than 1.3.3, so routine tests use the kernel shipped by the current
+Amplifier CLI. Contributors with an existing development environment should run
+`uv sync --extra dev`. No user action is required.
+
+---
+
+## What Changed: default model is now `auto`
+
+- **What:** The packaged default model (used when neither the request nor the
+  `default_model` config sets one) changes from `claude-opus-4.5` to `auto`,
+  Copilot's server-side router and the Copilot CLI's own default. Each turn is
+  dispatched to a concrete model chosen by the service. Because `auto`
+  advertises no limits, `get_info()` now reports `context_window=128000` and
+  `max_output_tokens=16384` for the default (was `200000` / `32000`), matching
+  the policy fallbacks the provider already applied to `auto` at runtime.
+  `auto` advertises no reasoning levels, so a `reasoning_effort` (caller value
+  or provider default) is dropped with a log once the model list is cached.
+- **Action required:** none for configurations that set `default_model` or pass
+  a model per request. To use a fixed model, set `default_model` to an explicit
+  model ID that `list_models()` reports.
+
+---
+
+## What Changed: SDK requirement is now `github-copilot-sdk==1.0.15`
+
+- **What:** The provider now pins `github-copilot-sdk==1.0.15` (was `==1.0.7`). The
+  import-time support floor is unchanged (`>=1.0.0`; pre-GA beta SDKs remain
+  unsupported).
+- **Action required:** none. A clean `pip install` of `2.8.0` pulls `1.0.15`
+  automatically via the `pyproject.toml` pin; `amplifier provider install --force
+  github-copilot` reinstalls the pinned SDK for an existing environment.
+- **Rollback:** if the previous SDK pin is required, pin
+  `amplifier-module-provider-github-copilot<2.8.0`.
+
+---
+
 # Migration Guide: v2.6.x → v2.7.0
 
 ## Overview

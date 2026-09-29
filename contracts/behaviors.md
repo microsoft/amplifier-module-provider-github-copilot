@@ -96,7 +96,9 @@ streaming:
 ```yaml
 provider:
   defaults:
-    model: "claude-opus-4.5"   # Default model
+    model: "auto"              # Default model: Copilot's server-side router
+    context_window: 128000     # Policy fallback: "auto" advertises no limits
+    max_output_tokens: 16384   # Policy fallback: "auto" advertises no limits
 
 models:
   - id: claude-opus-4.5

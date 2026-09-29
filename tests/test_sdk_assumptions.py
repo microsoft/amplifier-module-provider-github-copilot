@@ -109,6 +109,10 @@ class TestSDKImportAssumptions:
                 # pinning it here makes a future SDK rename/removal FAIL at this
                 # signature guard instead of silently escaping to live/prod.
                 "memory",
+                # v1.0.15 MinimalMode:MUST:17-18: the mode-gated
+                # `custom_agents_local_only` and `enable_experimental_mode` pins.
+                "custom_agents_local_only",
+                "enable_experimental_mode",
             }
         )
 
@@ -603,8 +607,8 @@ class TestReasoningEffortLiteralPin:
         ``frozenset(get_args(ReasoningEffort))``: every SDK Literal member must
         be present, and the only permitted extras are in ``_KNOWN_EXTRAS``.
 
-        The provider allowlist extends the v1.0.7 SDK Literal with ``"max"``
-        (advertised by the live list_models endpoint; absent from the v1.0.7
+        The provider allowlist extends the v1.0.15 SDK Literal with ``"none"``
+        (advertised by the live list_models endpoint; absent from the v1.0.15
         SDK Literal). Only values documented in
         ``_KNOWN_EXTRAS`` are allowed to differ from the SDK Literal — any
         unreviewed addition is a bug.
@@ -625,8 +629,8 @@ class TestReasoningEffortLiteralPin:
             _REASONING_EFFORT_FALLBACK_ALLOWLIST,
         )
 
-        # Values the provider forwards beyond the v1.0.7 SDK Literal.
-        _KNOWN_EXTRAS: frozenset[str] = frozenset({"none", "max"})
+        # Values the provider forwards beyond the v1.0.15 SDK Literal.
+        _KNOWN_EXTRAS: frozenset[str] = frozenset({"none"})
 
         sdk_members = frozenset(get_args(ReasoningEffort))
 
@@ -666,10 +670,10 @@ class TestReasoningEffortLiteralPin:
             f"'/'-joined reasoning= token is unambiguous; offenders: {bad!r}"
         )
 
-    def test_reasoning_effort_type_is_literal_4_values(self, sdk_module: Any) -> None:
-        """SDK ``ReasoningEffort`` MUST be a Literal with exactly 4 members.
+    def test_reasoning_effort_type_is_literal_5_values(self, sdk_module: Any) -> None:
+        """SDK ``ReasoningEffort`` MUST be a Literal with exactly 5 members.
 
-        Pins the v1.0.7 SDK surface {low, medium, high, xhigh}. The test goes
+        Pins the v1.0.15 SDK surface {low, medium, high, xhigh, max}. The test goes
         red if the installed SDK's ``ReasoningEffort`` Literal differs from that
         set, signalling that the provider allowlist and Layer-1 gate need
         re-evaluation against the changed SDK surface.
@@ -680,7 +684,7 @@ class TestReasoningEffortLiteralPin:
 
         from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
 
-        expected = frozenset({"low", "medium", "high", "xhigh"})
+        expected = frozenset({"low", "medium", "high", "xhigh", "max"})
         actual = frozenset(get_args(ReasoningEffort))
         assert get_origin(ReasoningEffort) is Literal, (
             f"ReasoningEffort is no longer a Literal; got {ReasoningEffort!r}. "
@@ -694,38 +698,9 @@ class TestReasoningEffortLiteralPin:
             f"Follow the migration steps in this test's docstring."
         )
 
-    def test_max_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
-        """Pins that ``"max"`` is advertised by the live GitHub Copilot endpoint
-        and is absent from the v1.0.7 SDK ``ReasoningEffort`` Literal.
-
-        The provider's ``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` includes ``"max"``
-        so cache-miss paths forward it to the SDK's Layer-2 backstop instead of
-        raising a ``ConfigurationError``.
-
-        Contract: provider-protocol:complete:MUST:11 (provider fallback allowlist)
-        """
-        from typing import get_args
-
-        from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
-
-        from amplifier_module_provider_github_copilot.request_adapter import (
-            _REASONING_EFFORT_FALLBACK_ALLOWLIST,
-        )
-
-        sdk_members = frozenset(get_args(ReasoningEffort))
-        assert "max" not in sdk_members, (
-            "SDK ReasoningEffort now includes 'max'. Delete this test, remove "
-            "'max' from _KNOWN_EXTRAS in test_fallback_allowlist_is_superset*, "
-            "and sync contracts/provider-protocol.md MUST:11."
-        )
-        assert "max" in _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
-            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'max'; the v1.0.7 "
-            "fallback path forwards it to the SDK Layer-2 backstop."
-        )
-
     def test_none_support_in_live_sdk_but_not_in_literal(self, sdk_module: Any) -> None:
         """Pins that ``"none"`` is advertised by the live GitHub Copilot endpoint
-        and is absent from the v1.0.7 SDK ``ReasoningEffort`` Literal.
+        and is absent from the v1.0.15 SDK ``ReasoningEffort`` Literal.
 
         The provider's ``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` includes ``"none"``
         so cache-miss paths forward it to the SDK's Layer-2 backstop instead of
@@ -748,7 +723,7 @@ class TestReasoningEffortLiteralPin:
             "and sync contracts/provider-protocol.md MUST:11."
         )
         assert "none" in _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
-            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'none'; the v1.0.7 "
+            "_REASONING_EFFORT_FALLBACK_ALLOWLIST must contain 'none'; the v1.0.15 "
             "fallback path forwards it to the SDK Layer-2 backstop."
         )
 
@@ -861,8 +836,9 @@ class TestCopilotSessionWorkspacePathIsCachedProperty:
 @pytest.mark.sdk_assumption
 class TestCopilotSessionSendSignaturePin:
     """``CopilotSession.send`` MUST accept exactly one positional argument
-    (``prompt``) and five keyword-only arguments (``attachments``, ``mode``,
-    ``agent_mode``, ``request_headers``, ``display_prompt``). The provider's
+    (``prompt``) and seven keyword-only arguments (``attachments``,
+    ``source``, ``mode``, ``agent_mode``, ``request_headers``,
+    ``display_prompt``, ``response_schema``). The provider's
     ``CopilotClientWrapper`` calls ``session.send(prompt, attachments=...)``;
     the in-tree mock at ``tests/fixtures/sdk_mocks.py`` mirrors the full
     surface so unit tests don't drift from production behaviour. If the SDK
@@ -905,7 +881,15 @@ class TestCopilotSessionSendSignaturePin:
 
         keyword_names = frozenset(p.name for p in keyword_only)
         expected = frozenset(
-            {"agent_mode", "attachments", "display_prompt", "mode", "request_headers"}
+            {
+                "agent_mode",
+                "attachments",
+                "display_prompt",
+                "mode",
+                "request_headers",
+                "response_schema",
+                "source",
+            }
         )
         assert keyword_names == expected, (
             f"CopilotSession.send keyword-only parameters drifted.\n"

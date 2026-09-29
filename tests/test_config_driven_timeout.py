@@ -134,10 +134,12 @@ class TestTimeoutEnforcement:
                 prompt: str,
                 *,
                 attachments: list[dict] | None = None,
+                source: object | None = None,
                 mode: object | None = None,
                 agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
                 display_prompt: str | None = None,
+                response_schema: object | None = None,
             ) -> str:
                 self.last_prompt = prompt
                 await asyncio.sleep(60)  # cancelled by asyncio.timeout()

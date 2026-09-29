@@ -127,10 +127,12 @@ class TestRetryWithEventualSuccess:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                source: object | None = None,
                 mode: object | None = None,
                 agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
                 display_prompt: str | None = None,
+                response_schema: object | None = None,
             ) -> str:
                 nonlocal attempt_count
                 attempt_count += 1
@@ -186,10 +188,12 @@ class TestRetryWithEventualSuccess:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                source: object | None = None,
                 mode: object | None = None,
                 agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
                 display_prompt: str | None = None,
+                response_schema: object | None = None,
             ) -> str:
                 nonlocal attempt_count
                 attempt_count += 1
@@ -670,10 +674,12 @@ class TestQueueFullHandling:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                source: object | None = None,
                 mode: object | None = None,
                 agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
                 display_prompt: str | None = None,
+                response_schema: object | None = None,
             ) -> str:
                 self.last_prompt = prompt
                 for event in flood_events:
@@ -738,10 +744,12 @@ class TestFakeToolDetectionRetry:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                source: object | None = None,
                 mode: object | None = None,
                 agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
                 display_prompt: str | None = None,
+                response_schema: object | None = None,
             ) -> str:
                 nonlocal correction_attempt
                 correction_attempt += 1
@@ -805,10 +813,12 @@ class TestFakeToolDetectionRetry:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                source: object | None = None,
                 mode: object | None = None,
                 agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
                 display_prompt: str | None = None,
+                response_schema: object | None = None,
             ) -> str:
                 nonlocal attempt
                 attempt += 1

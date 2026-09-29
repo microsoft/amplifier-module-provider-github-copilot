@@ -440,9 +440,9 @@ class TestResolveReasoningEffortGate:
         assert "brand-new-model" in msg
         assert "provider fallback allowlist" in msg
         # Must enumerate accepted values so the caller can self-correct.
-        # "none" and "max" are included because the fallback allowlist extends
-        # the v1.0.7 SDK literal with both (advertised by the live list_models
-        # endpoint; absent from the v1.0.7 SDK literal).
+        # "max" is a v1.0.15 SDK literal member; "none" is included because the
+        # fallback allowlist extends the v1.0.15 SDK literal with it (advertised
+        # by the live list_models endpoint; absent from the v1.0.15 SDK literal).
         for v in ("none", "low", "medium", "high", "xhigh", "max"):
             assert f"'{v}'" in msg
 
@@ -639,7 +639,7 @@ class TestResolveProviderDefaultEffort:
 
 class TestReasoningEffortNoneLevel:
     """The "none" effort level (advertised by some live models, absent from the
-    v1.0.7 SDK ``ReasoningEffort`` Literal) passes the universal shape gate and
+    v1.0.15 SDK ``ReasoningEffort`` Literal) passes the universal shape gate and
     is then governed by the per-model allowlist, exactly like "max".
 
     Contract: provider-protocol:complete:MUST:11
@@ -1172,17 +1172,23 @@ class TestProviderDropsUnsupportedCallerEffort:
 class TestLayer2SDKRejectMatchesErrorTranslation:
     """When Layer-1 is bypassed (cache miss with value in fallback allowlist,
     or stale cache for a model whose capability flipped server-side), the live
-    SDK rejects ``reasoning_effort`` with a ``JsonRpcError`` whose message
-    contains ``"does not support reasoning effort"``. The provider's
+    SDK rejects ``reasoning_effort``. Under SDK v1.0.15 ``create_session``
+    accepts the value and the first turn fails with a ``session.error`` whose
+    message is ``"Reasoning effort '<value>' is not supported for model
+    '<model>'."``; ``CopilotSession.send_and_wait`` surfaces it as
+    ``Exception("Session error: ...")``, the same shape the provider's
+    ``EventRouter`` builds from ``session.error``. The provider's
     ``error_translation`` (``errors.yaml:P4``) must map this to
     ``ConfigurationError``.
 
-    Drift detection: if the SDK changes the error wording, this test fails
-    and forces a synchronized update of the substring rule in ``errors.yaml``.
+    Drift detection: if the SDK changes the error wording or moves the
+    rejection back to ``create_session``, this test fails and forces a
+    synchronized update of the substring rule in ``errors.yaml``.
 
-    Mutation check: change the P4 ``substring_match`` to a different phrase
-    and this test goes red — the JsonRpcError falls through to the default
-    mapping (``ProviderUnavailableError``) instead of ``ConfigurationError``.
+    Mutation check: remove ``"is not supported for model"`` from the P4
+    ``string_patterns`` and this test goes red: the error falls through to the
+    default mapping (``ProviderUnavailableError``) instead of
+    ``ConfigurationError``.
 
     Contract: provider-protocol:complete:MUST:11 (Layer-2 backstop);
     error-hierarchy.md (translation policy).
@@ -1207,7 +1213,7 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
         if not token:
             pytest.fail(
                 "No GITHUB_TOKEN available; live Layer-2 test requires real "
-                "SDK auth. Tests run, not skip — set GITHUB_TOKEN."
+                "SDK auth. Tests run, not skip; set GITHUB_TOKEN."
             )
 
         from amplifier_core import llm_errors as kernel_errors
@@ -1231,53 +1237,42 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
         await client.start()
         captured_exc: Exception | None = None
         try:
+            # Provoke Layer-2: pass reasoning_effort to a model the backend
+            # rejects. claude-haiku-4.5 advertises supports_reasoning_effort=False.
+            # A create-time rejection here means the SDK moved the check back
+            # to session.create; let it propagate so the drift is visible.
+            session = await client.create_session(
+                model="claude-haiku-4.5",
+                streaming=True,
+                available_tools=[],
+                on_permission_request=deny_permission_request,
+                hooks=_make_deny_hook_config(),
+                reasoning_effort="high",
+            )
             try:
-                # Provoke Layer-2: pass reasoning_effort to a model the
-                # backend rejects. claude-haiku-4.5 advertises
-                # supports_reasoning_effort=False; this round-trips to the
-                # server which raises JsonRpcError.
-                session = await client.create_session(
-                    model="claude-haiku-4.5",
-                    streaming=True,
-                    available_tools=[],
-                    on_permission_request=deny_permission_request,
-                    hooks=_make_deny_hook_config(),
-                    reasoning_effort="high",
-                )
-                # If we got here the contract assumption is broken.
-                await session.disconnect()
+                await session.send_and_wait("Reply with one short word.", timeout=60.0)
                 pytest.fail(
-                    "Live SDK accepted reasoning_effort='high' on "
+                    "Live SDK completed a turn with reasoning_effort='high' on "
                     "claude-haiku-4.5; the backend behavior changed and the "
                     "Layer-2 backstop rule may be stale. Re-probe and update "
                     "errors.yaml:P4."
                 )
             except Exception as e:
                 captured_exc = e
+            finally:
+                await session.disconnect()
         finally:
             await client.stop()
 
-        # Live SDK raises ``copilot._jsonrpc.JsonRpcError``. The class is not
-        # re-exported at ``copilot`` root in b10, so the test imports from the
-        # underscored module directly and pins the exact type with isinstance —
-        # avoids the fragile-string-compare anti-pattern and makes a future
-        # rename or hierarchy change fail loud at this assertion.
-        from copilot._jsonrpc import JsonRpcError  # type: ignore[import-untyped]
-
-        assert isinstance(captured_exc, JsonRpcError), (
-            f"Live SDK raised {type(captured_exc).__name__} (msg: "
-            f"{captured_exc!r}); expected JsonRpcError. Either the SDK error "
-            f"hierarchy changed or the backend started rejecting via a "
-            f"different transport — investigate before updating this test."
-        )
+        assert captured_exc is not None
         original_msg = str(captured_exc)
         # Pin the substring our errors.yaml:P4 rule keys on. If the backend
         # rewords this message, this assertion fails BEFORE the translation
         # step, telling us exactly what to update.
-        assert "does not support reasoning effort" in original_msg, (
+        assert "is not supported for model" in original_msg, (
             f"Live SDK error message no longer contains the substring "
             f"errors.yaml:P4 keys on. Current message: {original_msg!r}. "
-            f"Update the substring_match rule and this assertion together."
+            f"Update the string_patterns rule and this assertion together."
         )
 
         # End-to-end Layer-2 translation: this is the round-trip the user
@@ -1289,12 +1284,13 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
             model="claude-haiku-4.5",
         )
         assert isinstance(translated, kernel_errors.ConfigurationError), (
-            f"errors.yaml:P4 substring rule failed to map live SDK "
-            f"JsonRpcError to ConfigurationError; got "
+            f"errors.yaml:P4 substring rule failed to map the live SDK "
+            f"send-time rejection to ConfigurationError; got "
             f"{type(translated).__name__} instead. This breaks the "
             f"Layer-1/Layer-2 same-class contract documented in "
             f"contracts/provider-protocol.md MUST:11."
         )
+        assert translated.retryable is False
         assert translated.__cause__ is captured_exc, (
             "ConfigurationError must chain the original SDK exception via "
             "`raise ... from exc` so traces preserve root cause."

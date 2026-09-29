@@ -459,14 +459,14 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
                 _check_sdk_version(stale)
             msg = str(exc_info.value)
             assert stale in msg, f"Error must echo installed version {stale!r}"
-            assert "1.0.7" in msg, "Error must state the pinned target version"
+            assert "1.0.15" in msg, "Error must state the pinned target version"
 
     def test_accepts_ga_and_above(self) -> None:
         """sdk-boundary:Membrane:MUST:5 — GA (1.0.0) and forward satisfy the floor.
 
         The floor is a support-policy floor at the GA line (1.0.0); the
         symbol-availability minimum (b10) sits below it, and the pyproject pin
-        is 1.0.7. GA and every later release must satisfy the floor.
+        is 1.0.15. GA and every later release must satisfy the floor.
         """
         from amplifier_module_provider_github_copilot import (
             _check_sdk_version,  # type: ignore[reportPrivateUsage]
@@ -1094,7 +1094,7 @@ class TestRuntimeConfigOverride:
         cached_config = load_models_config()
         # Cached config should still have original YAML default
         # (not mutated by either provider)
-        assert cached_config.defaults["model"] == "claude-opus-4.5"
+        assert cached_config.defaults["model"] == "auto"
 
     def test_get_info_reports_runtime_default_model(self) -> None:
         """get_info() defaults["model"] MUST reflect the runtime-configured model.
@@ -1202,10 +1202,10 @@ class TestRuntimeConfigOverride:
         # The process-wide lru_cached singleton must be untouched by provider1's
         # get_info() call.
         cached_config = load_models_config()
-        assert cached_config.defaults["model"] == "claude-opus-4.5"
+        assert cached_config.defaults["model"] == "auto"
 
         info2 = provider2.get_info()
-        assert info2.defaults["model"] == "claude-opus-4.5"
+        assert info2.defaults["model"] == "auto"
 
 
 # =============================================================================

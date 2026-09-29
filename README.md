@@ -109,7 +109,7 @@ providers:
   - module: provider-github-copilot
     source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
     config:
-      default_model: claude-opus-4.5
+      default_model: claude-opus-4.8
 ```
 
 ## Usage
@@ -127,7 +127,7 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.7; run `amplifier provider models github-copilot` for the live list. The Context column is the default-tier prompt window; models that advertise a larger long-context tier (shown as `long=` in the live list) are reached by enabling `enable_long_context`.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.15; run `amplifier provider models github-copilot` for the live list. The Context column is the default-tier prompt window; models that advertise a larger long-context tier (shown as `long=` in the live list) are reached by enabling `enable_long_context`.
 
 **Routing:**
 
@@ -187,12 +187,12 @@ providers:
   - module: provider-github-copilot
     name: github-copilot
     config:
-      default_model: claude-opus-4.5
+      default_model: auto
 ```
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `default_model` | `"claude-opus-4.5"` | Model used when the caller does not specify one. Any ID from `list_models()` is valid. |
+| `default_model` | `"auto"` | Model used when the caller does not specify one. Any ID from `list_models()` is valid. `auto` is Copilot's server-side router (the Copilot CLI's default): each turn goes to a model the service picks. It advertises no limits or reasoning levels, so the provider reports a conservative 128k context / 16k output, and a `reasoning_effort` is dropped for it once the model list is cached. Set an explicit model ID for a fixed window, reasoning control, or reproducible routing. |
 | `reasoning_effort` | `"model default"` | Reasoning effort forwarded to models that support it (e.g. `low`, `medium`, `high`). Both this default and a caller-supplied value are best-effort: forwarded when the model supports it, dropped (field omitted, server uses its own default) when it does not — so a global or inherited effort never breaks delegation to a non-reasoning model. A malformed value (typo, mixed-case) still raises `ConfigurationError`. `"model default"` or unset defers to the model. Run `amplifier provider models github-copilot` for each model's levels. |
 | `enable_long_context` | `false` | Default to the model's long-context tier when the caller does not set a `context_tier`. Forwarded to the SDK as `long_context`; ignored by models without a long tier. |
 | `raw` | `false` | Include raw SDK payloads as a `"raw"` field in `llm:request` / `llm:response` events. See [Raw Payload Logging](#raw-payload-logging). |
@@ -388,7 +388,7 @@ For module structure, design decisions, and contract index see [docs/ARCHITECTUR
   metadata: the provider obtains the selected model's default-tier (or opted-in
   long-tier) prompt budget from SDK model discovery. They are not a per-request
   admission decision or a backend acceptance guarantee.
-- GitHub Copilot SDK 1.0.7 exposes experimental `context_info` and
+- GitHub Copilot SDK 1.0.15 exposes experimental `context_info` and
   `recompute_context_tokens` operations only for an already-created SDK
   session. They do not accept arbitrary next-request content, so this provider
   does not advertise a native `provider_count` preflight measurement.
@@ -548,7 +548,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk==1.0.7`
+- `github-copilot-sdk==1.0.15`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize
