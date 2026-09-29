@@ -34,6 +34,14 @@ SDK surface changes absorbed by the provider:
   other 10 fall under the existing `permission.*`, `skill.*`, and `subagent.*`
   wildcards.
 
+### Also in this release: development dependency on `amplifier-core>=2.0.0`
+
+This affects contributors, not users: the provider does not install `amplifier-core`
+as a runtime dependency. The `dev` extra now requires 2.x, and `uv.lock` resolves
+2.0.1 rather than 1.3.3, so routine tests use the kernel shipped by the current
+Amplifier CLI. Contributors with an existing development environment should run
+`uv sync --extra dev`. No user action is required.
+
 ---
 
 ## What Changed: default model is now `auto`
