@@ -159,9 +159,7 @@ Models are discovered dynamically from the SDK at runtime — the list reflects 
 | `gpt-5.4` | 272k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.3-codex` | 272k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.4-mini` | 272k | 128k | streaming, tools, vision, thinking |
-| `gpt-5-mini` | 128k\* | 136k | streaming, tools, vision, thinking |
-
-> \* `gpt-5-mini`'s Max Output (136k) exceeds its Context value because the Context column is the default-tier prompt window, while Max Output is tier-invariant; the model's full token window is larger than the default-tier prompt budget.
+| `gpt-5-mini` | 128k | 64k | streaming, tools, vision, thinking |
 
 **Google:**
 

@@ -26,9 +26,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Supported cache schema version (S8 Fix: version was written but never checked on read).
-# Old caches without a version field are treated as "1.0" (backward compat).
-_SUPPORTED_CACHE_VERSION = "1.0"
+# Old caches contain limits derived from prompt/context subtraction, which can
+# be wrong even when Copilot advertises an explicit output limit.
+_SUPPORTED_CACHE_VERSION = "1.1"
 
 
 def _default_jitter() -> float:
@@ -111,7 +111,7 @@ def write_cache(
 
     # Build cache data structure
     cache_data = {
-        "version": "1.0",
+        "version": _SUPPORTED_CACHE_VERSION,
         "timestamp": time.time(),
         "models": [
             {
@@ -194,10 +194,8 @@ def read_cache(
         logger.warning("Failed to read cache: %s", redact_sensitive_text(e))
         return None
 
-    # S8: Validate cache schema version before parsing.
-    # Missing version treated as "1.0" (backward compat for pre-version caches).
-    # Mismatched version forces cache miss to avoid parsing unknown schemas.
-    cache_version = data.get("version", _SUPPORTED_CACHE_VERSION)
+    # Missing and 1.0 versions predate explicit output-limit discovery.
+    cache_version = data.get("version")
     if cache_version != _SUPPORTED_CACHE_VERSION:
         logger.debug(
             "Cache version %r unsupported (expected %r); ignoring",
@@ -241,10 +239,8 @@ def read_cache(
                     supports_reasoning_effort=m.get("supports_reasoning_effort", False),
                     supported_reasoning_efforts=tuple(m.get("supported_reasoning_efforts", [])),
                     default_reasoning_effort=m.get("default_reasoning_effort"),
-                    # Tier-budget fields are additive (cache version unchanged).
-                    # Pre-upgrade caches omit them: load as the 0 sentinel so
-                    # resolve_effective_window/get_info route to the static policy
-                    # window rather than the inflated display ceiling.
+                    # Missing tier-budget fields use the 0 sentinel so get_info()
+                    # uses static policy instead of the display ceiling.
                     context_window_default=m.get("context_window_default", 0),
                     context_window_long=m.get("context_window_long", 0),
                 )

@@ -100,8 +100,8 @@ def get_info(self) -> ProviderInfo: ...
   injecting (the loader is `@lru_cache`). This selects the REPORTED budget window; it does not change
   SDK capacity (see `complete:MUST:13`).
 - **MUST** report `defaults.max_output_tokens` as the resolved model's single
-  `CopilotModelInfo.max_output_tokens`, derived once at translation per `sdk-boundary` §Limit
-  Derivation (`max_context_window_tokens - max_prompt_tokens`). It is **tier-invariant** — **NOT**
+  `CopilotModelInfo.max_output_tokens`, selected once at translation per `sdk-boundary` §Limit
+  Selection (explicit advertised value, then derivation/fallback). It is **tier-invariant** — **NOT**
   tier-selected: the SDK billing surface exposes per-tier prompt budgets only
   (`billing.token_prices.context_max` / `.long_context.context_max`), with no per-tier
   `max_output_tokens`, so the same value is reported for both tiers (this forwarded value stays a hint,

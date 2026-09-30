@@ -37,7 +37,7 @@ from amplifier_module_provider_github_copilot.models import CopilotModelInfo
 def make_cache_data(model_id: str = "claude-sonnet-4-5") -> dict[str, Any]:
     """Create mock cache data for testing."""
     return {
-        "version": "1.0",
+        "version": "1.1",
         "timestamp": time.time(),
         "models": [
             {
@@ -325,7 +325,7 @@ class TestCachePolicy:
         # Item one second inside the jittered window: fresh.
         fresh_age = effective_ttl - 1
         fresh_data: dict[str, Any] = {
-            "version": "1.0",
+            "version": "1.1",
             "timestamp": time.time() - fresh_age,
             "models": [
                 {
@@ -585,7 +585,7 @@ class TestReadCacheErrorHandling:
         # Contract: behaviors:ModelDiscoveryError:MUST:1
         """
         cache_file = tmp_path / "missing_models.json"
-        cache_data = '{"version": "1.0", "timestamp": ' + str(time.time()) + "}"
+        cache_data = '{"version": "1.1", "timestamp": ' + str(time.time()) + "}"
         cache_file.write_text(cache_data, encoding="utf-8")
 
         result = read_cache(cache_file=cache_file)
@@ -725,7 +725,7 @@ class TestReadCachePartialRecovery:
         """
         cache_data = {
             "timestamp": time.time(),
-            "version": "1.0",
+            "version": "1.1",
             "models": [
                 {
                     "id": "good-model",
@@ -783,7 +783,7 @@ class TestReadCachePartialRecovery:
         """
         cache_data = {
             "timestamp": time.time(),
-            "version": "1.0",
+            "version": "1.1",
             "models": [
                 {
                     "id": "model-a",
@@ -817,13 +817,13 @@ class TestReadCacheVersionCheck:
     """
 
     def test_supported_version_accepted(self, tmp_path: Path) -> None:
-        """Cache with version='1.0' is accepted and parsed normally.
+        """Cache with version='1.1' is accepted and parsed normally.
 
         # Contract: behaviors:ModelCache:SHOULD:2
         """
         cache_data = {
             "timestamp": time.time(),
-            "version": "1.0",
+            "version": "1.1",
             "models": [
                 {
                     "id": "model-v1",
@@ -867,8 +867,8 @@ class TestReadCacheVersionCheck:
         # Version mismatch → cache miss → force live API call
         assert result is None
 
-    def test_missing_version_treated_as_supported(self, tmp_path: Path) -> None:
-        """Old caches without 'version' field are treated as '1.0' (backward compat).
+    def test_missing_version_forces_refresh(self, tmp_path: Path) -> None:
+        """Pre-versioned caches may contain wrong derived limits; force a refresh.
 
         # Contract: behaviors:ModelCache:SHOULD:2
         """
@@ -889,10 +889,16 @@ class TestReadCacheVersionCheck:
 
         result = read_cache(cache_file=cache_file)
 
-        # Missing version defaults to "1.0" → accepted (backward compat)
-        assert isinstance(result, list)
-        assert len(result) == 1
-        assert result[0].id == "legacy-model"
+        assert result is None
+
+    def test_old_derived_limit_cache_forces_refresh(self, tmp_path: Path) -> None:
+        data = make_cache_data("claude-opus-5.5")
+        data["version"] = "1.0"
+        data["models"][0]["max_output_tokens"] = 16_384
+        cache_file = tmp_path / "old_output_limits.json"
+        cache_file.write_text(json.dumps(data), encoding="utf-8")
+
+        assert read_cache(cache_file) is None
 
     @pytest.mark.parametrize("bad_version", [None, 123, "1..0", "", "2.0"])
     def test_malformed_or_unsupported_version_returns_none(
@@ -997,8 +1003,8 @@ class TestTierWindowCacheRoundTrip:
         assert result[0].context_window_default == 200_000
         assert result[0].context_window_long == 936_000
 
-    def test_old_cache_without_new_fields_loads(self, tmp_path: Path) -> None:
-        # A cache written by a prior provider version has no tier-budget keys.
+    def test_current_cache_without_tier_fields_loads(self, tmp_path: Path) -> None:
+        # A partial cache at the current version still uses the tier 0-sentinel.
         cache_file = tmp_path / "models_cache.json"
         cache_file.write_text(json.dumps(make_cache_data("claude-opus-4.5")), encoding="utf-8")
 
@@ -1008,7 +1014,7 @@ class TestTierWindowCacheRoundTrip:
         assert len(result) == 1
         # Missing tier keys load as the 0 sentinel (not the display ceiling), so
         # get_info routes to the static policy window instead of over-reporting
-        # the budget. version stays "1.0" — additive fields, no bump.
+        # the budget.
         info = result[0]
         assert info.context_window_default == 0
         assert info.context_window_long == 0

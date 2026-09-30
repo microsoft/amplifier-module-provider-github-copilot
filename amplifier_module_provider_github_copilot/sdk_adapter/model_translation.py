@@ -89,7 +89,8 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
 
     Contract: sdk-boundary:ModelDiscovery:MUST:2
     - MUST extract context_window from SDK capabilities.limits.max_context_window_tokens
-    - MUST derive max_output_tokens as context_window - max_prompt_tokens
+    - MUST prefer the SDK's advertised max_output_tokens when available;
+      otherwise derive it as context_window - max_prompt_tokens
 
     This function lives inside the membrane (sdk_adapter/) because it directly
     accesses SDK object structure via duck-typing.
@@ -128,11 +129,17 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
             context_window = limits.max_context_window_tokens
             max_prompt_tokens = limits.max_prompt_tokens
 
-            if context_window is None:
+            # Typed RPC models use 0 for unknown windows (notably "auto").
+            if context_window is None or context_window <= 0:
                 context_window = get_default_context_window()
 
-        # Derive max_output_tokens: context_window - max_prompt_tokens
-        if limits is not None and max_prompt_tokens is not None:
+        # The SDK's convenience list_models() discards max_output_tokens.
+        # The public typed RPC retains it, even for models whose prompt budget
+        # equals the context ceiling (where subtraction incorrectly yields 0).
+        advertised_output = getattr(limits, "max_output_tokens", None)
+        if isinstance(advertised_output, int) and advertised_output > 0:
+            max_output_tokens = advertised_output
+        elif limits is not None and max_prompt_tokens is not None:
             max_output_tokens = context_window - max_prompt_tokens
         else:
             max_output_tokens = get_default_max_output_tokens()
