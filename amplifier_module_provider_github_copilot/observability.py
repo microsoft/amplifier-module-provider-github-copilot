@@ -156,7 +156,7 @@ class LlmLifecycleContext:
         message_count: int,
         tool_count: int,
         streaming: bool,
-        timeout: float,
+        timeout: float | None,
         raw_request: dict[str, Any] | None = None,
     ) -> None:
         """Emit llm:request event.

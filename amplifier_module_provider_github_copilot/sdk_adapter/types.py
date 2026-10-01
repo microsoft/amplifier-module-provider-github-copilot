@@ -6,6 +6,7 @@ SDK types MUST NOT leak outside this module.
 Contract: contracts/sdk-boundary.md
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -71,9 +72,16 @@ class SessionHandle:
         session_id: Opaque string identifier for the session
     """
 
-    __slots__ = ("_raw_session", "session_id")
+    __slots__ = ("_raw_session", "session_id", "_ping", "_connection_check_interval")
 
-    def __init__(self, raw_session: Any, session_id: str | None = None) -> None:
+    def __init__(
+        self,
+        raw_session: Any,
+        session_id: str | None = None,
+        *,
+        ping: Callable[[], Awaitable[Any]] | None = None,
+        connection_check_interval: float = 1.0,
+    ) -> None:
         """Create a session handle wrapping a raw SDK session.
 
         Args:
@@ -82,6 +90,23 @@ class SessionHandle:
         """
         self._raw_session = raw_session
         self.session_id = session_id or getattr(raw_session, "session_id", "unknown")
+        self._ping = ping
+        self._connection_check_interval = connection_check_interval
+
+    async def wait_for_disconnect(self) -> None:
+        """Watch real SDK connection errors without imposing any response deadline.
+
+        Copilot's public ping uses the JSON-RPC client's unlimited default wait.
+        A slow ping is not treated as failure. Pipe closure or a failed write
+        raises; a successful ping merely schedules the next check. Cancellation
+        removes any pending SDK request through its normal finally cleanup.
+        """
+        if self._ping is None:
+            await asyncio.Event().wait()
+            return
+        while True:
+            await self._ping()
+            await asyncio.sleep(self._connection_check_interval)
 
     def on(self, handler: Callable[[Any], None]) -> Callable[[], None]:
         """Subscribe to session events.

@@ -1,6 +1,6 @@
 """Tests for timeout enforcement on the real SDK path.
 
-Contract: Provider operations must not block indefinitely.
+Contract: Only explicitly configured completion deadlines are enforced.
 
 Tests verify:
 - SDK streaming iteration is wrapped in asyncio.timeout
@@ -99,10 +99,7 @@ class TestTimeoutEnforcement:
 
         config = _load_models_config()  # type: ignore[no-untyped-call]
 
-        # Config should have a timeout in defaults (or we use fallback)
-        timeout = config.defaults.get("timeout", 120)  # 120s default
-        assert isinstance(timeout, (int, float))
-        assert timeout > 0  # Positive timeout
+        assert config.defaults["timeout"] is None
 
     @pytest.mark.asyncio
     async def test_normal_completion_succeeds_within_timeout(self) -> None:

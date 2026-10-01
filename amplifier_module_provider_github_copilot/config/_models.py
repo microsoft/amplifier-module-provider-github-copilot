@@ -32,7 +32,8 @@ PROVIDER: dict = {
     "defaults": {
         "model": "auto",
         "max_tokens": 4096,
-        "timeout": 3600,
+        # Healthy generation has no implicit elapsed-time deadline.
+        "timeout": None,
         "context_window": 128000,
         "max_output_tokens": 16384,
     },

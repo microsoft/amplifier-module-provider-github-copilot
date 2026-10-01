@@ -25,7 +25,9 @@ import asyncio
 import logging
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
+from inspect import iscoroutinefunction
 from typing import Any, cast
 
 from amplifier_core import (
@@ -586,6 +588,8 @@ class GitHubCopilotProvider:
         # are already corrected for the effective model just below.
         # Contract: provider-protocol:get_info:MUST:2
         defaults["model"] = self._effective_default_model
+        configured_timeout = self.config.get("timeout", defaults["timeout"])
+        defaults["timeout"] = None if configured_timeout is None else float(configured_timeout)
         # Report the default model's tier-selected PROMPT budget so Amplifier's
         # compaction math matches the active context tier. Cold cache (model not
         # yet discovered) keeps the static fallback from config/_models.py.
@@ -800,10 +804,11 @@ class GitHubCopilotProvider:
         async with llm_lifecycle(self.coordinator, model, raw=self._raw) as ctx:
             # Real SDK path: use client wrapper with STREAMING
             # Three-Medium: timeout from YAML config
-            timeout_seconds: float = kwargs.get(
+            configured_timeout = kwargs.get(
                 "_timeout_seconds",
-                float(self._provider_config.defaults["timeout"]),
+                self.config.get("timeout", self._provider_config.defaults["timeout"]),
             )
+            timeout_seconds = None if configured_timeout is None else float(configured_timeout)
 
             retry_config = self._retry_config
 
@@ -973,11 +978,6 @@ class GitHubCopilotProvider:
                 )
                 accumulator = StreamingAccumulator()
 
-                # Three-Medium: timeout from YAML config
-                timeout_seconds_retry: float = kwargs.get(
-                    "_timeout_seconds",
-                    float(self._provider_config.defaults["timeout"]),
-                )
                 try:
                     # Note: attachments=None for correction - the model already saw the image
                     # Correction responses only need to produce a structured tool call —
@@ -992,7 +992,7 @@ class GitHubCopilotProvider:
                         client=self._client,
                         model=model,
                         prompt=corrected_prompt,
-                        timeout=timeout_seconds_retry,
+                        timeout=timeout_seconds,
                         event_config=event_config,
                         accumulator=accumulator,
                         tools=internal_request.tools or None,
@@ -1151,7 +1151,7 @@ class GitHubCopilotProvider:
         client: CopilotClientWrapper,
         model: str,
         prompt: str,
-        timeout: float,
+        timeout: float | None,
         event_config: EventConfig,
         accumulator: StreamingAccumulator,
         tools: list[Any] | None = None,
@@ -1178,7 +1178,7 @@ class GitHubCopilotProvider:
         """
         # DEBUG: Log entry point with key parameters
         logger.debug(
-            "[SDK_COMPLETION] Starting: model=%s, prompt_len=%d, timeout=%.1f, "
+            "[SDK_COMPLETION] Starting: model=%s, prompt_len=%d, timeout=%s, "
             "tools=%d, attachments=%d, idle_events=%s, system_message_len=%d",
             model,
             len(prompt),
@@ -1261,6 +1261,21 @@ class GitHubCopilotProvider:
                 )
 
                 unsubscribe = sdk_session.on(event_handler)
+                # The SDK's public send() acknowledges submission, so pipe failure
+                # afterwards may not emit session.error. A separate public ping
+                # watcher detects real connection failure without a generation deadline.
+                connection_task: asyncio.Task[None] | None = None
+                watch_connection = getattr(sdk_session, "wait_for_disconnect", None)
+                if iscoroutinefunction(watch_connection):
+                    async def watch() -> None:
+                        try:
+                            await watch_connection()
+                        except Exception as exc:
+                            if not idle_event.is_set():
+                                error_holder.append(exc)
+                                idle_event.set()
+
+                    connection_task = asyncio.create_task(watch())
                 try:
                     # Record TTFT start time before send
                     # Contract: behaviors:Streaming:MUST:1
@@ -1391,8 +1406,24 @@ class GitHubCopilotProvider:
                         stream_ctx.signal_done()
                         if consumer_task is not None:
                             await consumer_task
+                except asyncio.CancelledError:
+                    # User cancellation and explicit caller deadlines terminate
+                    # native work too; cleanup bounds do not limit healthy generation.
+                    try:
+                        await asyncio.wait_for(
+                            sdk_session.abort(),
+                            timeout=sdk_protection.session.abort_timeout_seconds,
+                        )
+                    except Exception:
+                        logger.debug("[provider] Abort during cancellation failed; disconnecting")
+                    raise
                 finally:
                     unsubscribe()
+                    for task in (connection_task, consumer_task):
+                        if task is not None:
+                            task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await task
 
     # =========================================================================
     # Progressive Streaming Emission
