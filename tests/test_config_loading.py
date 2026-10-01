@@ -53,7 +53,7 @@ class TestLoadModelsConfig:
 
         config = _load_models_config()
         assert config.provider_id == "github-copilot"
-        assert config.defaults["model"] == "claude-opus-4.5"
+        assert config.defaults["model"] == "auto"
         assert config.defaults["timeout"] is None
 
     # NOTE: Fallback tests removed - config validation now uses fail-fast pattern.
@@ -67,14 +67,14 @@ class TestProviderUsesYamlConfig:
     def test_get_info_sourced_from_yaml(self) -> None:
         """Provider.get_info() values come from YAML, not hardcoded strings.
 
-        Updated to expect claude-opus-4.5 as default model.
+        The packaged default model is "auto" (Copilot's server-side router).
         """
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
         info = provider.get_info()
         assert info.id == "github-copilot"
-        assert info.defaults.get("model") == "claude-opus-4.5"
+        assert info.defaults.get("model") == "auto"
 
     @pytest.mark.asyncio
     async def test_list_models_sourced_from_sdk(self) -> None:
@@ -196,6 +196,6 @@ class TestModelsYamlDefaultValues:
         config = load_models_config()
 
         # Values should match config/_models.py
-        assert config.defaults["model"] == "claude-opus-4.5"
+        assert config.defaults["model"] == "auto"
         assert config.defaults["timeout"] is None
-        assert config.defaults["context_window"] == 200000
+        assert config.defaults["context_window"] == 128000

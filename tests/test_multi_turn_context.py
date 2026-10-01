@@ -850,3 +850,88 @@ class TestContentExtractionEdgeCases:
             f"Prompt was: {prompt!r}"
         )
         assert "file contents here" in prompt
+
+
+class TestHistoryPreamble:
+    """A prompt carrying prior assistant or tool turns is framed as history.
+
+    The SDK delivers the serialized conversation as one user message. Unframed,
+    gpt-6-sol, gpt-6-luna, and gpt-5.6-terra read the leading user request as the
+    live instruction and repeated a tool call whose result was already present.
+
+    Contract: provider-protocol:complete:MUST:15
+    """
+
+    @pytest.mark.asyncio
+    async def test_tool_round_trip_prompt_starts_with_history_preamble(self) -> None:
+        """The orchestrator's second leg reaches the SDK framed as completed history."""
+        from amplifier_core import ChatRequest, Message, ToolCallBlock
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+        from amplifier_module_provider_github_copilot.request_adapter import HISTORY_PREAMBLE
+        from tests.fixtures.sdk_mocks import MockCopilotClientWrapper, text_delta_event
+
+        client = MockCopilotClientWrapper(events=[text_delta_event("packaged-42")])
+        provider = GitHubCopilotProvider(client=client)  # type: ignore[arg-type]
+        request = ChatRequest(
+            model="gpt-6-sol",
+            messages=[
+                Message(role="user", content="Run echo packaged-42 and reply with its output."),
+                Message(
+                    role="assistant",
+                    content=[
+                        ToolCallBlock(
+                            id="call-1", name="bash", input={"command": "echo packaged-42"}
+                        )
+                    ],
+                ),
+                Message(role="tool", tool_call_id="call-1", content='{"stdout": "packaged-42"}'),
+            ],
+        )
+
+        await provider.complete(request)
+
+        session = client.session_instance
+        assert session is not None
+        prompt = session.last_prompt
+        assert prompt is not None
+        assert prompt.startswith(HISTORY_PREAMBLE + "\n\n[USER]\n")
+        assert prompt.count(HISTORY_PREAMBLE) == 1
+        assert prompt.index("[Tool Call (id=call-1") < prompt.index("[Tool Result (id=call-1)")
+
+    @pytest.mark.parametrize("role", ["assistant", "tool"])
+    def test_any_assistant_or_tool_block_adds_preamble(self, role: str) -> None:
+        """Either history role alone is enough to frame the prompt."""
+        from amplifier_module_provider_github_copilot.request_adapter import HISTORY_PREAMBLE
+
+        message: dict[str, Any] = {"role": role, "content": "earlier"}
+        if role == "tool":
+            message["tool_call_id"] = "call-1"
+        request = MockChatRequest(
+            messages=[MockMessage(role="user", content="first"), message]  # type: ignore[list-item]
+        )
+
+        assert _extract_prompt_from_chat_request(request).startswith(HISTORY_PREAMBLE + "\n\n")
+
+    def test_user_and_developer_only_prompt_has_no_preamble(self) -> None:
+        """A first-leg prompt is unchanged: nothing to frame without prior turns."""
+        request = MockChatRequest(
+            messages=[
+                MockMessage(role="system", content="System"),
+                MockMessage(role="developer", content="Guidance"),
+                MockMessage(role="user", content="Hello"),
+            ]
+        )
+
+        prompt = _extract_prompt_from_chat_request(request)
+
+        assert prompt == "[DEVELOPER]\nGuidance\n\n[USER]\nHello"
+
+    def test_preamble_contains_no_role_marker(self) -> None:
+        """The preamble cannot be mistaken for a role block."""
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _ROLE_INJECTION_PATTERN,  # type: ignore[reportPrivateUsage]
+            HISTORY_PREAMBLE,
+        )
+
+        assert not _ROLE_INJECTION_PATTERN.search(HISTORY_PREAMBLE)

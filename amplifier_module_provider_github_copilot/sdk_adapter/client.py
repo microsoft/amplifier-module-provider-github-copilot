@@ -102,6 +102,10 @@ def _minimal_mode_session_config() -> dict[str, Any]:
         # MUST:16 — v1.0.2 mode-gated 'memory' kwarg; pinned off (mirrors the
         # SDK empty-mode default {"enabled": False}).
         "memory": dict(minimal_mode.memory),
+        # MUST:17-18: v1.0.15 mode-gated kwargs; pinned to the SDK empty-mode
+        # defaults (local-only custom agents, experimental mode off).
+        "custom_agents_local_only": minimal_mode.custom_agents_local_only,
+        "enable_experimental_mode": minimal_mode.enable_experimental_mode,
     }
 
 
@@ -283,6 +287,9 @@ class CopilotClientWrapper:
         self._provider_paths: Any = provider_paths
         # Lock prevents race conditions on lazy init
         self._client_lock: asyncio.Lock = asyncio.Lock()
+        # Typed RPC lacks CopilotClient.list_models()'s per-client cache/lock.
+        self._model_list_lock: asyncio.Lock = asyncio.Lock()
+        self._model_list_cache: list[Any] | None = None
         self._disconnect_failures: int = 0  # Track disconnect failures for escalation
         self._stopped: bool = False  # Track whether client has been stopped
         self._copilot_pid: int | None = None  # SDK subprocess PID for log correlation
@@ -748,6 +755,7 @@ class CopilotClientWrapper:
         timed out or raised is never retried on a second close().
         """
         self._stopped = True  # Mark as stopped so is_healthy() returns False
+        self._model_list_cache = None
         owned_client = self._owned_client
         if owned_client is None:
             return
@@ -774,10 +782,12 @@ class CopilotClientWrapper:
         """Fetch available models from SDK backend.
 
         Contract: sdk-boundary:Models:MUST:1
-        - SDK CopilotClient.list_models() returns list[ModelInfo]
+        - SDK typed rpc.models.list() retains the advertised output limit
+        - Cache one successful typed RPC per wrapper, as CopilotClient.list_models()
+          does for its parsed (but incomplete) response
 
         Returns:
-            List of SDK ModelInfo objects (translation to domain types
+            List of SDK typed Model objects (translation to domain types
             happens in models.py).
 
         Raises:
@@ -786,10 +796,17 @@ class CopilotClientWrapper:
         # Use extracted helper for lazy initialization (prevents duplication)
         client = await self._ensure_client_initialized(caller="list_models")
 
-        try:
-            models = await client.list_models()  # type: ignore[union-attr]
-            logger.debug("[CLIENT] Fetched %d models from SDK", len(models))
-            return list(models)
-        except Exception as e:
-            error_config = self._get_error_config()
-            raise self._get_translate_error()(e, error_config) from e
+        async with self._model_list_lock:
+            if self._model_list_cache is not None:
+                return list(self._model_list_cache)
+            try:
+                from . import _imports
+
+                response = await client.rpc.models.list(_imports.make_models_list_request())
+                models = list(response.models)
+                self._model_list_cache = models
+                logger.debug("[CLIENT] Fetched %d models from SDK", len(models))
+                return list(models)
+            except Exception as e:
+                error_config = self._get_error_config()
+                raise self._get_translate_error()(e, error_config) from e

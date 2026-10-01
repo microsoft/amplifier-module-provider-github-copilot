@@ -46,7 +46,7 @@ class TestConfigValidationFailFast:
         with patch(f"{_MODELS_MODULE}.MODELS", [], create=True):
             cfg = load_models_config()
         assert cfg.provider_id == "github-copilot"
-        assert cfg.defaults["model"] == "claude-opus-4.5"
+        assert cfg.defaults["model"] == "auto"
         load_models_config.cache_clear()
 
     def test_configuration_error_includes_provider_id(self) -> None:

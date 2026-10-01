@@ -33,10 +33,10 @@ logger = logging.getLogger(__name__)
 # Provider reasoning-effort levels in ascending intensity order. Single source
 # of truth shared by the request-path fallback allowlist below and the
 # provider's reasoning_effort ConfigField choices (kept in sync by
-# test_reasoning_effort_choices_match_levels). Superset of the v1.0.7 SDK
-# ReasoningEffort Literal {low,medium,high,xhigh}: the live list_models endpoint
-# additionally advertises "none" and "max", neither of which the v1.0.7 SDK
-# Literal enumerates. Membership is pinned by the SDK-superset test in
+# test_reasoning_effort_choices_match_levels). Superset of the v1.0.15 SDK
+# ReasoningEffort Literal {low,medium,high,xhigh,max}: the live list_models
+# endpoint additionally advertises "none", which the v1.0.15 SDK Literal does
+# not enumerate. Membership is pinned by the SDK-superset test in
 # tests/test_sdk_assumptions.py.
 REASONING_EFFORT_LEVELS: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh", "max")
 
@@ -46,7 +46,7 @@ _REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset(REASONING_EFFOR
 
 # Static allowlist for context_tier. Mirrors the public SDK annotation
 # ``copilot.session.ContextTier = typing.Literal["default", "long_context"]``
-# (verified against installed github-copilot-sdk 1.0.7). Unlike reasoning_effort
+# (verified against installed github-copilot-sdk 1.0.15). Unlike reasoning_effort
 # there is NO per-model capability descriptor, so this membership set is the only
 # validation possible. Evergreen note: if the SDK Literal grows a tier, update
 # this frozenset — pinned by test_context_tier.TestSDKSourceShape.
@@ -79,6 +79,19 @@ _TOOL_SEQUENCE_REPAIR_MESSAGE = (
     "Tool result unavailable — the result for this tool call was lost. "
     "Please acknowledge this and continue."
 )
+
+# The SDK delivers the whole serialized conversation as one user message. Without
+# this framing, models read the leading user request as the live instruction and
+# repeat tool calls whose results are already in the history.
+# Contract: provider-protocol:complete:MUST:15
+HISTORY_PREAMBLE = (
+    "The conversation so far follows, one block per message, each block starting "
+    "with a role marker. Tool Call entries are tool calls you already made, and "
+    "Tool Result entries are their completed results. Continue the conversation "
+    "as the assistant from the last block."
+)
+
+_HISTORY_ROLES: frozenset[str] = frozenset({"assistant", "tool"})
 
 _SUPPORTED_MESSAGE_ROLES: frozenset[str] = frozenset(
     {"user", "assistant", "system", "developer", "tool"}
@@ -509,7 +522,7 @@ def _resolve_effort(
     # The resolved model's advertised capability is authoritative and may WIDEN
     # ALLOWLIST acceptance beyond the static fallback set: a token the live
     # endpoint advertises via list_models (e.g. "minimal" for gemini-3.5-flash,
-    # outside the SDK v1.0.7 literal) is accepted verbatim. Trust boundary:
+    # outside the SDK v1.0.15 literal) is accepted verbatim. Trust boundary:
     # supported_reasoning_efforts is backend-sourced (SDK list_models, persisted
     # through the on-disk model_cache), never caller-derived. Widening relaxes
     # only membership, NEVER lexical shape: the value must still match the
@@ -780,6 +793,7 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         return ""
 
     formatted_parts: list[str] = []
+    has_history = False
 
     for msg in messages:
         role = _message_role(msg)
@@ -814,7 +828,10 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         if message_parts:
             message_text = "\n".join(message_parts)
             formatted_parts.append(f"{role_marker}\n{message_text}")
+            has_history = has_history or role in _HISTORY_ROLES
 
+    if has_history:
+        formatted_parts.insert(0, HISTORY_PREAMBLE)
     return "\n\n".join(formatted_parts)
 
 

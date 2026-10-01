@@ -299,6 +299,7 @@ class TestToolForwardingContract:
         assert tool.handler is None, "handler MUST be None for SDK to skip registration"
         assert tool.defer is None, "defer MUST default to None (v1.0.1 wire parity)"
         assert tool.metadata is None, "metadata MUST default to None (v1.0.7 wire parity)"
+        assert tool.is_terminal is False, "is_terminal MUST default to False (v1.0.15 wire parity)"
 
     def test_wrapper_survives_sdk_v102_tool_definition_build(self) -> None:
         """Reproduce the EXACT attribute-read loop SDK v1.0.2 uses to build tool
@@ -415,6 +416,66 @@ class TestToolForwardingContract:
             # and the tool-forwarding payload is byte-identical to pre-v1.0.7.
             assert "metadata" not in definition, (
                 "metadata=None MUST omit the 'metadata' wire key (v1.0.6 wire parity)"
+            )
+
+    def test_wrapper_survives_sdk_v1015_tool_definition_build(self) -> None:
+        """Reproduce the EXACT attribute-read loop SDK v1.0.15 uses to build tool
+        definitions, proving SDKToolWrapper exposes ``is_terminal`` and preserves
+        the pre-v1.0.15 wire shape when it is False.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+
+        SDK v1.0.15 ``copilot/client.py`` extends the v1.0.7 loop with a trailing
+        ``tool.is_terminal`` read, in BOTH create_session and resume, immediately
+        after the ``metadata`` read::
+
+            if tool.metadata is not None: definition["metadata"] = tool.metadata
+            if tool.is_terminal: definition["isTerminal"] = True
+
+        v1.0.15 ADDED the ``tool.is_terminal`` access. A wrapper missing
+        ``is_terminal`` raises ``AttributeError`` on every tool-forwarding turn,
+        the same failure ``defer`` (v1.0.2) and ``metadata`` (v1.0.7) caused. This
+        test pins the wrapper against the v1.0.15 access sequence and asserts no
+        ``isTerminal`` key is emitted: the provider never asks the runtime to end
+        the turn on a tool call, because Amplifier's orchestrator owns tool
+        execution (deny-destroy:NoExecution:MUST:3).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import (
+            convert_tools_for_sdk,
+        )
+
+        tools: list[dict[str, object]] = [
+            {"name": "bash", "description": "Run shell commands", "parameters": {"type": "object"}},
+            {"name": "read_file", "description": "Read a file", "parameters": None},
+        ]
+        wrappers = convert_tools_for_sdk(tools)
+
+        for tool in wrappers:
+            # Verbatim replication of the SDK v1.0.15 definition-build loop. If the
+            # wrapper is missing any read attribute this raises AttributeError,
+            # exactly as the live runtime would without `is_terminal`.
+            definition: dict[str, object] = {
+                "name": tool.name,
+                "description": tool.description,
+            }
+            if tool.parameters:
+                definition["parameters"] = tool.parameters
+            if tool.overrides_built_in_tool:
+                definition["overridesBuiltInTool"] = True
+            if tool.skip_permission:
+                definition["skipPermission"] = True
+            if tool.defer is not None:
+                definition["defer"] = tool.defer
+            if tool.metadata is not None:
+                definition["metadata"] = tool.metadata
+            if tool.is_terminal:
+                definition["isTerminal"] = True
+
+            # v1.0.7 wire parity: is_terminal defaults to False, so the key is
+            # omitted and the tool-forwarding payload is byte-identical to
+            # pre-v1.0.15.
+            assert "isTerminal" not in definition, (
+                "is_terminal=False MUST omit the 'isTerminal' wire key (v1.0.7 wire parity)"
             )
 
     @pytest.mark.asyncio
@@ -622,6 +683,9 @@ class TestConfigInvariants:
             "mcp_oauth_token_storage",
             # MUST:16 — v1.0.2 mode-gated 'memory' pin (sdk-boundary).
             "memory",
+            # MUST:17-18: v1.0.15 mode-gated pins (sdk-boundary).
+            "custom_agents_local_only",
+            "enable_experimental_mode",
         }
 
         mock_client = ConfigCapturingMock()
@@ -945,6 +1009,43 @@ class TestMinimalModeConfig:
         assert config["memory"] == {"enabled": False}
 
     @pytest.mark.asyncio
+    async def test_custom_agents_local_only_enabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:17 (v1.0.15).
+
+        Custom-agent loading pinned to local definitions only; Amplifier
+        orchestrates agents (complements MUST:5 ``custom_agents=[]``).
+        ``custom_agents_local_only`` gained the mode-gated empty-mode default
+        helper ``_custom_agents_local_only_default`` in v1.0.15, which returns
+        ``True`` ONLY when ``mode == "empty"``. Our adapter ships
+        ``mode="copilot-cli"``, where the helper returns ``None``, so this
+        explicit pin IS the wire shape. Identity assertion (``is True``).
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["custom_agents_local_only"] is True
+
+    @pytest.mark.asyncio
+    async def test_enable_experimental_mode_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:18 (v1.0.15).
+
+        SDK experimental features pinned OFF. ``enable_experimental_mode`` is a
+        v1.0.15 mode-gated ``create_session`` kwarg whose empty-mode default
+        helper ``_enable_experimental_mode_default`` returns ``False`` ONLY when
+        ``mode == "empty"``; under ``mode="copilot-cli"`` the runtime decides
+        when omitted, so this explicit pin IS the wire shape. Identity
+        assertion (``is False``).
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["enable_experimental_mode"] is False
+
+    @pytest.mark.asyncio
     async def test_enable_session_telemetry_disabled(self) -> None:
         """Contract: sdk-boundary:MinimalMode:MUST:14 (b10).
 
@@ -962,7 +1063,7 @@ class TestMinimalModeConfig:
 
     @pytest.mark.asyncio
     async def test_minimal_mode_pin_set_complete(self) -> None:
-        """Contract: sdk-boundary:MinimalMode:MUST:1-16 superset closure.
+        """Contract: sdk-boundary:MinimalMode:MUST:1-18 superset closure.
 
         Every MUST clause MUST be represented in the emitted session config —
         guards against accidental field removal or rename silently dropping a pin.
@@ -990,11 +1091,14 @@ class TestMinimalModeConfig:
             "mcp_oauth_token_storage",
             # MUST:16 — v1.0.2 mode-gated 'memory' pin (sdk-boundary).
             "memory",
+            # MUST:17-18: v1.0.15 mode-gated pins (sdk-boundary).
+            "custom_agents_local_only",
+            "enable_experimental_mode",
         }
         missing = required - config_keys
         assert missing == set(), (
             f"MinimalMode pins missing from session config: {missing}. "
-            f"Every MUST:1-16 clause must round-trip through the emit dict."
+            f"Every MUST:1-18 clause must round-trip through the emit dict."
         )
 
     @pytest.mark.asyncio

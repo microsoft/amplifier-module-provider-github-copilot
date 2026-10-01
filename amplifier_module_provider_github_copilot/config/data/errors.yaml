@@ -91,8 +91,12 @@ error_mappings:
         field: conflict_type
 
   # P4: Model/provider configuration errors
+  # "is not supported for model": SDK v1.0.15 (bundled CLI 1.0.89) rejects an
+  # unsupported reasoning_effort at send time via a session.error whose message
+  # is "Reasoning effort '<value>' is not supported for model '<model>'."
+  # (earlier SDKs rejected at session.create with "does not support ...").
   - sdk_patterns: ["ConfigurationError"]
-    string_patterns: ["does not support", "configuration error", "not configured"]
+    string_patterns: ["does not support", "is not supported for model", "configuration error", "not configured"]
     kernel_error: ConfigurationError
     retryable: false
     # Context extraction for better debugging

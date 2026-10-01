@@ -182,6 +182,7 @@ class TestMessageRoleValidation:
     def test_valid_dict_messages_preserve_system_separation(self) -> None:
         """Documented dict roles retain the established prompt and system paths."""
         from amplifier_module_provider_github_copilot.request_adapter import (
+            HISTORY_PREAMBLE,
             extract_prompt_from_chat_request,
             extract_system_message,
         )
@@ -196,7 +197,8 @@ class TestMessageRoleValidation:
         )
 
         assert extract_prompt_from_chat_request(request) == (
-            "[USER]\nHello\n\n[ASSISTANT]\nHi\n\n[DEVELOPER]\nHistory guidance"
+            f"{HISTORY_PREAMBLE}\n\n[USER]\nHello\n\n[ASSISTANT]\nHi"
+            "\n\n[DEVELOPER]\nHistory guidance"
         )
         assert extract_system_message(request) == "System instructions"
 

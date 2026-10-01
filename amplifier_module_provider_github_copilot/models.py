@@ -7,8 +7,8 @@ Two-Medium Architecture:
 - Markdown: Requirements (contracts/sdk-boundary.md)
 
 Type Translation Chain:
-    SDK ModelInfo → CopilotModelInfo → amplifier_core.ModelInfo
-    (copilot.client)  (isolation layer)   (kernel contract)
+    SDK typed Model → CopilotModelInfo → amplifier_core.ModelInfo
+    (copilot.rpc)     (isolation layer)   (kernel contract)
 """
 
 from __future__ import annotations

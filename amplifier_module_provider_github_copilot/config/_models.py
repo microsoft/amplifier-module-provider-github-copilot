@@ -22,16 +22,20 @@ PROVIDER: dict = {
     # NOTE: Per-model capabilities (vision, thinking) are set dynamically in models.py
     # based on SDK's supports_vision/supports_reasoning_effort flags
     "capabilities": ["streaming", "tools"],
-    # Updated defaults to use claude-opus-4.5 with SDK-verified limits
-    # SDK limits: max_context_window=200000, max_prompt_tokens=168000
-    # max_output_tokens = context_window - max_prompt_tokens = 32000
+    # Default model "auto" is Copilot's server-side router (the Copilot CLI's own
+    # default): each turn is dispatched to a concrete model chosen by the
+    # service. list_models() reports "auto" with empty limits and no reasoning
+    # efforts, so its window is unknown until routing happens. context_window /
+    # max_output_tokens therefore mirror FALLBACKS below, which is also exactly
+    # what model_translation derives for "auto" at runtime; get_info() reports
+    # the same values on a cold and a warm model cache.
     "defaults": {
-        "model": "claude-opus-4.5",
+        "model": "auto",
         "max_tokens": 4096,
-        # Healthy generation has no elapsed-time deadline unless the caller sets one.
+        # Healthy generation has no implicit elapsed-time deadline.
         "timeout": None,
-        "context_window": 200000,
-        "max_output_tokens": 32000,
+        "context_window": 128000,
+        "max_output_tokens": 16384,
     },
 }
 

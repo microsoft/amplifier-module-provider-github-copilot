@@ -47,6 +47,12 @@ _TOKEN_ENV_VARS = ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "G
 _MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+\-]{0,127}$")
 _KNOWN_MOCK_MODEL_IDS = frozenset({"claude-opus-4.5", "claude-sonnet-4"})
 _VALID_FINISH_REASONS = frozenset({"stop", "tool_calls", "length", "content_filter"})
+# Comma-separated model IDs for the live tool round trip.
+_ROUND_TRIP_MODELS = tuple(
+    model.strip()
+    for model in os.environ.get("COPILOT_LIVE_ROUND_TRIP_MODELS", "gpt-6-sol").split(",")
+    if model.strip()
+)
 
 
 def _get_token() -> str:
@@ -262,7 +268,7 @@ def _bind_real_sdk_override_types(monkeypatch: pytest.MonkeyPatch) -> None:
     those types this raises ``TypeError: 'NoneType' object is not callable`` —
     a test-harness artifact, NOT a production defect. In production
     ``SKIP_SDK_CHECK`` is unset and ``_imports`` already holds the real classes
-    (verified against github-copilot-sdk==1.0.7). ``client.py`` looks these up
+    (verified against github-copilot-sdk==1.0.15). ``client.py`` looks these up
     via the membrane at call time, so patching ``_imports`` is sufficient.
 
     Fail-closed: uses ``require_sdk()`` (which fails, never skips, on a missing
@@ -270,13 +276,13 @@ def _bind_real_sdk_override_types(monkeypatch: pytest.MonkeyPatch) -> None:
     silently leaving the override types unbound.
     """
     copilot = require_sdk()
+    from copilot.rpc import ModelsListRequest
 
     from amplifier_module_provider_github_copilot.sdk_adapter import _imports
 
+    monkeypatch.setattr(_imports, "ModelsListRequest", ModelsListRequest)
     monkeypatch.setattr(_imports, "ModelLimitsOverride", copilot.ModelLimitsOverride)
-    monkeypatch.setattr(
-        _imports, "ModelCapabilitiesOverride", copilot.ModelCapabilitiesOverride
-    )
+    monkeypatch.setattr(_imports, "ModelCapabilitiesOverride", copilot.ModelCapabilitiesOverride)
 
 
 # =============================================================================
@@ -300,6 +306,28 @@ class TestRealApiProof:
         models = await provider.list_models()
 
         _assert_real_model_list(models)
+
+    @pytest.mark.asyncio
+    async def test_model_list_preserves_advertised_output_limits(
+        self,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """No advertised per-model output limit is lost by SDK/provider translation."""
+        from copilot.rpc import ModelsListRequest
+
+        provider = _make_live_provider(live_client, monkeypatch)
+        models = {model.id: model for model in await provider.list_models()}
+        advertised = (await live_client.rpc.models.list(ModelsListRequest())).models
+        checked = 0
+        for model in advertised:
+            limits = model.capabilities.limits
+            if limits is None or not limits.max_output_tokens:
+                continue
+            checked += 1
+            assert models[model.id].max_output_tokens == limits.max_output_tokens, model.id
+        assert checked > 0
 
     @pytest.mark.asyncio
     async def test_provider_complete_returns_content_finish_reason_and_usage(
@@ -341,6 +369,144 @@ class TestRealApiProof:
             "No tools were provided; live completion must not call tools"
         )
         _assert_response_usage(response.usage)
+
+    @pytest.mark.asyncio
+    async def test_provider_complete_forwards_tool_and_captures_tool_call(
+        self,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """Provider.complete() with a tool MUST build real SDK tool definitions
+        and return the captured tool call to the orchestrator.
+
+        This is the only live path that drives the SDK's real tool-definition
+        builder (``copilot/client.py`` reads every ``SDKToolWrapper`` attribute,
+        including ``defer`` / ``metadata`` / ``is_terminal``), so a wrapper
+        missing an SDK-read attribute fails here with ``AttributeError``.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+        Contract: deny-destroy:NoExecution:MUST:2
+        """
+        provider = _make_live_provider(live_client, monkeypatch)
+        models = await provider.list_models()
+        _assert_real_model_list(models)
+        model_id = models[0].id
+
+        request = SimpleNamespace(
+            model=model_id,
+            messages=[
+                SimpleNamespace(
+                    role="user",
+                    content="Call get_weather with city set to Paris. Do not reply with text.",
+                )
+            ],
+            tools=[
+                SimpleNamespace(
+                    name="get_weather",
+                    description="Get the current weather for a city.",
+                    parameters={
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                )
+            ],
+            max_output_tokens=256,
+            reasoning_effort=None,
+            context_tier=None,
+            metadata={"stream": False},
+        )
+
+        response = await provider.complete(request, model=model_id, _timeout_seconds=60.0)
+
+        assert response.tool_calls, "Live completion with a forwarded tool returned no tool calls"
+        assert response.tool_calls[0].name == "get_weather", (
+            f"Unexpected tool call name: {response.tool_calls[0].name!r}"
+        )
+        assert response.finish_reason == "tool_calls", (
+            f"Tool-call completion must finish with 'tool_calls'; got {response.finish_reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model_id", _ROUND_TRIP_MODELS)
+    async def test_provider_tool_round_trip_ends_with_text(
+        self,
+        model_id: str,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """A tool result fed back through complete() MUST yield a final answer.
+
+        Mirrors the orchestrator: the first leg returns a bash call, the caller
+        runs it, and the second leg sends the call and its result as history.
+        With the history unframed, gpt-6-sol repeated the completed call on
+        every leg.
+
+        Contract: provider-protocol:complete:MUST:15
+        """
+        from amplifier_core import ChatRequest, Message, ToolCallBlock, ToolSpec
+
+        provider = _make_live_provider(live_client, monkeypatch)
+        available = {model.id for model in await provider.list_models()}
+        assert model_id in available, (
+            f"{model_id!r} is not available to this token; set "
+            f"COPILOT_LIVE_ROUND_TRIP_MODELS to models from {sorted(available)!r}"
+        )
+
+        tools = [
+            ToolSpec(
+                name="bash",
+                description="Run a bash command and return its output.",
+                parameters={
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            )
+        ]
+        user = Message(
+            role="user",
+            content=(
+                "Use the bash tool to run exactly this command: echo packaged-42   "
+                "Then reply with only the command's output."
+            ),
+        )
+
+        first = await provider.complete(
+            ChatRequest(model=model_id, messages=[user], tools=tools), _timeout_seconds=60.0
+        )
+        assert first.tool_calls, f"{model_id}: first leg returned no tool call"
+        call = first.tool_calls[0]
+        assert call.name == "bash", f"{model_id}: unexpected tool {call.name!r}"
+
+        history = [
+            user,
+            Message(
+                role="assistant",
+                content=[ToolCallBlock(id=call.id, name=call.name, input=call.arguments)],
+            ),
+            Message(
+                role="tool",
+                tool_call_id=call.id,
+                content='{"stdout": "packaged-42\\n", "stderr": "", "returncode": 0}',
+            ),
+        ]
+        second = await provider.complete(
+            ChatRequest(model=model_id, messages=history, tools=tools), _timeout_seconds=60.0
+        )
+
+        assert not second.tool_calls, (
+            f"{model_id}: repeated a completed tool call: "
+            f"{[(c.name, c.arguments) for c in second.tool_calls]!r}"
+        )
+        assert second.finish_reason == "stop", (
+            f"{model_id}: final leg must finish with 'stop'; got {second.finish_reason!r}"
+        )
+        assert "packaged-42" in (second.text or ""), (
+            f"{model_id}: final text lacks the tool output: {second.text!r}"
+        )
 
 
 # =============================================================================

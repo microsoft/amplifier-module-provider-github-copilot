@@ -12,6 +12,7 @@ Three-Medium Architecture:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -39,6 +40,7 @@ class MockModelLimits:
 
     max_prompt_tokens: int | None = None
     max_context_window_tokens: int | None = None
+    max_output_tokens: int | None = None
     vision: MockModelVisionLimits | None = None
 
 
@@ -115,7 +117,7 @@ def make_sdk_model_info(
     model_id: str = "claude-sonnet-4-5",
     name: str = "Claude Sonnet 4.5",
     context_window: int = 200000,
-    max_prompt_tokens: int = 168000,
+    max_prompt_tokens: int | None = 168000,
     supports_vision: bool = True,
     supports_reasoning_effort: bool = False,
     supported_reasoning_efforts: list[str] | None = None,
@@ -207,6 +209,31 @@ class TestSDKToCopilotModelInfoTranslation:
         # max_output_tokens = context_window - max_prompt_tokens
         assert result.max_output_tokens == 200000 - 168000  # 32000
         assert result.supports_vision is True
+
+    @pytest.mark.parametrize(
+        ("model_id", "context", "prompt", "advertised", "expected"),
+        [
+            ("claude-opus-5.5", 1_000_000, 1_000_000, 128_000, 128_000),
+            ("gpt-5-mini", 264_000, 128_000, 64_000, 64_000),
+            ("claude-opus-4.8", 1_000_000, 936_000, None, 64_000),
+            ("auto", 0, None, None, 16_384),
+        ],
+    )
+    def test_advertised_output_wins_over_window_subtraction(
+        self, model_id: str, context: int, prompt: int | None, advertised: int | None, expected: int
+    ) -> None:
+        """The typed SDK RPC exposes an explicit limit even when window subtraction is wrong."""
+        from amplifier_module_provider_github_copilot.models import sdk_model_to_copilot_model
+
+        model = make_sdk_model_info(
+            model_id=model_id, context_window=context, max_prompt_tokens=prompt
+        )
+        model.capabilities.limits.max_output_tokens = advertised
+        result = sdk_model_to_copilot_model(model)
+        assert result.max_output_tokens == expected
+        if model_id == "auto":
+            assert result.context_window == 128_000
+            assert result.context_window_default == 128_000
 
     def test_copilot_model_to_internal_handles_missing_limits(self) -> None:
         """Contract: sdk-boundary:ModelDiscovery:MUST:2
@@ -827,14 +854,14 @@ class TestCopilotClientWrapperListModels:
     """Test CopilotClientWrapper.list_models() method.
 
     Contract: sdk-boundary:Models:MUST:1
-    - SDK CopilotClient.list_models() returns list[ModelInfo]
+    - SDK public typed rpc.models.list() preserves advertised max_output_tokens
     """
 
     @pytest.mark.asyncio
     async def test_client_wrapper_list_models_returns_sdk_models(self) -> None:
         """Contract: sdk-boundary:Models:MUST:1
 
-        list_models() returns SDK ModelInfo objects (translation happens elsewhere).
+        list_models() returns SDK typed model objects (translation happens elsewhere).
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
@@ -842,7 +869,7 @@ class TestCopilotClientWrapperListModels:
 
         sdk_model = make_sdk_model_info(model_id="claude-opus-4.5", name="Claude Opus 4.5")
         mock_sdk_client = MagicMock()
-        mock_sdk_client.list_models = AsyncMock(return_value=[sdk_model])
+        mock_sdk_client.rpc.models.list = AsyncMock(return_value=MagicMock(models=[sdk_model]))
 
         wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
         result = await wrapper.list_models()
@@ -850,6 +877,8 @@ class TestCopilotClientWrapperListModels:
         assert len(result) == 1
         assert result[0].id == "claude-opus-4.5"
         assert result[0].name == "Claude Opus 4.5"
+        mock_sdk_client.rpc.models.list.assert_awaited_once()
+        mock_sdk_client.list_models.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_client_wrapper_list_models_lazy_init(self) -> None:
@@ -866,13 +895,34 @@ class TestCopilotClientWrapperListModels:
 
         # Inject a mock client directly to test the path
         mock_sdk_client = MagicMock()
-        mock_sdk_client.list_models = AsyncMock(return_value=[make_sdk_model_info()])
+        mock_sdk_client.rpc.models.list = AsyncMock(
+            return_value=MagicMock(models=[make_sdk_model_info()])
+        )
         wrapper._owned_client = mock_sdk_client  # type: ignore[attr-defined]
 
         result = await wrapper.list_models()
 
-        mock_sdk_client.list_models.assert_called_once()
+        mock_sdk_client.rpc.models.list.assert_awaited_once()
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_typed_model_list_is_cached_across_concurrent_calls(self) -> None:
+        """One typed RPC per connected wrapper, like the SDK convenience API."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        sdk_model = make_sdk_model_info()
+        sdk = MagicMock()
+        sdk.rpc.models.list = AsyncMock(return_value=MagicMock(models=[sdk_model]))
+        wrapper = CopilotClientWrapper(sdk_client=sdk)
+
+        results = await asyncio.gather(*(wrapper.list_models() for _ in range(5)))
+        assert all(models == [sdk_model] for models in results)
+        assert results[0] is not results[1]
+        results[0].clear()
+        assert (await wrapper.list_models()) == [sdk_model]
+        sdk.rpc.models.list.assert_awaited_once()
 
 
 # =============================================================================
@@ -957,7 +1007,7 @@ class TestNoHardcodedModelLists:
         models_config = load_models_config()
 
         # Should have defaults (policy) with correct default model
-        assert models_config.defaults["model"] == "claude-opus-4.5"
+        assert models_config.defaults["model"] == "auto"
 
         # ProviderConfig no longer exposes a .models field — catalog comes from SDK
         assert not hasattr(models_config, "models"), (

@@ -239,6 +239,8 @@ class TestSDKImportsRealPath:
             mock_copilot_generated_rpc.PermissionDecisionReject = MagicMock(
                 name="PermissionDecisionReject"
             )
+            mock_copilot_rpc = MagicMock(spec=["ModelsListRequest"])
+            mock_copilot_rpc.ModelsListRequest = MagicMock(name="ModelsListRequest")
             mock_copilot_generated = MagicMock()
 
             with patch.dict(
@@ -246,6 +248,7 @@ class TestSDKImportsRealPath:
                 {
                     "copilot": mock_copilot,
                     "copilot.session": mock_copilot_session,
+                    "copilot.rpc": mock_copilot_rpc,
                     "copilot.generated": mock_copilot_generated,
                     "copilot.generated.rpc": mock_copilot_generated_rpc,
                 },
@@ -298,6 +301,8 @@ class TestSDKImportsRealPath:
             mock_copilot_generated_rpc.PermissionDecisionReject = MagicMock(
                 name="PermissionDecisionReject"
             )
+            mock_copilot_rpc = MagicMock(spec=["ModelsListRequest"])
+            mock_copilot_rpc.ModelsListRequest = MagicMock(name="ModelsListRequest")
             mock_copilot_generated = MagicMock()
 
             with patch.dict(
@@ -305,6 +310,7 @@ class TestSDKImportsRealPath:
                 {
                     "copilot": mock_copilot,
                     "copilot.session": mock_copilot_session,
+                    "copilot.rpc": mock_copilot_rpc,
                     "copilot.generated": mock_copilot_generated,
                     "copilot.generated.rpc": mock_copilot_generated_rpc,
                 },

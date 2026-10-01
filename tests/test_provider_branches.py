@@ -70,10 +70,12 @@ class FakeToolTextSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        source: object | None = None,
         mode: object | None = None,
         agent_mode: object | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: object | None = None,
     ) -> str:
         self.last_prompt = prompt
         fake_event = SessionEvent(
@@ -101,10 +103,12 @@ class CancelOnSecondSendSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        source: object | None = None,
         mode: object | None = None,
         agent_mode: object | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: object | None = None,
     ) -> str:
         self._send_count += 1
         if self._send_count == 1:
@@ -453,10 +457,12 @@ class UsageInjectionSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        source: object | None = None,
         mode: object | None = None,
         agent_mode: object | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: object | None = None,
     ) -> str:
         self.last_prompt = prompt
         # Fire assistant.usage → populates usage_holder, goes into queue
@@ -547,10 +553,12 @@ class ToolThenIdleSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        source: object | None = None,
         mode: object | None = None,
         agent_mode: object | None = None,
         request_headers: dict[str, str] | None = None,
         display_prompt: str | None = None,
+        response_schema: object | None = None,
     ) -> str:
         self.last_prompt = prompt
         # 1. Tool request event (populates tool_capture_handler.captured_tools

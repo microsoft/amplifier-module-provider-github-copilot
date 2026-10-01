@@ -8,6 +8,7 @@ Contract: sdk-boundary:Membrane:MUST:1 (spirit — no domain modules at module l
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -75,12 +76,15 @@ class _FakeSDKClientFailDisconnect:
 
 
 class _FakeSDKClientRaisesOnListModels:
-    """SDK client whose list_models raises."""
+    """SDK client whose typed model listing raises."""
+
+    def __init__(self) -> None:
+        self.rpc = SimpleNamespace(models=SimpleNamespace(list=self.list_models))
 
     async def create_session(self, **kwargs: Any) -> _FakeSDKSessionNormal:
         return _FakeSDKSessionNormal()
 
-    async def list_models(self) -> list[Any]:
+    async def list_models(self, request: Any) -> list[Any]:
         raise ConnectionError("sdk-models-boom")
 
 
