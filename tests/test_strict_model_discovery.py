@@ -2,8 +2,8 @@
 
 The SDK RPC and cold-start SDK construction are stubbed: provider orchestration,
 wrapper lifecycle/cache/locks, model translation and error translation run normally.
-No SDK launch, credentials or network are required. Legacy fallback behavior is
-tested separately below.
+No SDK launch, credentials or network are required. The canonical catalog never
+uses the legacy inference caches.
 """
 
 from __future__ import annotations
@@ -41,14 +41,18 @@ class ProcessExitedError(Exception):
 
 
 @pytest.fixture
-def inventory_boundary(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+def inventory_boundary(
+    monkeypatch: pytest.MonkeyPatch, real_model_discovery: None
+) -> SimpleNamespace:
     """Prime every legacy cache while retaining the real wrapper RPC call path."""
     stale = make_sdk_model_info(model_id="other-account-stale-model")
     cached_domain = model_helpers.sdk_model_to_copilot_model(stale)
     read_cache = Mock(return_value=[cached_domain])
     write_cache = Mock()
     monkeypatch.setattr(provider_module, "read_cache", read_cache)
-    monkeypatch.setattr(provider_module, "write_cache", write_cache)
+    monkeypatch.setattr(
+        "amplifier_module_provider_github_copilot.model_cache.write_cache", write_cache
+    )
 
     # Keep the API request opaque and pin that exact request at the RPC boundary.
     # The request factory is SDK-owned; there is no model-selection parameter here.
@@ -174,9 +178,9 @@ def start_cold_probe(boundary: SimpleNamespace) -> tuple[asyncio.Task[Any], asyn
     """Signal entry without sleeps; the task then runs to its first real suspension."""
     entered = asyncio.Event()
 
-    async def probe() -> dict[str, Any]:
+    async def probe() -> list[Any]:
         entered.set()
-        return await boundary.provider.discover_models()
+        return await boundary.provider.list_models()
 
     task = asyncio.create_task(probe())
     boundary.tasks.append(task)
@@ -214,11 +218,12 @@ def assert_caches_untouched(boundary: SimpleNamespace, *, injected: bool = True)
     assert boundary.wrapper._sdk_client is (boundary.sdk if injected else None)
 
 
-def test_discovery_is_optional_async_no_argument_extension() -> None:
-    method = GitHubCopilotProvider.discover_models
+def test_canonical_listing_has_optional_keyword_only_filters() -> None:
+    method = GitHubCopilotProvider.list_models
     assert inspect.iscoroutinefunction(method)
-    assert list(inspect.signature(method).parameters) == ["self"]
-    assert list(inspect.signature(GitHubCopilotProvider.list_models).parameters) == ["self"]
+    assert list(inspect.signature(method).parameters) == ["self", "filters"]
+    assert inspect.signature(method).parameters["filters"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert not hasattr(GitHubCopilotProvider, "discover_models")
 
 
 async def test_current_ids_exact_metadata_preserved_selection_ignored(
@@ -237,14 +242,11 @@ async def test_current_ids_exact_metadata_preserved_selection_ignored(
         models=[model, make_sdk_model_info(model_id="auto")]
     )
 
-    result = await boundary.provider.discover_models()
+    result = await boundary.provider.list_models()
 
-    assert set(result) == {"version", "source", "models"}
-    assert result["version"] == 1
-    assert result["source"] == "provider-api"
-    assert [item.id for item in result["models"]] == ["account-model-vNext", "auto"]
-    assert result["models"][0].display_name == "Current account model"
-    assert result["models"][0].defaults["reasoning_effort"] == "low"
+    assert [item.id for item in result] == ["account-model-vNext", "auto"]
+    assert result[0].display_name == "Current account model"
+    assert result[0].defaults["reasoning_effort"] == "low"
     boundary.rpc_list.assert_awaited_once_with(boundary.request)
     assert_caches_untouched(boundary)
 
@@ -259,13 +261,13 @@ async def test_repeated_probes_reach_rpc_and_empty_remains_empty(
         SimpleNamespace(models=[make_sdk_model_info(model_id="new-current-model")]),
     ]
 
-    first = await boundary.provider.discover_models()
-    empty = await boundary.provider.discover_models()
-    third = await boundary.provider.discover_models()
+    first = await boundary.provider.list_models()
+    empty = await boundary.provider.list_models()
+    third = await boundary.provider.list_models()
 
-    assert [model.id for model in first["models"]] == ["first-current-model"]
-    assert empty == {"version": 1, "source": "provider-api", "models": []}
-    assert [model.id for model in third["models"]] == ["new-current-model"]
+    assert [model.id for model in first] == ["first-current-model"]
+    assert empty == []
+    assert [model.id for model in third] == ["new-current-model"]
     assert boundary.rpc_list.await_args_list == [call(boundary.request)] * 3
     assert boundary.request_factory.call_count == 3
     assert_caches_untouched(boundary)
@@ -277,9 +279,9 @@ async def test_concurrent_strict_calls_each_issue_rpc(
     boundary = inventory_boundary
     boundary.rpc_list.return_value = SimpleNamespace(models=[])
 
-    results = await asyncio.gather(*(boundary.provider.discover_models() for _ in range(3)))
+    results = await asyncio.gather(*(boundary.provider.list_models() for _ in range(3)))
 
-    assert results == [{"version": 1, "source": "provider-api", "models": []}] * 3
+    assert results == [[], [], []]
     assert boundary.rpc_list.await_count == 3
     assert_caches_untouched(boundary)
 
@@ -304,7 +306,7 @@ async def test_cold_concurrent_strict_probes_wait_for_rpc_readiness(
     boundary.start_release.set()
     results = await asyncio.wait_for(asyncio.gather(first, second), timeout=2)
 
-    assert results == [{"version": 1, "source": "provider-api", "models": []}] * 2
+    assert results == [[], []]
     assert boundary.rpc_list.await_args_list == [call(boundary.request)] * 2
     assert boundary.wrapper._owned_client is boundary.clients[0]
     assert boundary.wrapper.copilot_pid == "12345"
@@ -340,11 +342,7 @@ async def test_cancelled_cold_start_stops_candidate_before_fresh_probe(
     abandoned.stop.assert_awaited_once()
 
     boundary.start_release.set()
-    assert await asyncio.wait_for(retry, timeout=2) == {
-        "version": 1,
-        "source": "provider-api",
-        "models": [],
-    }
+    assert await asyncio.wait_for(retry, timeout=2) == []
     assert boundary.construct.call_count == 2
     assert boundary.wrapper._owned_client is boundary.clients[1]
     assert boundary.clients[1].live
@@ -374,7 +372,7 @@ async def test_failed_cold_start_stops_candidate_and_retry_is_fresh(
     boundary.rpc_list.assert_not_called()
     boundary.start_error = None
 
-    assert (await boundary.provider.discover_models())["models"] == []
+    assert await boundary.provider.list_models() == []
     assert boundary.construct.call_count == 2
     assert boundary.wrapper._owned_client is boundary.clients[1]
     boundary.rpc_list.assert_awaited_once_with(boundary.request)
@@ -410,7 +408,7 @@ async def test_close_during_cold_start_prevents_publication_and_waiter_restart(
     assert boundary.wrapper.copilot_pid is None
     boundary.rpc_list.assert_not_called()
     with pytest.raises(ProviderUnavailableError, match="stopped"):
-        await boundary.provider.discover_models()
+        await boundary.provider.list_models()
     await boundary.wrapper.close()
     boundary.clients[0].stop.assert_awaited_once()
     # close() intentionally clears the legacy wrapper cache.
@@ -546,7 +544,7 @@ async def test_close_during_cold_start_bounds_shared_cleanup_and_warns(
         assert boundary.wrapper.copilot_pid is None
         boundary.rpc_list.assert_not_called()
         with pytest.raises(ProviderUnavailableError, match="stopped"):
-            await boundary.provider.discover_models()
+            await boundary.provider.list_models()
         await asyncio.wait_for(boundary.wrapper.close(), timeout=2)
         candidate.stop.assert_awaited_once()
         assert boundary.construct.call_count == 1
@@ -654,7 +652,7 @@ async def test_rpc_failures_raise_typed_errors_despite_all_legacy_caches(
     boundary.rpc_list.side_effect = error
 
     with pytest.raises(expected_type) as raised:
-        await boundary.provider.discover_models()
+        await boundary.provider.list_models()
 
     assert raised.value.__cause__ is error
     assert raised.value.provider == "github-copilot"
@@ -672,7 +670,7 @@ async def test_already_typed_errors_are_not_wrapped(
     boundary.rpc_list.side_effect = error
 
     with pytest.raises(error_type) as raised:
-        await boundary.provider.discover_models()
+        await boundary.provider.list_models()
 
     assert raised.value is error
     assert_caches_untouched(boundary)
@@ -707,7 +705,7 @@ async def test_malformed_inventory_never_becomes_success_or_partial_success(
     boundary.rpc_list.return_value = response
 
     with pytest.raises(ProviderUnavailableError):
-        await boundary.provider.discover_models()
+        await boundary.provider.list_models()
 
     boundary.rpc_list.assert_awaited_once_with(boundary.request)
     assert_caches_untouched(boundary)
@@ -723,14 +721,10 @@ async def test_success_does_not_mask_later_failure_or_prevent_recovery(
         SimpleNamespace(models=[]),
     ]
 
-    assert (await boundary.provider.discover_models())["models"][0].id == "currently-available"
+    assert (await boundary.provider.list_models())[0].id == "currently-available"
     with pytest.raises(LLMTimeoutError):
-        await boundary.provider.discover_models()
-    assert await boundary.provider.discover_models() == {
-        "version": 1,
-        "source": "provider-api",
-        "models": [],
-    }
+        await boundary.provider.list_models()
+    assert await boundary.provider.list_models() == []
     assert boundary.rpc_list.await_count == 3
     assert_caches_untouched(boundary)
 
@@ -744,7 +738,7 @@ async def test_initialization_failure_is_typed_without_cache_fallback(
     monkeypatch.setattr(boundary.wrapper, "_ensure_client_initialized", initialize)
 
     with pytest.raises(ProviderUnavailableError) as raised:
-        await boundary.provider.discover_models()
+        await boundary.provider.list_models()
 
     assert raised.value.__cause__ is error
     boundary.rpc_list.assert_not_called()
@@ -778,7 +772,7 @@ async def test_strict_success_does_not_seed_a_cold_legacy_cache(
         SimpleNamespace(models=[boundary.stale]),
     ]
 
-    assert (await boundary.provider.discover_models())["models"] == []
+    assert await boundary.provider.list_models() == []
     assert boundary.wrapper._model_list_cache is None
     assert await boundary.wrapper.list_models() == [boundary.stale]
     assert boundary.rpc_list.await_count == 2
@@ -795,33 +789,32 @@ async def test_legacy_fetch_helper_keeps_no_keyword_client_call() -> None:
     assert [model.id for model in result] == ["legacy-no-keyword-model"]
 
 
-async def test_legacy_provider_still_warms_caches(
+async def test_canonical_catalog_does_not_warm_inference_caches(
     inventory_boundary: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     boundary = inventory_boundary
     mapped = model_helpers.copilot_model_to_amplifier_model(boundary.cached_domain)
-    fetch = AsyncMock(return_value=([mapped], [boundary.cached_domain]))
-    monkeypatch.setattr(provider_module, "fetch_and_map_models", fetch)
+    fetch = AsyncMock(return_value=[mapped])
+    monkeypatch.setattr(provider_module, "discover_and_map_models", fetch)
 
     assert await boundary.provider.list_models() == [mapped]
 
     fetch.assert_awaited_once_with(boundary.wrapper)
-    boundary.write_cache.assert_called_once_with([boundary.cached_domain])
+    boundary.write_cache.assert_not_called()
     boundary.read_cache.assert_not_called()
     assert boundary.provider._copilot_models_cache == [boundary.cached_domain]
 
 
-async def test_legacy_provider_still_falls_back_to_disk(
+async def test_canonical_catalog_never_falls_back_to_disk(
     inventory_boundary: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     boundary = inventory_boundary
     fetch = AsyncMock(side_effect=ProviderUnavailableError("SDK unavailable"))
-    monkeypatch.setattr(provider_module, "fetch_and_map_models", fetch)
+    monkeypatch.setattr(provider_module, "discover_and_map_models", fetch)
 
-    result = await boundary.provider.list_models()
-
-    assert [model.id for model in result] == ["other-account-stale-model"]
+    with pytest.raises(ProviderUnavailableError):
+        await boundary.provider.list_models()
     fetch.assert_awaited_once_with(boundary.wrapper)
-    boundary.read_cache.assert_called_once_with()
+    boundary.read_cache.assert_not_called()
     boundary.write_cache.assert_not_called()
     assert boundary.provider._copilot_models_cache == [boundary.cached_domain]

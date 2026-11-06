@@ -292,7 +292,9 @@ This is an open-source community contribution. Test files must be properly scope
 
 ### Overview
 
-The provider SHOULD cache SDK model information to disk for persistence across sessions. This enables instant startup without API calls when the SDK is temporarily unavailable.
+Legacy inference capability helpers may use persisted SDK metadata. Canonical
+`list_models` never reads or warms this cache: stale account data is not an
+authentic catalog. The cache utility behavior below remains for existing users.
 
 ### Config Schema (model_cache.yaml)
 
@@ -309,7 +311,7 @@ cache:
 
 ### SHOULD Constraints
 
-1. **SHOULD** cache SDK models to disk for session persistence
+1. **SHOULD** preserve disk persistence for legacy capability-helper callers only
 2. **SHOULD** respect TTL from `config/model_cache.yaml`
 3. **SHOULD** invalidate cache when stale (exceeds max_stale_seconds)
 4. **SHOULD** apply a per-call random multiplier in
@@ -341,7 +343,9 @@ This section MUST NOT restate path layout.
 
 ### Overview
 
-When the SDK is unavailable AND the disk cache is empty/invalid, the provider MUST fail clearly with `ProviderUnavailableError`. The provider MUST NOT return hardcoded fallback values.
+When the SDK is unavailable, canonical listing MUST raise its translated typed
+error regardless of legacy cache contents. The provider MUST NOT return cached
+or hardcoded fallback inventory. Genuine success with no models is `[]`.
 
 ### Philosophy
 
@@ -349,8 +353,9 @@ When the SDK is unavailable AND the disk cache is empty/invalid, the provider MU
 
 ### MUST Constraints
 
-1. **MUST** raise `ProviderUnavailableError` when SDK unavailable AND disk cache empty/invalid
-2. **MUST** include reason in error message ("SDK connection failed, no cached models available")
+1. **MUST** preserve typed authentication/network/timeout errors and translate unknown
+   SDK failures to `ProviderUnavailableError`, regardless of cache contents
+2. **MUST** include a sanitized reason in the error message
 
 ### MUST NOT Constraints
 

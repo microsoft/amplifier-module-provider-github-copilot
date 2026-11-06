@@ -770,8 +770,8 @@ def _provider_with_warm_cache(
         },
         client=MagicMock(),
     )
-    # Warm the in-memory capability cache the way list_models() would, so
-    # get_info() resolves the default model without disk I/O.
+    # Seed the separate inference capability cache so get_info() resolves the
+    # default model without disk I/O; canonical list_models() does not seed it.
     provider._copilot_models_cache = [_opus48_info()]  # pyright: ignore[reportPrivateUsage]
     return provider
 

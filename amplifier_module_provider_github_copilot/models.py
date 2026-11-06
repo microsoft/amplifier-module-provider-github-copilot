@@ -272,13 +272,13 @@ async def discover_and_map_models(client: Any) -> list[AmplifierModelInfo]:
 
     Unlike the legacy fetch helpers, this path neither wraps typed authentication/
     network errors as generic unavailability nor allows cached inventory. Metadata
-    defaults can annotate returned IDs, but cannot supply IDs.
+    policy defaults cannot invent limits on this catalog path.
     """
     from .error_translation import LLMError, load_error_config, translate_sdk_error
 
     try:
         sdk_models = await client.list_models(force_refresh=True)
-        models = [sdk_model_to_copilot_model(model) for model in sdk_models]
+        models = [sdk_model_to_copilot_model(model, policy_defaults=False) for model in sdk_models]
         for model in models:
             if not isinstance(model.id, str) or not model.id.strip():
                 raise ValueError("Malformed SDK model inventory: expected non-empty model ID")

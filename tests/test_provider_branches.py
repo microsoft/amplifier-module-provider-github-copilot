@@ -170,8 +170,8 @@ class CountingSessionWrapper:
 # ---------------------------------------------------------------------------
 
 
-class TestListModelsCacheFallback:
-    """list_models() falls back to disk cache when SDK fails."""
+class TestListModelsNoCacheFallback:
+    """list_models() never falls back to disk cache when SDK fails."""
 
     @pytest.mark.asyncio
     async def test_list_models_returns_cached_when_sdk_fails(self) -> None:
@@ -197,7 +197,7 @@ class TestListModelsCacheFallback:
 
         with (
             patch(
-                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
+                "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
                 side_effect=RuntimeError("SDK unavailable"),
             ),
             patch(
@@ -205,9 +205,8 @@ class TestListModelsCacheFallback:
                 return_value=cached,
             ),
         ):
-            models = await provider.list_models()
-
-        assert len(models) == 1
+            with pytest.raises(RuntimeError, match="SDK unavailable"):
+                await provider.list_models()
 
     @pytest.mark.asyncio
     async def test_list_models_raises_when_sdk_fails_and_no_cache(self) -> None:
@@ -226,8 +225,8 @@ class TestListModelsCacheFallback:
 
         with (
             patch(
-                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
-                side_effect=RuntimeError("SDK unavailable"),
+                "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
+                side_effect=ProviderUnavailableError("SDK unavailable"),
             ),
             patch(
                 "amplifier_module_provider_github_copilot.provider.read_cache",
@@ -706,18 +705,18 @@ class TestListModelsCacheWriteFailure:
 
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
-        fake_model = MagicMock()
+        fake_model = MagicMock(id="test-model")
         fake_copilot_model = MagicMock()
         mock_client = MagicMock()
         mock_client.is_healthy.return_value = True
 
         with (
             patch(
-                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
-                new=AsyncMock(return_value=([fake_model], [fake_copilot_model])),
+                "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
+                new=AsyncMock(return_value=[fake_model]),
             ),
             patch(
-                "amplifier_module_provider_github_copilot.provider.write_cache",
+                "amplifier_module_provider_github_copilot.model_cache.write_cache",
                 side_effect=OSError("disk full"),
             ),
             caplog.at_level(logging.WARNING),
@@ -727,9 +726,8 @@ class TestListModelsCacheWriteFailure:
 
         assert len(models) == 1, "SDK models must be returned even when cache write fails"
         assert models[0] is fake_model
-        assert any("Failed to cache models" in r.getMessage() for r in caplog.records), (
-            "write_cache failure must be logged as a warning"
-        )
+        assert not any("Failed to cache models" in r.getMessage() for r in caplog.records)
+        fake_copilot_model.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

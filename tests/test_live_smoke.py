@@ -144,7 +144,9 @@ def _restore_real_model_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
         return amplifier_models, copilot_models
 
     monkeypatch.setattr(models_module, "fetch_and_map_models", real_fetch_and_map_models)
-    monkeypatch.setattr(provider_module, "fetch_and_map_models", real_fetch_and_map_models)
+    monkeypatch.setattr(
+        provider_module, "discover_and_map_models", models_module.discover_and_map_models
+    )
 
 
 def _make_live_provider(live_client: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
