@@ -175,6 +175,7 @@ def copilot_model_to_amplifier_model(
     if (
         model.context_window_long > model.context_window_default
         and model.context_window_default > 0
+        and (not catalog or model.max_output_tokens > 0)
     ):
         # long= advertises the long tier's TOTAL capacity (prompt budget +
         # max output), whereas the Context column below reports only the

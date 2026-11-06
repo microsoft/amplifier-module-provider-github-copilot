@@ -146,7 +146,12 @@ def sdk_model_to_copilot_model(sdk_model: Any, *, policy_defaults: bool = True) 
         advertised_output = getattr(limits, "max_output_tokens", None)
         if isinstance(advertised_output, int) and advertised_output > 0:
             max_output_tokens = advertised_output
-        elif limits is not None and max_prompt_tokens is not None and context_window > 0:
+        elif (
+            policy_defaults
+            and limits is not None
+            and max_prompt_tokens is not None
+            and context_window > 0
+        ):
             max_output_tokens = context_window - max_prompt_tokens
         else:
             max_output_tokens = default_output

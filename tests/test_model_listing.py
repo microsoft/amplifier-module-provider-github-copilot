@@ -205,6 +205,29 @@ async def test_missing_limits_do_not_become_fabricated_catalog_values(
     assert auto.capabilities == []
 
 
+async def test_catalog_does_not_infer_missing_output_from_prompt_budget(
+    real_model_discovery: None,
+) -> None:
+    model = make_sdk_model_info(
+        model_id="partial-limits",
+        context_window=200000,
+        max_prompt_tokens=168000,
+        billing_context_max=168000,
+        billing_long_context_max=936000,
+    )
+    model.capabilities.limits.max_output_tokens = None
+    sdk = SimpleNamespace(
+        rpc=SimpleNamespace(
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(models=[model])))
+        )
+    )
+    provider = GitHubCopilotProvider(client=CopilotClientWrapper(sdk_client=sdk))
+    info = (await provider.list_models())[0]
+    assert info.context_window == 168000
+    assert info.max_output_tokens == 0
+    assert not any(c.startswith("long=") for c in info.capabilities)
+
+
 async def test_real_sdk_serialization_and_deserialization_without_launch(
     real_model_discovery: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -223,7 +246,7 @@ async def test_real_sdk_serialization_and_deserialization_without_launch(
                         "max_prompt_tokens": 200000,  # Subtraction would lose output.
                         "max_output_tokens": 64000,
                     },
-                        "supports": {"vision": True, "reasoningEffort": True, "toolCalls": True},
+                    "supports": {"vision": True, "reasoningEffort": True, "toolCalls": True},
                 },
                 "supportedReasoningEfforts": ["low", "high"],
                 "defaultReasoningEffort": "low",
