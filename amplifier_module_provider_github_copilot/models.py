@@ -265,3 +265,25 @@ async def fetch_and_map_models(
     copilot_models = await fetch_models(client)
     amplifier_models = [copilot_model_to_amplifier_model(m) for m in copilot_models]
     return amplifier_models, copilot_models
+
+
+async def discover_and_map_models(client: Any) -> list[AmplifierModelInfo]:
+    """Map only a fresh SDK response, preserving typed discovery failures.
+
+    Unlike the legacy fetch helpers, this path neither wraps typed authentication/
+    network errors as generic unavailability nor allows cached inventory. Metadata
+    defaults can annotate returned IDs, but cannot supply IDs.
+    """
+    from .error_translation import LLMError, load_error_config, translate_sdk_error
+
+    try:
+        sdk_models = await client.list_models(force_refresh=True)
+        models = [sdk_model_to_copilot_model(model) for model in sdk_models]
+        for model in models:
+            if not isinstance(model.id, str) or not model.id.strip():
+                raise ValueError("Malformed SDK model inventory: expected non-empty model ID")
+        return [copilot_model_to_amplifier_model(model) for model in models]
+    except LLMError:
+        raise
+    except Exception as exc:
+        raise translate_sdk_error(exc, load_error_config()) from exc

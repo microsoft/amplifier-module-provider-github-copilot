@@ -778,13 +778,18 @@ class CopilotClientWrapper:
         except Exception as e:
             logger.warning(*self._get_safe_log()("[CLIENT] Error stopping client: %s", e))
 
-    async def list_models(self) -> list[Any]:
+    async def list_models(self, *, force_refresh: bool = False) -> list[Any]:
         """Fetch available models from SDK backend.
 
         Contract: sdk-boundary:Models:MUST:1
         - SDK typed rpc.models.list() retains the advertised output limit
         - Cache one successful typed RPC per wrapper, as CopilotClient.list_models()
           does for its parsed (but incomplete) response
+
+        Args:
+            force_refresh: Strict inventory probe. Always issue a typed RPC and
+                leave the legacy cache untouched (both on success and failure).
+                Do not use CopilotClient.list_models(), which memoizes internally.
 
         Returns:
             List of SDK typed Model objects (translation to domain types
@@ -797,16 +802,24 @@ class CopilotClientWrapper:
         client = await self._ensure_client_initialized(caller="list_models")
 
         async with self._model_list_lock:
-            if self._model_list_cache is not None:
+            if not force_refresh and self._model_list_cache is not None:
                 return list(self._model_list_cache)
             try:
                 from . import _imports
 
                 response = await client.rpc.models.list(_imports.make_models_list_request())
+                if force_refresh and not isinstance(response.models, list):
+                    raise ValueError("Malformed SDK model inventory: expected a models list")
                 models = list(response.models)
-                self._model_list_cache = models
+                if not force_refresh:
+                    self._model_list_cache = models
                 logger.debug("[CLIENT] Fetched %d models from SDK", len(models))
                 return list(models)
             except Exception as e:
+                if force_refresh:
+                    from amplifier_core.llm_errors import LLMError
+
+                    if isinstance(e, LLMError):
+                        raise
                 error_config = self._get_error_config()
                 raise self._get_translate_error()(e, error_config) from e

@@ -75,6 +75,7 @@ from .fake_tool_detection import (
 from .model_cache import read_cache, write_cache
 from .models import (
     copilot_model_to_amplifier_model,
+    discover_and_map_models,
     fetch_and_map_models,
 )
 
@@ -647,6 +648,18 @@ class GitHubCopilotProvider:
                 ),
             ],
         )
+
+    async def discover_models(self) -> dict[str, Any]:
+        """Return current-account inventory without using or warming legacy caches.
+
+        This optional discovery extension is deliberately separate from list_models():
+        every call reaches the SDK's typed RPC, genuine empty inventories remain
+        empty, and failures propagate as typed errors rather than cached success.
+        Selection defaults do not participate in discovery; the existing client's
+        authentication, endpoint and discovery configuration remain authoritative.
+        """
+        models = await discover_and_map_models(self._client)
+        return {"version": 1, "source": "provider-api", "models": models}
 
     async def list_models(self) -> list[ModelInfo]:
         """Return available models from GitHub Copilot SDK.
