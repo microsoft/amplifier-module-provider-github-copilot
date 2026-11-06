@@ -63,6 +63,7 @@ class CopilotModelInfo:
     default_reasoning_effort: str | None = None
     context_window_default: int = 0
     context_window_long: int = 0
+    supports_tools: bool = False
 
 
 def resolve_effective_window(info: CopilotModelInfo, enable_long_context: bool) -> int:
@@ -113,6 +114,7 @@ def sdk_model_to_copilot_model(sdk_model: Any, *, policy_defaults: bool = True) 
     # Extract capabilities using duck-typing (SDK type structure)
     # Guard against None capabilities (SDK may return partial model info)
     capabilities = sdk_model.capabilities
+    supports_tools = False
     max_prompt_tokens: int | None = None
     if capabilities is None:
         # SDK returned no capabilities - use all defaults
@@ -158,6 +160,7 @@ def sdk_model_to_copilot_model(sdk_model: Any, *, policy_defaults: bool = True) 
             supports_vision = False
             supports_reasoning_effort = False
         else:
+            supports_tools = getattr(supports, "tool_calls", None) is True
             supports_vision = supports.vision if supports.vision is not None else False
             supports_reasoning_effort = (
                 supports.reasoning_effort if supports.reasoning_effort is not None else False
@@ -210,4 +213,5 @@ def sdk_model_to_copilot_model(sdk_model: Any, *, policy_defaults: bool = True) 
         default_reasoning_effort=default_reasoning_effort,
         context_window_default=context_window_default,
         context_window_long=context_window_long,
+        supports_tools=supports_tools,
     )

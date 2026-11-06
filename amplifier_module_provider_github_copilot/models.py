@@ -115,7 +115,9 @@ def _format_long_millions(tokens: int) -> str:
     return f"{text}M"
 
 
-def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelInfo:
+def copilot_model_to_amplifier_model(
+    model: CopilotModelInfo, *, catalog: bool = False
+) -> AmplifierModelInfo:
     """Translate CopilotModelInfo to amplifier_core.ModelInfo.
 
     Contract: sdk-boundary:ModelDiscovery:MUST:3
@@ -143,7 +145,12 @@ def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelI
         amplifier_core.ModelInfo (what kernel expects from provider.list_models())
     """
     # Build capabilities list
-    capabilities: list[str] = ["streaming", "tools"]  # All Copilot models support these
+    # Legacy inference/helper annotations stay unchanged. Authentic catalog
+    # metadata advertises only SDK-reported flags; the SDK has no per-model
+    # streaming flag. Provider-level streaming support is a separate contract.
+    capabilities: list[str] = [] if catalog else ["streaming", "tools"]
+    if catalog and model.supports_tools:
+        capabilities.append("tools")
 
     if model.supports_vision:
         capabilities.append("vision")
@@ -282,7 +289,7 @@ async def discover_and_map_models(client: Any) -> list[AmplifierModelInfo]:
         for model in models:
             if not isinstance(model.id, str) or not model.id.strip():
                 raise ValueError("Malformed SDK model inventory: expected non-empty model ID")
-        return [copilot_model_to_amplifier_model(model) for model in models]
+        return [copilot_model_to_amplifier_model(model, catalog=True) for model in models]
     except LLMError:
         raise
     except Exception as exc:

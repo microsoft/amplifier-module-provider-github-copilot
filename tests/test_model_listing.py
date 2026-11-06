@@ -202,6 +202,7 @@ async def test_missing_limits_do_not_become_fabricated_catalog_values(
     assert auto.max_output_tokens == 0
     assert "vision" not in auto.capabilities
     assert "thinking" not in auto.capabilities
+    assert auto.capabilities == []
 
 
 async def test_real_sdk_serialization_and_deserialization_without_launch(
@@ -222,7 +223,7 @@ async def test_real_sdk_serialization_and_deserialization_without_launch(
                         "max_prompt_tokens": 200000,  # Subtraction would lose output.
                         "max_output_tokens": 64000,
                     },
-                    "supports": {"vision": True, "reasoningEffort": True},
+                        "supports": {"vision": True, "reasoningEffort": True, "toolCalls": True},
                 },
                 "supportedReasoningEfforts": ["low", "high"],
                 "defaultReasoningEffort": "low",
@@ -247,10 +248,12 @@ async def test_real_sdk_serialization_and_deserialization_without_launch(
     assert [m.id for m in all_models] == sorted(INVENTORY)
     auto = next(m for m in all_models if m.id == "auto")
     assert (auto.context_window, auto.max_output_tokens) == (0, 0)
+    assert auto.capabilities == []
     fixed = next(m for m in all_models if m.id == "gpt-6-astra")
     assert fixed.max_output_tokens == 64000
     assert fixed.defaults["supported_reasoning_efforts"] == ["low", "high"]
     assert "vision" in fixed.capabilities
+    assert "tools" in fixed.capabilities
     fixed.defaults["supported_reasoning_efforts"].clear()
     refreshed = await provider.list_models()
     assert next(m for m in refreshed if m.id == fixed.id).defaults[

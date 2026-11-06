@@ -403,6 +403,8 @@ The provider translates all SDK errors to typed kernel errors before they reach 
 It neither reads nor warms disk, provider or wrapper caches, and never substitutes
 static models. A genuine empty response returns `[]`; failures raise typed,
 sanitized errors. The separate legacy inference capability lookup is unchanged.
+Catalog capability flags come from the SDK; an absent flag is not a fabricated
+positive claim. Provider-level streaming support remains separate.
 
 ### Model recommendations and filters
 
