@@ -1,14 +1,18 @@
 """Strict inventory probes exercise the real wrapper at its typed SDK RPC boundary.
 
-Only the SDK RPC is stubbed: provider orchestration, wrapper cache/lock, model
-translation and error translation run normally. No SDK launch, credentials or
-network are required. Legacy fallback behavior is tested separately below.
+The SDK RPC and cold-start SDK construction are stubbed: provider orchestration,
+wrapper lifecycle/cache/locks, model translation and error translation run normally.
+No SDK launch, credentials or network are required. Legacy fallback behavior is
+tested separately below.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, call
@@ -17,6 +21,7 @@ import pytest
 
 from amplifier_module_provider_github_copilot import models as model_helpers
 from amplifier_module_provider_github_copilot import provider as provider_module
+from amplifier_module_provider_github_copilot.config._paths import ProviderPaths
 from amplifier_module_provider_github_copilot.error_translation import (
     AuthenticationError,
     LLMError,
@@ -27,6 +32,7 @@ from amplifier_module_provider_github_copilot.error_translation import (
 from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 from amplifier_module_provider_github_copilot.sdk_adapter import CopilotClientWrapper
 from amplifier_module_provider_github_copilot.sdk_adapter import _imports as sdk_imports
+from amplifier_module_provider_github_copilot.sdk_adapter import client as client_module
 from tests.test_models import make_sdk_model_info
 
 
@@ -81,7 +87,92 @@ def inventory_boundary(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     )
 
 
-def assert_caches_untouched(boundary: SimpleNamespace) -> None:
+@pytest.fixture
+async def cold_inventory_boundary(
+    inventory_boundary: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> AsyncIterator[SimpleNamespace]:
+    """Real lazy initialization, but RPC does not exist until the start barrier opens."""
+    boundary = inventory_boundary
+    boundary.wrapper._sdk_client = None
+    boundary.wrapper._provider_paths = ProviderPaths(
+        provider_home=tmp_path / "cold-provider",
+        cache_home=tmp_path / "cold-cache",
+    )
+    boundary.clients = []
+    boundary.tasks = []
+    boundary.start_entered = asyncio.Event()
+    boundary.start_release = asyncio.Event()
+    boundary.stop_entered = asyncio.Event()
+    boundary.stop_release = asyncio.Event()
+    boundary.stop_release.set()
+    boundary.start_error = None
+    boundary.stop_error = None
+    boundary.rpc_list.return_value = SimpleNamespace(models=[])
+
+    def construct_client(**kwargs: Any) -> SimpleNamespace:
+        candidate = SimpleNamespace(live=False, stop_finished=asyncio.Event())
+        boundary.clients.append(candidate)
+
+        async def start() -> None:
+            candidate.live = True  # Simulate a subprocess before RPC readiness.
+            candidate._process = SimpleNamespace(pid=12345)
+            boundary.start_entered.set()
+            await boundary.start_release.wait()
+            if boundary.start_error is not None:
+                raise boundary.start_error
+            candidate.rpc = SimpleNamespace(models=SimpleNamespace(list=boundary.rpc_list))
+
+        async def stop() -> None:
+            boundary.stop_entered.set()
+            try:
+                await boundary.stop_release.wait()
+                if boundary.stop_error is not None:
+                    raise boundary.stop_error
+                candidate.live = False
+            finally:
+                candidate.stop_finished.set()
+
+        candidate.start = AsyncMock(side_effect=start)
+        candidate.stop = AsyncMock(side_effect=stop)
+        return candidate
+
+    boundary.construct = Mock(side_effect=construct_client)
+    monkeypatch.setattr(client_module, "CopilotClient", boundary.construct)
+    monkeypatch.setattr(client_module, "_resolve_token", lambda: None)
+    monkeypatch.setattr(client_module, "_resolve_sdk_log_level", lambda: "none")
+    monkeypatch.setattr(client_module, "locate_cli_binary", lambda: None)
+
+    yield boundary
+
+    # Failures must not leave blocked probes or shielded mock shutdowns behind.
+    boundary.start_release.set()
+    boundary.stop_release.set()
+    for task in boundary.tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.wait_for(asyncio.gather(*boundary.tasks, return_exceptions=True), timeout=2)
+    await boundary.wrapper.close()
+    for candidate in boundary.clients:
+        if candidate.stop.await_count:
+            await asyncio.wait_for(candidate.stop_finished.wait(), timeout=2)
+
+
+def start_cold_probe(boundary: SimpleNamespace) -> tuple[asyncio.Task[Any], asyncio.Event]:
+    """Signal entry without sleeps; the task then runs to its first real suspension."""
+    entered = asyncio.Event()
+
+    async def probe() -> dict[str, Any]:
+        entered.set()
+        return await boundary.provider.discover_models()
+
+    task = asyncio.create_task(probe())
+    boundary.tasks.append(task)
+    return task, entered
+
+
+def assert_caches_untouched(boundary: SimpleNamespace, *, injected: bool = True) -> None:
     boundary.read_cache.assert_not_called()
     boundary.write_cache.assert_not_called()
     boundary.sdk.list_models.assert_not_called()
@@ -89,7 +180,7 @@ def assert_caches_untouched(boundary: SimpleNamespace) -> None:
     assert boundary.wrapper._model_list_cache == [boundary.stale]
     assert boundary.provider._copilot_models_cache == [boundary.cached_domain]
     assert boundary.provider.config is boundary.config
-    assert boundary.wrapper._sdk_client is boundary.sdk
+    assert boundary.wrapper._sdk_client is (boundary.sdk if injected else None)
 
 
 def test_discovery_is_optional_async_no_argument_extension() -> None:
@@ -160,6 +251,202 @@ async def test_concurrent_strict_calls_each_issue_rpc(
     assert results == [{"version": 1, "source": "provider-api", "models": []}] * 3
     assert boundary.rpc_list.await_count == 3
     assert_caches_untouched(boundary)
+
+
+async def test_cold_concurrent_strict_probes_wait_for_rpc_readiness(
+    cold_inventory_boundary: SimpleNamespace,
+) -> None:
+    boundary = cold_inventory_boundary
+    first, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    second, second_entered = start_cold_probe(boundary)
+    await asyncio.wait_for(second_entered.wait(), timeout=2)
+
+    assert not first.done()
+    assert not second.done()
+    assert boundary.construct.call_count == 1
+    assert not hasattr(boundary.clients[0], "rpc")
+    assert boundary.wrapper._owned_client is None
+    assert boundary.wrapper.copilot_pid is None
+    boundary.rpc_list.assert_not_called()
+
+    boundary.start_release.set()
+    results = await asyncio.wait_for(asyncio.gather(first, second), timeout=2)
+
+    assert results == [{"version": 1, "source": "provider-api", "models": []}] * 2
+    assert boundary.rpc_list.await_args_list == [call(boundary.request)] * 2
+    assert boundary.wrapper._owned_client is boundary.clients[0]
+    assert boundary.wrapper.copilot_pid == "12345"
+    boundary.clients[0].start.assert_awaited_once()
+    boundary.clients[0].stop.assert_not_called()
+    assert_caches_untouched(boundary, injected=False)
+
+
+async def test_cancelled_cold_start_stops_candidate_before_fresh_probe(
+    cold_inventory_boundary: SimpleNamespace,
+) -> None:
+    boundary = cold_inventory_boundary
+    boundary.stop_release.clear()
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    abandoned = boundary.clients[0]
+
+    owner.cancel()
+    await asyncio.wait_for(boundary.stop_entered.wait(), timeout=2)
+    retry, retry_entered = start_cold_probe(boundary)
+    await asyncio.wait_for(retry_entered.wait(), timeout=2)
+
+    assert not owner.done()  # Cancellation waits for bounded cleanup.
+    assert not retry.done()
+    assert boundary.construct.call_count == 1
+    assert boundary.wrapper._owned_client is None
+    boundary.rpc_list.assert_not_called()
+
+    boundary.stop_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(owner, timeout=2)
+    assert not abandoned.live
+    abandoned.stop.assert_awaited_once()
+
+    boundary.start_release.set()
+    assert await asyncio.wait_for(retry, timeout=2) == {
+        "version": 1,
+        "source": "provider-api",
+        "models": [],
+    }
+    assert boundary.construct.call_count == 2
+    assert boundary.wrapper._owned_client is boundary.clients[1]
+    assert boundary.clients[1].live
+    boundary.clients[1].start.assert_awaited_once()
+    boundary.rpc_list.assert_awaited_once_with(boundary.request)
+    assert_caches_untouched(boundary, injected=False)
+
+
+async def test_failed_cold_start_stops_candidate_and_retry_is_fresh(
+    cold_inventory_boundary: SimpleNamespace,
+) -> None:
+    boundary = cold_inventory_boundary
+    error = RuntimeError("Cold start failed")
+    boundary.start_error = error
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    boundary.start_release.set()
+
+    with pytest.raises(ProviderUnavailableError) as raised:
+        await asyncio.wait_for(owner, timeout=2)
+
+    assert raised.value.__cause__ is error
+    abandoned = boundary.clients[0]
+    abandoned.stop.assert_awaited_once()
+    assert not abandoned.live
+    assert boundary.wrapper._owned_client is None
+    boundary.rpc_list.assert_not_called()
+    boundary.start_error = None
+
+    assert (await boundary.provider.discover_models())["models"] == []
+    assert boundary.construct.call_count == 2
+    assert boundary.wrapper._owned_client is boundary.clients[1]
+    boundary.rpc_list.assert_awaited_once_with(boundary.request)
+    assert_caches_untouched(boundary, injected=False)
+
+
+async def test_close_during_cold_start_prevents_publication_and_waiter_restart(
+    cold_inventory_boundary: SimpleNamespace,
+) -> None:
+    boundary = cold_inventory_boundary
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    waiter, waiter_entered = start_cold_probe(boundary)
+    await asyncio.wait_for(waiter_entered.wait(), timeout=2)
+
+    await asyncio.wait_for(boundary.wrapper.close(), timeout=2)
+    assert not boundary.wrapper.is_healthy()
+    boundary.start_release.set()
+    results = await asyncio.wait_for(
+        asyncio.gather(owner, waiter, return_exceptions=True), timeout=2
+    )
+
+    assert all(isinstance(result, ProviderUnavailableError) for result in results)
+    assert all("stopped" in str(result) for result in results)
+    assert boundary.construct.call_count == 1
+    boundary.clients[0].stop.assert_awaited_once()
+    assert not boundary.clients[0].live
+    assert boundary.wrapper._owned_client is None
+    assert boundary.wrapper.copilot_pid is None
+    boundary.rpc_list.assert_not_called()
+    with pytest.raises(ProviderUnavailableError, match="stopped"):
+        await boundary.provider.discover_models()
+    await boundary.wrapper.close()
+    boundary.clients[0].stop.assert_awaited_once()
+    # close() intentionally clears the legacy wrapper cache.
+    assert boundary.wrapper._model_list_cache is None
+    boundary.read_cache.assert_not_called()
+    boundary.write_cache.assert_not_called()
+
+
+@pytest.mark.parametrize("cancel_start", [False, True], ids=["failed-start", "cancelled-start"])
+async def test_cold_start_cleanup_error_is_logged_without_masking_original_failure(
+    cold_inventory_boundary: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+    cancel_start: bool,
+) -> None:
+    boundary = cold_inventory_boundary
+    start_error = RuntimeError("Cold start failed")
+    boundary.start_error = start_error
+    boundary.stop_error = RuntimeError("Mock shutdown failed")
+    caplog.set_level(logging.INFO, logger=client_module.__name__)
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+
+    if cancel_start:
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(owner, timeout=2)
+    else:
+        boundary.start_release.set()
+        with pytest.raises(ProviderUnavailableError) as raised:
+            await asyncio.wait_for(owner, timeout=2)
+        assert raised.value.__cause__ is start_error
+
+    boundary.clients[0].stop.assert_awaited_once()
+    assert boundary.clients[0].live  # Failed cleanup must not claim process death.
+    assert boundary.wrapper._owned_client is None
+    assert "Error stopping client" in caplog.text
+    assert "subprocess may survive" in caplog.text
+    assert "Copilot client stopped" not in caplog.text
+    boundary.rpc_list.assert_not_called()
+    assert_caches_untouched(boundary, injected=False)
+
+
+async def test_cancelled_cold_start_cleanup_uses_close_timeout(
+    cold_inventory_boundary: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    boundary = cold_inventory_boundary
+    config = SimpleNamespace(sdk=SimpleNamespace(close_timeout_seconds=0.01))
+    monkeypatch.setattr(client_module, "load_sdk_protection_config", lambda: config)
+    boundary.stop_release.clear()
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    owner.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(owner, timeout=2)
+
+    candidate = boundary.clients[0]
+    candidate.stop.assert_awaited_once()
+    assert not candidate.stop_finished.is_set()
+    assert candidate.live
+    assert boundary.wrapper._owned_client is None
+    assert "stop did not complete within" in caplog.text
+    assert "subprocess may survive" in caplog.text
+    boundary.rpc_list.assert_not_called()
+    # The existing shield policy lets shutdown finish after the bounded wait.
+    boundary.stop_release.set()
+    await asyncio.wait_for(candidate.stop_finished.wait(), timeout=2)
+    assert not candidate.live
+    assert_caches_untouched(boundary, injected=False)
 
 
 @pytest.mark.parametrize(

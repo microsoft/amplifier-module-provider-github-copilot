@@ -380,6 +380,9 @@ class CopilotClientWrapper:
             return client
 
         async with self._client_lock:
+            # close() may have run while this caller waited for startup.
+            if self._stopped:
+                raise RuntimeError("Copilot client has been stopped")
             # Double-check after acquiring lock
             client = self._get_client()
             if client is not None:
@@ -443,7 +446,10 @@ class CopilotClientWrapper:
                 }
                 if token:
                     client_kwargs["github_token"] = token
-                self._owned_client = sdk_client_cls(**client_kwargs)
+                # Keep the candidate private until start() installs the SDK RPC.
+                # Concurrent callers must wait on _client_lock, not use a client
+                # whose subprocess/transport is still starting.
+                candidate = sdk_client_cls(**client_kwargs)
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
 
@@ -452,11 +458,6 @@ class CopilotClientWrapper:
                 # No-op on Windows; safe to call if binary not found.
                 binary_path = locate_cli_binary()
                 if binary_path and not ensure_executable(binary_path):
-                    # State-leak guard: clear the constructed-but-never-started
-                    # client so subsequent calls retry initialization rather than
-                    # returning a stale unstarted client via the double-check
-                    # locking at lines 322-326. Mirrors the pattern at line 402.
-                    self._owned_client = None
                     # Fail fast with diagnostic context. Without this, start()
                     # would surface an opaque OS EACCES error two layers
                     # removed from the actual cause. ensure_executable detects
@@ -486,20 +487,26 @@ class CopilotClientWrapper:
                         provider=PROVIDER_ID,
                     )
 
-                # Start client - clear on failure for retry
+                # A failed or cancelled start can already own a subprocess.
+                # Finish bounded cleanup before allowing a waiting caller to retry.
                 try:
-                    await self._owned_client.start()  # type: ignore[union-attr]
-                except Exception:
-                    self._owned_client = None
+                    await candidate.start()
+                    if self._stopped:
+                        # close() cannot see this private candidate. Do not
+                        # resurrect the wrapper when its in-flight start returns.
+                        raise RuntimeError("Copilot client has been stopped")
+                except BaseException:
+                    await self._stop_client(candidate)
                     raise
 
+                self._owned_client = candidate
                 # Capture subprocess PID for log correlation
-                process = getattr(self._owned_client, "_process", None)
+                process = getattr(candidate, "_process", None)
                 if process is not None:
                     self._copilot_pid = getattr(process, "pid", None)
 
                 logger.info("[CLIENT] Copilot client initialized for %s", caller)
-                return self._owned_client
+                return candidate
 
             except ImportError as e:
                 from ..security_redaction import redact_sensitive_text
@@ -760,6 +767,10 @@ class CopilotClientWrapper:
         if owned_client is None:
             return
         self._owned_client = None
+        await self._stop_client(owned_client)
+
+    async def _stop_client(self, owned_client: Any) -> None:
+        """Bound shutdown of a published client or an unpublished startup candidate."""
         close_timeout = load_sdk_protection_config().sdk.close_timeout_seconds
         try:
             logger.info("[CLIENT] Stopping owned Copilot client...")
@@ -776,7 +787,11 @@ class CopilotClientWrapper:
                 owned_client,
             )
         except Exception as e:
-            logger.warning(*self._get_safe_log()("[CLIENT] Error stopping client: %s", e))
+            logger.warning(
+                *self._get_safe_log()(
+                    "[CLIENT] Error stopping client: %s. Its SDK subprocess may survive.", e
+                )
+            )
 
     async def list_models(self, *, force_refresh: bool = False) -> list[Any]:
         """Fetch available models from SDK backend.
