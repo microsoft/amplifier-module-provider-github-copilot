@@ -112,17 +112,28 @@ async def cold_inventory_boundary(
     boundary.rpc_list.return_value = SimpleNamespace(models=[])
 
     def construct_client(**kwargs: Any) -> SimpleNamespace:
-        candidate = SimpleNamespace(live=False, stop_finished=asyncio.Event())
+        candidate = SimpleNamespace(
+            live=False,
+            start_cancelled=asyncio.Event(),
+            start_finished=asyncio.Event(),
+            stop_finished=asyncio.Event(),
+        )
         boundary.clients.append(candidate)
 
         async def start() -> None:
             candidate.live = True  # Simulate a subprocess before RPC readiness.
             candidate._process = SimpleNamespace(pid=12345)
             boundary.start_entered.set()
-            await boundary.start_release.wait()
-            if boundary.start_error is not None:
-                raise boundary.start_error
-            candidate.rpc = SimpleNamespace(models=SimpleNamespace(list=boundary.rpc_list))
+            try:
+                await boundary.start_release.wait()
+                if boundary.start_error is not None:
+                    raise boundary.start_error
+                candidate.rpc = SimpleNamespace(models=SimpleNamespace(list=boundary.rpc_list))
+            except asyncio.CancelledError:
+                candidate.start_cancelled.set()
+                raise
+            finally:
+                candidate.start_finished.set()
 
         async def stop() -> None:
             boundary.stop_entered.set()
@@ -147,7 +158,7 @@ async def cold_inventory_boundary(
     yield boundary
 
     # Failures must not leave blocked probes or shielded mock shutdowns behind.
-    boundary.start_release.set()
+    # Never make a stalled start succeed merely to tear down a failed close test.
     boundary.stop_release.set()
     for task in boundary.tasks:
         if not task.done():
@@ -170,6 +181,26 @@ def start_cold_probe(boundary: SimpleNamespace) -> tuple[asyncio.Task[Any], asyn
     task = asyncio.create_task(probe())
     boundary.tasks.append(task)
     return task, entered
+
+
+def start_cold_close(boundary: SimpleNamespace) -> tuple[asyncio.Task[None], asyncio.Event]:
+    """Track a closer and signal entry before it reaches its first suspension."""
+    entered = asyncio.Event()
+
+    async def close() -> None:
+        entered.set()
+        await boundary.wrapper.close()
+
+    task = asyncio.create_task(close())
+    boundary.tasks.append(task)
+    return task, entered
+
+
+async def settled_cold_results(*tasks: asyncio.Task[Any]) -> list[Any]:
+    """Observe settlement without cancelling the operations being falsified."""
+    _, pending = await asyncio.wait(tasks, timeout=2)
+    assert not pending, "Cold-start lifecycle operations did not settle"
+    return list(await asyncio.gather(*tasks, return_exceptions=True))
 
 
 def assert_caches_untouched(boundary: SimpleNamespace, *, injected: bool = True) -> None:
@@ -361,15 +392,19 @@ async def test_close_during_cold_start_prevents_publication_and_waiter_restart(
 
     await asyncio.wait_for(boundary.wrapper.close(), timeout=2)
     assert not boundary.wrapper.is_healthy()
-    boundary.start_release.set()
-    results = await asyncio.wait_for(
-        asyncio.gather(owner, waiter, return_exceptions=True), timeout=2
-    )
+    # close() must settle both callers without test-driven cancellation or readiness.
+    results = await settled_cold_results(owner, waiter)
 
     assert all(isinstance(result, ProviderUnavailableError) for result in results)
     assert all("stopped" in str(result) for result in results)
+    assert not boundary.start_release.is_set()
     assert boundary.construct.call_count == 1
+    boundary.clients[0].start.assert_awaited_once()
+    assert boundary.clients[0].start_cancelled.is_set()
+    assert boundary.clients[0].start_finished.is_set()
+    assert not hasattr(boundary.clients[0], "rpc")
     boundary.clients[0].stop.assert_awaited_once()
+    assert boundary.clients[0].stop_finished.is_set()
     assert not boundary.clients[0].live
     assert boundary.wrapper._owned_client is None
     assert boundary.wrapper.copilot_pid is None
@@ -382,6 +417,155 @@ async def test_close_during_cold_start_prevents_publication_and_waiter_restart(
     assert boundary.wrapper._model_list_cache is None
     boundary.read_cache.assert_not_called()
     boundary.write_cache.assert_not_called()
+
+
+async def test_concurrent_and_repeated_close_share_cold_start_cleanup(
+    cold_inventory_boundary: SimpleNamespace,
+) -> None:
+    boundary = cold_inventory_boundary
+    boundary.stop_release.clear()
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    waiter, waiter_entered = start_cold_probe(boundary)
+    await asyncio.wait_for(waiter_entered.wait(), timeout=2)
+    first_close, _ = start_cold_close(boundary)
+    await asyncio.wait_for(boundary.stop_entered.wait(), timeout=2)
+    second_close, second_entered = start_cold_close(boundary)
+    third_close, third_entered = start_cold_close(boundary)
+    await asyncio.wait_for(second_entered.wait(), timeout=2)
+    await asyncio.wait_for(third_entered.wait(), timeout=2)
+
+    candidate = boundary.clients[0]
+    assert candidate.start_cancelled.is_set()
+    candidate.stop.assert_awaited_once()
+    assert not candidate.stop_finished.is_set()
+    assert all(not task.done() for task in (first_close, second_close, third_close))
+    assert not owner.done()
+    assert not waiter.done()
+    assert not boundary.wrapper.is_healthy()
+    assert boundary.wrapper._owned_client is None
+    assert boundary.wrapper.copilot_pid is None
+    boundary.rpc_list.assert_not_called()
+
+    boundary.stop_release.set()
+    results = await settled_cold_results(owner, waiter, first_close, second_close, third_close)
+    assert all(isinstance(result, ProviderUnavailableError) for result in results[:2])
+    assert all("stopped" in str(result) for result in results[:2])
+    assert results[2:] == [None, None, None]
+    await asyncio.wait_for(boundary.wrapper.close(), timeout=2)
+    candidate.stop.assert_awaited_once()
+    assert not candidate.live
+    assert not hasattr(candidate, "rpc")
+    assert not boundary.start_release.is_set()
+    assert boundary.construct.call_count == 1
+    boundary.rpc_list.assert_not_called()
+
+
+@pytest.mark.parametrize("cancel_first", [False, True], ids=["close-first", "cancel-first"])
+async def test_close_and_external_start_owner_cancellation_share_cleanup(
+    cold_inventory_boundary: SimpleNamespace,
+    cancel_first: bool,
+) -> None:
+    boundary = cold_inventory_boundary
+    boundary.stop_release.clear()
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    waiter, waiter_entered = start_cold_probe(boundary)
+    await asyncio.wait_for(waiter_entered.wait(), timeout=2)
+
+    if cancel_first:
+        owner.cancel()
+        await asyncio.wait_for(boundary.stop_entered.wait(), timeout=2)
+        closer, close_entered = start_cold_close(boundary)
+        await asyncio.wait_for(close_entered.wait(), timeout=2)
+    else:
+        closer, _ = start_cold_close(boundary)
+        await asyncio.wait_for(boundary.stop_entered.wait(), timeout=2)
+        owner.cancel()
+    concurrent_close, concurrent_entered = start_cold_close(boundary)
+    await asyncio.wait_for(concurrent_entered.wait(), timeout=2)
+
+    candidate = boundary.clients[0]
+    assert candidate.start_cancelled.is_set()
+    candidate.stop.assert_awaited_once()
+    assert not candidate.stop_finished.is_set()
+    assert not boundary.wrapper.is_healthy()
+    assert boundary.wrapper._owned_client is None
+    assert boundary.wrapper.copilot_pid is None
+    boundary.rpc_list.assert_not_called()
+
+    boundary.stop_release.set()
+    results = await settled_cold_results(owner, waiter, closer, concurrent_close)
+    # An external cancellation may win over close's stopped-error translation.
+    assert isinstance(results[0], (asyncio.CancelledError, ProviderUnavailableError))
+    if isinstance(results[0], ProviderUnavailableError):
+        assert "stopped" in str(results[0])
+    assert isinstance(results[1], ProviderUnavailableError)
+    assert "stopped" in str(results[1])
+    assert results[2:] == [None, None]
+    await asyncio.wait_for(boundary.wrapper.close(), timeout=2)
+    candidate.stop.assert_awaited_once()
+    assert not candidate.live
+    assert not hasattr(candidate, "rpc")
+    assert not boundary.start_release.is_set()
+    assert boundary.construct.call_count == 1
+    boundary.rpc_list.assert_not_called()
+
+
+async def test_close_during_cold_start_bounds_shared_cleanup_and_warns(
+    cold_inventory_boundary: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    boundary = cold_inventory_boundary
+    config = SimpleNamespace(sdk=SimpleNamespace(close_timeout_seconds=0.01))
+    monkeypatch.setattr(client_module, "load_sdk_protection_config", lambda: config)
+    caplog.set_level(logging.INFO, logger=client_module.__name__)
+    boundary.stop_release.clear()
+    owner, _ = start_cold_probe(boundary)
+    await asyncio.wait_for(boundary.start_entered.wait(), timeout=2)
+    waiter, waiter_entered = start_cold_probe(boundary)
+    await asyncio.wait_for(waiter_entered.wait(), timeout=2)
+    closer, _ = start_cold_close(boundary)
+    candidate = boundary.clients[0]
+
+    try:
+        results = await settled_cold_results(owner, waiter, closer)
+        assert all(isinstance(result, ProviderUnavailableError) for result in results[:2])
+        assert all("stopped" in str(result) for result in results[:2])
+        assert results[2] is None
+        assert not boundary.start_release.is_set()
+        assert candidate.start_cancelled.is_set()
+        assert candidate.start_finished.is_set()
+        assert not hasattr(candidate, "rpc")
+        candidate.stop.assert_awaited_once()
+        assert not candidate.stop_finished.is_set()
+        assert candidate.live  # Bounded close does not prove subprocess death.
+        assert not boundary.wrapper.is_healthy()
+        assert boundary.wrapper._owned_client is None
+        assert boundary.wrapper.copilot_pid is None
+        boundary.rpc_list.assert_not_called()
+        with pytest.raises(ProviderUnavailableError, match="stopped"):
+            await boundary.provider.discover_models()
+        await asyncio.wait_for(boundary.wrapper.close(), timeout=2)
+        candidate.stop.assert_awaited_once()
+        assert boundary.construct.call_count == 1
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == client_module.__name__ and record.levelno >= logging.WARNING
+        ]
+        assert sum("stop did not complete within" in message for message in warnings) == 1
+        assert any("subprocess may survive" in message for message in warnings)
+        assert "Copilot client stopped" not in caplog.text
+    finally:
+        # Only release shielded shutdown, after observing the bounded-close result.
+        # Startup remains blocked even during final test/fixture cleanup.
+        boundary.stop_release.set()
+        await asyncio.wait_for(candidate.stop_finished.wait(), timeout=2)
+
+    assert not candidate.live
+    assert not boundary.start_release.is_set()
 
 
 @pytest.mark.parametrize("cancel_start", [False, True], ids=["failed-start", "cancelled-start"])

@@ -15,6 +15,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from amplifier_core.llm_errors import ConfigurationError, ProviderUnavailableError
@@ -250,6 +251,15 @@ def _resolve_sdk_log_level() -> str:
     return default
 
 
+@dataclass
+class _PendingStart:
+    """Lifecycle ownership only; never returned as a usable SDK client."""
+
+    client: Any
+    task: asyncio.Task[Any]
+    stop_task: asyncio.Task[None] | None = None
+
+
 class CopilotClientWrapper:
     """Wrapper around copilot.CopilotClient with lifecycle management.
 
@@ -283,6 +293,7 @@ class CopilotClientWrapper:
         """
         self._sdk_client: Any = sdk_client
         self._owned_client: Any = None  # Only set when we created the client ourselves
+        self._pending_start: _PendingStart | None = None
         self._error_config: Any = None
         self._provider_paths: Any = provider_paths
         # Lock prevents race conditions on lazy init
@@ -489,15 +500,23 @@ class CopilotClientWrapper:
 
                 # A failed or cancelled start can already own a subprocess.
                 # Finish bounded cleanup before allowing a waiting caller to retry.
+                pending = _PendingStart(candidate, asyncio.create_task(candidate.start()))
+                self._pending_start = pending
                 try:
-                    await candidate.start()
+                    await pending.task
                     if self._stopped:
-                        # close() cannot see this private candidate. Do not
-                        # resurrect the wrapper when its in-flight start returns.
                         raise RuntimeError("Copilot client has been stopped")
-                except BaseException:
-                    await self._stop_client(candidate)
+                except asyncio.CancelledError:
+                    await self._stop_pending_start(pending)
+                    if self._stopped:
+                        raise RuntimeError("Copilot client has been stopped") from None
                     raise
+                except BaseException:
+                    await self._stop_pending_start(pending)
+                    raise
+                finally:
+                    if self._pending_start is pending and pending.task.done():
+                        self._pending_start = None
 
                 self._owned_client = candidate
                 # Capture subprocess PID for log correlation
@@ -763,11 +782,36 @@ class CopilotClientWrapper:
         """
         self._stopped = True  # Mark as stopped so is_healthy() returns False
         self._model_list_cache = None
+        pending = self._pending_start
+        if pending is not None:
+            close_timeout = load_sdk_protection_config().sdk.close_timeout_seconds
+            deadline = asyncio.get_running_loop().time() + close_timeout
+            # Cancelling the SDK startup task does not cancel its discovery
+            # owner. Both owner and close share a single bounded shutdown.
+            if not pending.task.done() and not pending.task.cancelling():
+                pending.task.cancel()
+            await self._stop_pending_start(pending)
+            if not pending.task.done():
+                done, _ = await asyncio.wait(
+                    [pending.task],
+                    timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+                )
+                if not done:
+                    logger.warning(
+                        "[CLIENT] Copilot startup did not settle after cancellation; "
+                        "the stopped wrapper retains pending lifecycle ownership."
+                    )
         owned_client = self._owned_client
         if owned_client is None:
             return
         self._owned_client = None
         await self._stop_client(owned_client)
+
+    async def _stop_pending_start(self, pending: _PendingStart) -> None:
+        """Start shutdown once, even when close races cancellation or failure."""
+        if pending.stop_task is None:
+            pending.stop_task = asyncio.create_task(self._stop_client(pending.client))
+        await asyncio.shield(pending.stop_task)
 
     async def _stop_client(self, owned_client: Any) -> None:
         """Bound shutdown of a published client or an unpublished startup candidate."""
