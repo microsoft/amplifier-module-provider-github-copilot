@@ -63,6 +63,7 @@ class CopilotModelInfo:
     default_reasoning_effort: str | None = None
     context_window_default: int = 0
     context_window_long: int = 0
+    supports_tools: bool = False
 
 
 def resolve_effective_window(info: CopilotModelInfo, enable_long_context: bool) -> int:
@@ -84,7 +85,7 @@ def resolve_effective_window(info: CopilotModelInfo, enable_long_context: bool) 
 # =============================================================================
 
 
-def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
+def sdk_model_to_copilot_model(sdk_model: Any, *, policy_defaults: bool = True) -> CopilotModelInfo:
     """Translate SDK ModelInfo to domain CopilotModelInfo.
 
     Contract: sdk-boundary:ModelDiscovery:MUST:2
@@ -105,14 +106,20 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
         Uses duck-typing for SDK type access (SDK objects have this structure).
         Fallback values from policy config when SDK returns None.
     """
+    # Inference's legacy helpers retain conservative policy budgets. Authentic
+    # catalog callers opt out: 0 is the kernel integer-field unknown sentinel,
+    # not an invented limit (notably for the SDK's genuine auto route).
+    default_context = get_default_context_window() if policy_defaults else 0
+    default_output = get_default_max_output_tokens() if policy_defaults else 0
     # Extract capabilities using duck-typing (SDK type structure)
     # Guard against None capabilities (SDK may return partial model info)
     capabilities = sdk_model.capabilities
+    supports_tools = False
     max_prompt_tokens: int | None = None
     if capabilities is None:
         # SDK returned no capabilities - use all defaults
-        context_window = get_default_context_window()
-        max_output_tokens = get_default_max_output_tokens()
+        context_window = default_context
+        max_output_tokens = default_output
         supports_vision = False
         supports_reasoning_effort = False
     else:
@@ -121,7 +128,7 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
 
         # Guard against None limits/supports within capabilities
         if limits is None:
-            context_window = get_default_context_window()
+            context_window = default_context
             max_prompt_tokens = None
         else:
             # Extract limits with fallback to policy defaults from YAML
@@ -131,7 +138,7 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
 
             # Typed RPC models use 0 for unknown windows (notably "auto").
             if context_window is None or context_window <= 0:
-                context_window = get_default_context_window()
+                context_window = default_context
 
         # The SDK's convenience list_models() discards max_output_tokens.
         # The public typed RPC retains it, even for models whose prompt budget
@@ -139,20 +146,26 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
         advertised_output = getattr(limits, "max_output_tokens", None)
         if isinstance(advertised_output, int) and advertised_output > 0:
             max_output_tokens = advertised_output
-        elif limits is not None and max_prompt_tokens is not None:
+        elif (
+            policy_defaults
+            and limits is not None
+            and max_prompt_tokens is not None
+            and context_window > 0
+        ):
             max_output_tokens = context_window - max_prompt_tokens
         else:
-            max_output_tokens = get_default_max_output_tokens()
+            max_output_tokens = default_output
 
         # Ensure max_output_tokens is positive (safety check)
         if max_output_tokens <= 0:
-            max_output_tokens = get_default_max_output_tokens()
+            max_output_tokens = default_output
 
         # Extract supports flags with None guard
         if supports is None:
             supports_vision = False
             supports_reasoning_effort = False
         else:
+            supports_tools = getattr(supports, "tool_calls", None) is True
             supports_vision = supports.vision if supports.vision is not None else False
             supports_reasoning_effort = (
                 supports.reasoning_effort if supports.reasoning_effort is not None else False
@@ -191,7 +204,7 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
     if context_window_default is None:
         context_window_default = max_prompt_tokens
     if context_window_default is None:
-        context_window_default = get_default_context_window()
+        context_window_default = default_context
     context_window_long = billing_long if billing_long is not None else context_window_default
 
     return CopilotModelInfo(
@@ -205,4 +218,5 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
         default_reasoning_effort=default_reasoning_effort,
         context_window_default=context_window_default,
         context_window_long=context_window_long,
+        supports_tools=supports_tools,
     )

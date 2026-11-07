@@ -25,6 +25,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
@@ -41,6 +42,7 @@ from amplifier_core import (
 )
 
 from ._identity import PROVIDER_ID
+from ._model_listing import ModelFilters, selector_schema
 from .config_loader import (
     ProviderConfig,
     RetryConfig,
@@ -72,11 +74,8 @@ from .fake_tool_detection import (
 )
 
 # Model discovery and cache (dynamic SDK fetch)
-from .model_cache import read_cache, write_cache
-from .models import (
-    copilot_model_to_amplifier_model,
-    fetch_and_map_models,
-)
+from .model_cache import read_cache
+from .models import discover_and_map_models
 
 # Observability module for hook event emission (separation of concerns)
 from .observability import (
@@ -500,6 +499,9 @@ class GitHubCopilotProvider:
 
         """
         self.config = config or {}
+        self._model_filters = ModelFilters.parse(
+            self.config.get("model_filters", {"latest_per_family": True, "hide_dated": True})
+        )
         self.coordinator = coordinator
         self._client = client if client is not None else CopilotClientWrapper()
         self._provider_config = load_models_config()
@@ -521,7 +523,7 @@ class GitHubCopilotProvider:
         # Contract: streaming-contract:ProgressiveStreaming:SHOULD:3
         self._pending_emit_tasks: set[asyncio.Task[Any]] = set()
         # In-memory capability cache for the reasoning_effort gate hot path.
-        # Warmed by list_models() and lazily populated by the first
+        # Kept separate from the authentic catalog; lazily populated by the first
         # _lookup_copilot_model_info() call. None means "never populated";
         # an empty list means "looked up disk, nothing there".
         self._copilot_models_cache: list[CopilotModelInfo] | None = None
@@ -648,66 +650,31 @@ class GitHubCopilotProvider:
             ],
         )
 
-    async def list_models(self) -> list[ModelInfo]:
-        """Return available models from GitHub Copilot SDK.
+    def get_model_list_info(self) -> dict[str, Any]:
+        """Describe the selector extension without I/O or mutable policy aliases."""
+        return {
+            "version": 1,
+            "source": "provider-api",
+            "filters_keyword": "filters",
+            "filters_schema": selector_schema(),
+            "default_filters": self._model_filters.as_dict(),
+            "unfiltered": {},
+            "override": "replace",
+        }
 
-        Contract: sdk-boundary:ModelDiscovery:MUST:1
-        - MUST fetch models from SDK list_models() API
+    async def list_models(self, *, filters: Mapping[str, object] | None = None) -> list[ModelInfo]:
+        """Return a fresh bound-connection catalog, never cached success.
 
-        Contract: behaviors:ModelCache:SHOULD:1
-        - SHOULD cache SDK models to disk for session persistence
-
-        Contract: behaviors:ModelDiscoveryError:MUST:1
-        - MUST raise ProviderUnavailableError when SDK unavailable AND cache empty
-
-        Two-Tier Architecture:
-        1. SDK list_models() → Dynamic, authoritative
-        2. Disk cache → Fallback when SDK unavailable
-        3. ERROR → No hardcoded fallback (fail clearly)
+        None uses immutable configured defaults; an explicit mapping replaces
+        them, including {} for all actual SDK IDs. Selection never gates inference.
+        SDK auto is returned only when advertised. Errors remain typed and distinct
+        from a genuine empty list. The SDK lifecycle and external ownership stay
+        with the existing wrapper.
         """
-        # Tier 1: Try SDK first (dynamic, authoritative)
-        try:
-            # Bug fix: fetch_and_map_models returns both mapped models AND raw SDK models
-            # for caching, eliminating the redundant fetch_models() call
-            models, copilot_models = await fetch_and_map_models(self._client)
-
-            # Cache successful result for future use
-            try:
-                write_cache(copilot_models)
-            except Exception as cache_err:
-                from .security_redaction import redact_sensitive_text
-
-                logger.warning("Failed to cache models: %s", redact_sensitive_text(cache_err))
-
-            # Warm the in-memory capability cache so the reasoning_effort gate
-            # hot path skips disk I/O on subsequent complete() calls.
-            self._copilot_models_cache = list(copilot_models)
-
-            return cast(list[ModelInfo], models)
-        except Exception as sdk_err:
-            from .security_redaction import redact_sensitive_text
-
-            logger.warning("SDK list_models failed: %s", redact_sensitive_text(sdk_err))
-
-        # Tier 2: Try disk cache (fallback)
-        cached_models = read_cache()
-        if cached_models:
-            logger.info("Using cached models (%d models)", len(cached_models))
-            # Mirror Tier 1: warm the in-memory capability cache so the
-            # reasoning_effort gate hot path stays zero-I/O on subsequent calls.
-            self._copilot_models_cache = list(cached_models)
-            return cast(
-                list[ModelInfo],
-                [copilot_model_to_amplifier_model(m) for m in cached_models],
-            )
-
-        # Tier 3: Error — no hardcoded fallback
-        # Contract: behaviors:ModelDiscoveryError:MUST:1
-        raise ProviderUnavailableError(
-            "Failed to fetch models from SDK and no cached models available. "
-            "Check network connectivity and SDK authentication.",
-            provider=PROVIDER_ID,
-        )
+        policy = self._model_filters if filters is None else ModelFilters.parse(filters)
+        models = await discover_and_map_models(self._client)
+        by_id = {model.id: model for model in models}
+        return cast(list[ModelInfo], [by_id[model_id] for model_id in policy.select(list(by_id))])
 
     async def complete(
         self,
@@ -1116,11 +1083,10 @@ class GitHubCopilotProvider:
         a disk read on every ``complete()`` call.
 
         Lookup order:
-        1. In-memory cache (warmed by ``list_models`` or a prior miss).
+        1. In-memory inference capability cache (independent of model listing).
         2. ``read_cache()`` once on first miss; result memoized.
 
-        The in-memory cache lives for the process lifetime; refresh requires a
-        successful ``list_models()`` SDK or disk-fallback call. Stale entries
+        The in-memory cache lives for the process lifetime. Stale entries
         are non-fatal: a missing model defers final validation to
         ``errors.yaml:P4`` (same error class) after the universal SDK literal
         allowlist check.
@@ -1134,9 +1100,7 @@ class GitHubCopilotProvider:
                 # calls in this process avoid redundant disk I/O on the
                 # reasoning_effort hot path. The field-level docstring is the
                 # contract: ``None`` means "never populated"; ``[]`` means
-                # "looked up, nothing there." A successful ``list_models()``
-                # call later in the process will overwrite ``[]`` with real
-                # entries — the negative memoization is purely a
+                # "looked up, nothing there." This negative memoization is a
                 # missing-cache-file optimization.
                 self._copilot_models_cache = []
                 return None

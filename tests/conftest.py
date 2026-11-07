@@ -29,6 +29,7 @@ os.environ["SKIP_SDK_CHECK"] = "1"
 import amplifier_module_provider_github_copilot.models as _models_module  # noqa: E402
 
 _original_fetch_and_map_models = _models_module.fetch_and_map_models
+_original_discover_and_map_models = _models_module.discover_and_map_models
 
 # Windows event loop policy fix
 # On Windows, the default ProactorEventLoop has issues with asyncio subprocesses.
@@ -188,6 +189,10 @@ def real_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
         "amplifier_module_provider_github_copilot.models.fetch_and_map_models",
         _original_fetch_and_map_models,
     )
+    monkeypatch.setattr(
+        "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
+        _original_discover_and_map_models,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -232,11 +237,13 @@ def mock_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
         ]
         return amplifier_models, copilot_models
 
-    # Patch both the import location AND the definition
-    # This handles cases where the function was already imported
+    async def mock_discover_and_map_models(client: object) -> list[ModelInfo]:
+        mapped, _ = await mock_fetch_and_map_models(client)
+        return mapped
+
     monkeypatch.setattr(
-        "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
-        mock_fetch_and_map_models,
+        "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
+        mock_discover_and_map_models,
     )
     monkeypatch.setattr(
         "amplifier_module_provider_github_copilot.models.fetch_and_map_models",

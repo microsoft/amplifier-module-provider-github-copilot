@@ -650,7 +650,7 @@ class TestProviderListModelsDynamic:
     async def test_provider_list_models_calls_fetch_models(self) -> None:
         """Contract: sdk-boundary:ModelDiscovery:MUST:1
 
-        provider.list_models() MUST call models.fetch_and_map_models().
+        provider.list_models() MUST call the uncached catalog helper.
         This test verifies the provider uses dynamic SDK fetch, not static YAML.
         """
         from unittest.mock import patch
@@ -678,7 +678,7 @@ class TestProviderListModelsDynamic:
         # Patch fetch_and_map_models to return our unique model
         # fetch_and_map_models now returns (amplifier_models, copilot_models) tuple
         with patch(
-            "amplifier_module_provider_github_copilot.provider.fetch_and_map_models"
+            "amplifier_module_provider_github_copilot.provider.discover_and_map_models"
         ) as mock_fetch:
             # Create matching CopilotModelInfo for the tuple
             from amplifier_module_provider_github_copilot.sdk_adapter.model_translation import (
@@ -691,7 +691,8 @@ class TestProviderListModelsDynamic:
                 context_window=999999,
                 max_output_tokens=88888,
             )
-            mock_fetch.return_value = ([sdk_only_model], [copilot_model])
+            mock_fetch.return_value = [sdk_only_model]
+            assert copilot_model.id == sdk_only_model.id
 
             result = await provider.list_models()
 
@@ -704,11 +705,8 @@ class TestProviderListModelsDynamic:
         assert result[0].context_window == 999999
 
     @pytest.mark.asyncio
-    async def test_provider_list_models_uses_cache_on_sdk_failure(self) -> None:
-        """Contract: behaviors:ModelCache:SHOULD:1
-
-        When SDK fails, provider.list_models() SHOULD use disk cache.
-        """
+    async def test_provider_list_models_ignores_cache_on_sdk_failure(self) -> None:
+        """A populated disk cache cannot mask failure of the authentic catalog."""
         from unittest.mock import patch
 
         from amplifier_core import ModelInfo as AmplifierModelInfo
@@ -731,7 +729,7 @@ class TestProviderListModelsDynamic:
         # Simulate SDK failure + cache hit
         with (
             patch(
-                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
+                "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
                 side_effect=Exception("SDK unavailable"),
             ),
             patch(
@@ -739,7 +737,7 @@ class TestProviderListModelsDynamic:
                 return_value=[cached_model],
             ),
             patch(
-                "amplifier_module_provider_github_copilot.provider.copilot_model_to_amplifier_model"
+                "amplifier_module_provider_github_copilot.models.copilot_model_to_amplifier_model"
             ) as mock_convert,
         ):
             mock_convert.return_value = AmplifierModelInfo(
@@ -751,18 +749,13 @@ class TestProviderListModelsDynamic:
                 defaults={},
             )
 
-            result = await provider.list_models()
-
-        # Should have used cache
-        assert len(result) == 1
-        assert result[0].id == "cached-model"
+            with pytest.raises(Exception, match="SDK unavailable"):
+                await provider.list_models()
+            mock_convert.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_provider_list_models_writes_cache_on_success(self) -> None:
-        """Contract: provider-protocol:list_models:SHOULD:1
-
-        Successful SDK fetch should write to cache for future fallback.
-        """
+    async def test_provider_list_models_does_not_write_cache_on_success(self) -> None:
+        """Successful catalog calls do not warm any legacy cache."""
         from unittest.mock import patch
 
         from amplifier_core import ModelInfo as AmplifierModelInfo
@@ -800,18 +793,19 @@ class TestProviderListModelsDynamic:
         # The provider uses copilot_models for caching directly
         with (
             patch(
-                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
-                return_value=([amplifier_model], [copilot_model]),
+                "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
+                return_value=[amplifier_model],
             ),
             patch(
-                "amplifier_module_provider_github_copilot.provider.write_cache",
+                "amplifier_module_provider_github_copilot.model_cache.write_cache",
                 side_effect=mock_write_cache,
             ),
         ):
             result = await provider.list_models()
 
         assert len(result) == 1
-        assert write_cache_called, "write_cache should be called on SDK success"
+        assert not write_cache_called
+        assert copilot_model.id == amplifier_model.id
 
     @pytest.mark.asyncio
     async def test_provider_list_models_raises_when_both_sdk_and_cache_fail(self) -> None:
@@ -831,8 +825,8 @@ class TestProviderListModelsDynamic:
 
         with (
             patch(
-                "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
-                side_effect=Exception("SDK unavailable"),
+                "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
+                side_effect=ProviderUnavailableError("SDK unavailable"),
             ),
             patch(
                 "amplifier_module_provider_github_copilot.provider.read_cache",
@@ -842,7 +836,7 @@ class TestProviderListModelsDynamic:
             with pytest.raises(ProviderUnavailableError) as exc_info:
                 await provider.list_models()
 
-        assert "cached models" in str(exc_info.value).lower()
+        assert "SDK unavailable" in str(exc_info.value)
 
 
 # =============================================================================

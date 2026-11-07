@@ -1,3 +1,18 @@
+# Unreleased: canonical model listing (PR91 successor)
+
+`await provider.list_models()` remains valid and returns `list[ModelInfo]`, but
+now returns current SDK recommendations rather than a cached full inventory.
+Use `await provider.list_models(filters={})` for all current IDs. Optional
+`model_filters` configuration and per-call filters replace defaults; see README.
+Errors no longer become disk-cache success. Unknown catalog limits are `0`;
+inference's existing conservative budget policy is unchanged.
+
+The unshipped candidate `discover_models()` extension is removed: use canonical
+`list_models(filters={})` plus local `get_model_list_info()` metadata instead.
+Consumers of that candidate must stop unpacking the old `{"models": ...}` envelope.
+Rollback to the prior provider restores its old cached-list behavior, not fresh
+account inventory. No Core/Foundation dependency or inference model pin changes.
+
 # Migration Guide: v2.7.x → v2.8.0
 
 ## Overview

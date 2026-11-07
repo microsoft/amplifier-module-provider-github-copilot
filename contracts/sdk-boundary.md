@@ -651,10 +651,16 @@ Model discovery MUST fetch models dynamically from the SDK backend. The provider
 
 ### MUST Constraints
 
-1. **MUST** fetch models from SDK's public typed `rpc.models.list()` API; `CopilotClient.list_models()` loses the advertised output limit. The typed RPC MUST be cached and serialized per connected wrapper, as the SDK convenience method is, to avoid redundant successful requests and rate limiting.
+1. **MUST** fetch models from SDK's public typed `rpc.models.list()` API; `CopilotClient.list_models()` loses the advertised output limit. Canonical provider listing MUST use `force_refresh=True`: every call issues a typed RPC under the existing wrapper lock without reading or warming any inventory cache. The wrapper's legacy no-argument cache remains separate.
 2. **MUST** translate SDK typed `Model` to domain `CopilotModelInfo` (isolation layer)
 3. **MUST** translate `CopilotModelInfo` to `amplifier_core.ModelInfo` (kernel contract)
 4. **MUST NOT** use hardcoded model lists in production code
+5. **MUST NOT** invent unknown catalog limits or capability flags from inference
+   policy defaults; represent unknown integer limits as `0`, and advertise only
+   SDK-reported model flags. Provider-level streaming is a separate contract.
+   Preserve advertised output limits.
+6. **MUST** retain cancellation, initialization readiness, bounded exactly-once
+   close of a stalled startup, and external SDK client ownership.
 
 ### Type Translation Chain
 

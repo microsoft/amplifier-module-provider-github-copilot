@@ -118,33 +118,12 @@ async def test_live_two_call_session_redirects_sdk_files_and_preserves_legacy_pa
     provider_home = _resolved.provider_home
     cache_home = _resolved.cache_home
 
-    # real_model_discovery restores fetch_and_map_models; restore the provider
-    # module binding too so list_models() routes through the real SDK fetch path.
+    # Restore the canonical uncached catalog binding explicitly.
     import amplifier_module_provider_github_copilot.models as _models_mod
 
     monkeypatch.setattr(
-        "amplifier_module_provider_github_copilot.provider.fetch_and_map_models",
-        _models_mod.fetch_and_map_models,
-    )
-
-    # model_cache.write_cache() skips writing when PYTEST_CURRENT_TEST is set.
-    # Bypass by wrapping with an explicit cache_file path resolved through the
-    # genuine load_provider_paths binding established above.
-    from amplifier_module_provider_github_copilot.model_cache import (
-        get_cache_file_path as _get_cache_file_path,
-    )
-    from amplifier_module_provider_github_copilot.model_cache import (
-        write_cache as _real_write_cache,
-    )
-
-    _live_cache_file = _get_cache_file_path()
-
-    def _write_cache_live(models: object, cache_file: object = None) -> None:
-        _real_write_cache(models, cache_file=_live_cache_file)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(
-        "amplifier_module_provider_github_copilot.provider.write_cache",
-        _write_cache_live,
+        "amplifier_module_provider_github_copilot.provider.discover_and_map_models",
+        _models_mod.discover_and_map_models,
     )
 
     # Snapshot legacy locations BEFORE any provider activity.
@@ -234,8 +213,7 @@ async def test_live_two_call_session_redirects_sdk_files_and_preserves_legacy_pa
             f"Lifecycle:MUST:4 — provider_home files lost between calls: "
             f"{post1_provider - post2_provider}"
         )
-        # TODO: Acceptance:MUST:1(e) reword pending — complete() does NOT populate
-        # cache_home (only list_models does); see contracts/filesystem-layout.md.
+        # Neither complete() nor canonical list_models() populates the legacy cache.
         assert (post2_cache - baseline_cache).isdisjoint(post2_provider - baseline_provider), (
             f"provider_home and cache_home growth must be disjoint; "
             f"overlap={(post2_cache - baseline_cache) & (post2_provider - baseline_provider)}"
@@ -281,8 +259,7 @@ async def test_live_malformed_token_does_not_leak_files_to_default_paths(
         p = Provider(client=fresh_wrapper)
 
         # A4: complete() drives SDK subprocess startup where token validation occurs.
-        # list_models() routes through fetch_and_map_models (patchable) and never
-        # reaches the SDK auth layer. The bundled CLI validates the token against
+        # This probe targets completion, not catalog listing. The CLI validates against
         # GitHub server-side, so a malformed token surfaces as a 401 that the error
         # contract maps to AuthenticationError (errors.yaml: "401"/unauthorized);
         # ProviderUnavailableError/ConfigurationError remain accepted for non-auth

@@ -115,7 +115,9 @@ def _format_long_millions(tokens: int) -> str:
     return f"{text}M"
 
 
-def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelInfo:
+def copilot_model_to_amplifier_model(
+    model: CopilotModelInfo, *, catalog: bool = False
+) -> AmplifierModelInfo:
     """Translate CopilotModelInfo to amplifier_core.ModelInfo.
 
     Contract: sdk-boundary:ModelDiscovery:MUST:3
@@ -143,7 +145,12 @@ def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelI
         amplifier_core.ModelInfo (what kernel expects from provider.list_models())
     """
     # Build capabilities list
-    capabilities: list[str] = ["streaming", "tools"]  # All Copilot models support these
+    # Legacy inference/helper annotations stay unchanged. Authentic catalog
+    # metadata advertises only SDK-reported flags; the SDK has no per-model
+    # streaming flag. Provider-level streaming support is a separate contract.
+    capabilities: list[str] = [] if catalog else ["streaming", "tools"]
+    if catalog and model.supports_tools:
+        capabilities.append("tools")
 
     if model.supports_vision:
         capabilities.append("vision")
@@ -168,6 +175,7 @@ def copilot_model_to_amplifier_model(model: CopilotModelInfo) -> AmplifierModelI
     if (
         model.context_window_long > model.context_window_default
         and model.context_window_default > 0
+        and (not catalog or model.max_output_tokens > 0)
     ):
         # long= advertises the long tier's TOTAL capacity (prompt budget +
         # max output), whereas the Context column below reports only the
@@ -265,3 +273,25 @@ async def fetch_and_map_models(
     copilot_models = await fetch_models(client)
     amplifier_models = [copilot_model_to_amplifier_model(m) for m in copilot_models]
     return amplifier_models, copilot_models
+
+
+async def discover_and_map_models(client: Any) -> list[AmplifierModelInfo]:
+    """Map only a fresh SDK response, preserving typed discovery failures.
+
+    Unlike the legacy fetch helpers, this path neither wraps typed authentication/
+    network errors as generic unavailability nor allows cached inventory. Metadata
+    policy defaults cannot invent limits on this catalog path.
+    """
+    from .error_translation import LLMError, load_error_config, translate_sdk_error
+
+    try:
+        sdk_models = await client.list_models(force_refresh=True)
+        models = [sdk_model_to_copilot_model(model, policy_defaults=False) for model in sdk_models]
+        for model in models:
+            if not isinstance(model.id, str) or not model.id.strip():
+                raise ValueError("Malformed SDK model inventory: expected non-empty model ID")
+        return [copilot_model_to_amplifier_model(model, catalog=True) for model in models]
+    except LLMError:
+        raise
+    except Exception as exc:
+        raise translate_sdk_error(exc, load_error_config()) from exc

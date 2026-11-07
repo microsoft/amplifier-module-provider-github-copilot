@@ -145,5 +145,14 @@ markers = [
     "windows_only: platform-gated contract; deselected (not skipped) on non-win32 — policy: run or fail, never skip",
 ]
 
-# Note: [dependency-groups] removed — use [project.optional-dependencies] dev instead
-# The pytest-cov dependency has been consolidated into [project.optional-dependencies] dev
+# Managed offline runners prepare the standard dev group. Retain the published
+# dev extra for existing contributors and CI; keep both entry points identical.
+[dependency-groups]
+dev = [
+    "ruff>=0.3.0",
+    "pyright>=1.1.350",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=7.0.0",
+    "amplifier-core>=2.0.0",
+]

@@ -15,6 +15,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from amplifier_core.llm_errors import ConfigurationError, ProviderUnavailableError
@@ -250,6 +251,15 @@ def _resolve_sdk_log_level() -> str:
     return default
 
 
+@dataclass
+class _PendingStart:
+    """Lifecycle ownership only; never returned as a usable SDK client."""
+
+    client: Any
+    task: asyncio.Task[Any]
+    stop_task: asyncio.Task[None] | None = None
+
+
 class CopilotClientWrapper:
     """Wrapper around copilot.CopilotClient with lifecycle management.
 
@@ -283,6 +293,7 @@ class CopilotClientWrapper:
         """
         self._sdk_client: Any = sdk_client
         self._owned_client: Any = None  # Only set when we created the client ourselves
+        self._pending_start: _PendingStart | None = None
         self._error_config: Any = None
         self._provider_paths: Any = provider_paths
         # Lock prevents race conditions on lazy init
@@ -380,6 +391,9 @@ class CopilotClientWrapper:
             return client
 
         async with self._client_lock:
+            # close() may have run while this caller waited for startup.
+            if self._stopped:
+                raise RuntimeError("Copilot client has been stopped")
             # Double-check after acquiring lock
             client = self._get_client()
             if client is not None:
@@ -443,7 +457,10 @@ class CopilotClientWrapper:
                 }
                 if token:
                     client_kwargs["github_token"] = token
-                self._owned_client = sdk_client_cls(**client_kwargs)
+                # Keep the candidate private until start() installs the SDK RPC.
+                # Concurrent callers must wait on _client_lock, not use a client
+                # whose subprocess/transport is still starting.
+                candidate = sdk_client_cls(**client_kwargs)
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
 
@@ -452,11 +469,6 @@ class CopilotClientWrapper:
                 # No-op on Windows; safe to call if binary not found.
                 binary_path = locate_cli_binary()
                 if binary_path and not ensure_executable(binary_path):
-                    # State-leak guard: clear the constructed-but-never-started
-                    # client so subsequent calls retry initialization rather than
-                    # returning a stale unstarted client via the double-check
-                    # locking at lines 322-326. Mirrors the pattern at line 402.
-                    self._owned_client = None
                     # Fail fast with diagnostic context. Without this, start()
                     # would surface an opaque OS EACCES error two layers
                     # removed from the actual cause. ensure_executable detects
@@ -486,20 +498,34 @@ class CopilotClientWrapper:
                         provider=PROVIDER_ID,
                     )
 
-                # Start client - clear on failure for retry
+                # A failed or cancelled start can already own a subprocess.
+                # Finish bounded cleanup before allowing a waiting caller to retry.
+                pending = _PendingStart(candidate, asyncio.create_task(candidate.start()))
+                self._pending_start = pending
                 try:
-                    await self._owned_client.start()  # type: ignore[union-attr]
-                except Exception:
-                    self._owned_client = None
+                    await pending.task
+                    if self._stopped:
+                        raise RuntimeError("Copilot client has been stopped")
+                except asyncio.CancelledError:
+                    await self._stop_pending_start(pending)
+                    if self._stopped:
+                        raise RuntimeError("Copilot client has been stopped") from None
                     raise
+                except BaseException:
+                    await self._stop_pending_start(pending)
+                    raise
+                finally:
+                    if self._pending_start is pending and pending.task.done():
+                        self._pending_start = None
 
+                self._owned_client = candidate
                 # Capture subprocess PID for log correlation
-                process = getattr(self._owned_client, "_process", None)
+                process = getattr(candidate, "_process", None)
                 if process is not None:
                     self._copilot_pid = getattr(process, "pid", None)
 
                 logger.info("[CLIENT] Copilot client initialized for %s", caller)
-                return self._owned_client
+                return candidate
 
             except ImportError as e:
                 from ..security_redaction import redact_sensitive_text
@@ -756,10 +782,39 @@ class CopilotClientWrapper:
         """
         self._stopped = True  # Mark as stopped so is_healthy() returns False
         self._model_list_cache = None
+        pending = self._pending_start
+        if pending is not None:
+            close_timeout = load_sdk_protection_config().sdk.close_timeout_seconds
+            deadline = asyncio.get_running_loop().time() + close_timeout
+            # Cancelling the SDK startup task does not cancel its discovery
+            # owner. Both owner and close share a single bounded shutdown.
+            if not pending.task.done() and not pending.task.cancelling():
+                pending.task.cancel()
+            await self._stop_pending_start(pending)
+            if not pending.task.done():
+                done, _ = await asyncio.wait(
+                    [pending.task],
+                    timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+                )
+                if not done:
+                    logger.warning(
+                        "[CLIENT] Copilot startup did not settle after cancellation; "
+                        "the stopped wrapper retains pending lifecycle ownership."
+                    )
         owned_client = self._owned_client
         if owned_client is None:
             return
         self._owned_client = None
+        await self._stop_client(owned_client)
+
+    async def _stop_pending_start(self, pending: _PendingStart) -> None:
+        """Start shutdown once, even when close races cancellation or failure."""
+        if pending.stop_task is None:
+            pending.stop_task = asyncio.create_task(self._stop_client(pending.client))
+        await asyncio.shield(pending.stop_task)
+
+    async def _stop_client(self, owned_client: Any) -> None:
+        """Bound shutdown of a published client or an unpublished startup candidate."""
         close_timeout = load_sdk_protection_config().sdk.close_timeout_seconds
         try:
             logger.info("[CLIENT] Stopping owned Copilot client...")
@@ -776,15 +831,24 @@ class CopilotClientWrapper:
                 owned_client,
             )
         except Exception as e:
-            logger.warning(*self._get_safe_log()("[CLIENT] Error stopping client: %s", e))
+            logger.warning(
+                *self._get_safe_log()(
+                    "[CLIENT] Error stopping client: %s. Its SDK subprocess may survive.", e
+                )
+            )
 
-    async def list_models(self) -> list[Any]:
+    async def list_models(self, *, force_refresh: bool = False) -> list[Any]:
         """Fetch available models from SDK backend.
 
         Contract: sdk-boundary:Models:MUST:1
         - SDK typed rpc.models.list() retains the advertised output limit
         - Cache one successful typed RPC per wrapper, as CopilotClient.list_models()
           does for its parsed (but incomplete) response
+
+        Args:
+            force_refresh: Strict inventory probe. Always issue a typed RPC and
+                leave the legacy cache untouched (both on success and failure).
+                Do not use CopilotClient.list_models(), which memoizes internally.
 
         Returns:
             List of SDK typed Model objects (translation to domain types
@@ -797,16 +861,24 @@ class CopilotClientWrapper:
         client = await self._ensure_client_initialized(caller="list_models")
 
         async with self._model_list_lock:
-            if self._model_list_cache is not None:
+            if not force_refresh and self._model_list_cache is not None:
                 return list(self._model_list_cache)
             try:
                 from . import _imports
 
                 response = await client.rpc.models.list(_imports.make_models_list_request())
+                if force_refresh and not isinstance(response.models, list):
+                    raise ValueError("Malformed SDK model inventory: expected a models list")
                 models = list(response.models)
-                self._model_list_cache = models
+                if not force_refresh:
+                    self._model_list_cache = models
                 logger.debug("[CLIENT] Fetched %d models from SDK", len(models))
                 return list(models)
             except Exception as e:
+                if force_refresh:
+                    from amplifier_core.llm_errors import LLMError
+
+                    if isinstance(e, LLMError):
+                        raise
                 error_config = self._get_error_config()
                 raise self._get_translate_error()(e, error_config) from e

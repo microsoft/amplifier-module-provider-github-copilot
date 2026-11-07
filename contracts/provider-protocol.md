@@ -144,14 +144,22 @@ def get_info(self) -> ProviderInfo: ...
 ### 3. list_models()
 
 ```python
-async def list_models(self) -> list[ModelInfo]: ...
+async def list_models(self, *, filters=None) -> list[ModelInfo]: ...
 ```
 
 **Behavioral Requirements:**
-- **MUST** return all available models from SDK
-- **MUST** include `context_window` and `max_output_tokens` per model
-- **SHOULD** cache results for session lifetime
+- **MUST** fetch fresh current-bound-connection SDK models, then apply local selectors
+- **MUST** include `context_window` and `max_output_tokens` per model; `0` means unknown
+- **MUST NOT** read or warm disk/provider/wrapper catalogs, or use static fallback
 - **MUST** translate SDK model info to `ModelInfo` domain type
+- **MUST** use immutable configured defaults for no-arg/None; explicit mappings replace
+  all defaults, including `{}` for unfiltered and `include=[]` for none; exclude wins
+- **MUST** match case-insensitive OS-independent globs without changing endpoint IDs
+- **MUST** advertise all active recommendation policy in fresh `get_model_list_info()`
+  version-1 metadata: `source`, `filters_keyword`, `filters_schema`, `default_filters`,
+  `unfiltered`, `override`. Latest-per-family preserves distinct vendors, tiers and
+  routes, compares natural numeric versions, prefers aliases over matching snapshots,
+  and keeps unknown names visible. Exact inference selection is never filtered.
 
 **Test Anchors:**
 | Anchor | Clause |
@@ -731,7 +739,7 @@ __all__ = ["mount", "GitHubCopilotProvider"]
 - [ ] `name` property returns "github-copilot"
 - [ ] `get_info()` returns valid ProviderInfo
 - [ ] `get_info()` includes config_fields with GitHub token field
-- [ ] `list_models()` queries SDK and caches
+- [ ] `list_models()` queries uncached SDK RPC and applies explicit recommendation policy
 - [ ] `complete()` accepts `**kwargs` (not named callback)
 - [ ] `complete()` creates ephemeral session with deny hook
 - [ ] `complete()` forwards tools to SDK session (per sdk-boundary.md ToolForwarding:MUST:1)

@@ -190,7 +190,7 @@ providers:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `default_model` | `"auto"` | Model used when the caller does not specify one. Any ID from `list_models()` is valid. `auto` is Copilot's server-side router (the Copilot CLI's default): each turn goes to a model the service picks. It advertises no limits or reasoning levels, so the provider reports a conservative 128k context / 16k output, and a `reasoning_effort` is dropped for it once the model list is cached. Set an explicit model ID for a fixed window, reasoning control, or reproducible routing. |
+| `default_model` | `"auto"` | Model used when the caller does not specify one. Exact supported IDs remain usable even when omitted from recommendations. `auto` is Copilot's server-side router; the catalog includes it only if the SDK returns it. Unknown catalog limits are `0`, not the conservative inference policy budgets. Set an explicit model ID for reproducible routing. |
 | `reasoning_effort` | `"model default"` | Reasoning effort forwarded to models that support it (e.g. `low`, `medium`, `high`). Both this default and a caller-supplied value are best-effort: forwarded when the model supports it, dropped (field omitted, server uses its own default) when it does not — so a global or inherited effort never breaks delegation to a non-reasoning model. A malformed value (typo, mixed-case) still raises `ConfigurationError`. `"model default"` or unset defers to the model. Run `amplifier provider models github-copilot` for each model's levels. |
 | `enable_long_context` | `false` | Default to the model's long-context tier when the caller does not set a `context_tier`. Forwarded to the SDK as `long_context`; ignored by models without a long tier. |
 | `raw` | `false` | Include raw SDK payloads as a `"raw"` field in `llm:request` / `llm:response` events. See [Raw Payload Logging](#raw-payload-logging). |
@@ -399,7 +399,39 @@ For module structure, design decisions, and contract index see [docs/ARCHITECTUR
 
 The provider translates all SDK errors to typed kernel errors before they reach the caller. Each `complete()` call uses an independent session — no state accumulates between requests. The shared client and disk model cache persist across requests by design.
 
-On `list_models()` failure, the provider falls back to a disk cache (24-hour TTL) before raising `ProviderUnavailableError`.
+`list_models()` always uses the current bound client's typed SDK `listModels` RPC.
+It neither reads nor warms disk, provider or wrapper caches, and never substitutes
+static models. A genuine empty response returns `[]`; failures raise typed,
+sanitized errors. The separate legacy inference capability lookup is unchanged.
+Catalog capability flags come from the SDK; an absent flag is not a fabricated
+positive claim. Provider-level streaming support remains separate.
+
+### Model recommendations and filters
+
+```python
+await provider.list_models()  # configured defaults (same as filters=None)
+await provider.list_models(filters={})  # ALL current SDK IDs, no recommendation policy
+await provider.list_models(filters={"include": ["claude-*"], "exclude": ["*-preview"]})
+await provider.list_models(filters={"include": []})  # no selected models
+```
+
+The default `model_filters` is `{"include": ["*"], "exclude": [],
+"hide_dated": True, "latest_per_family": True}`. Set `model_filters` in provider
+configuration to replace it. An explicit per-call mapping replaces the entire
+configured policy, never merges it. Filters are copied before I/O; invalid keys,
+patterns and flags fail early. Globs are case-insensitive and OS-independent;
+exclusion wins and returned endpoint IDs remain byte-exact.
+
+Latest-per-family compares numeric versions only within the same vendor, family,
+tier and route. For example, a **controlled test inventory**, not a live entitlement
+claim, retains GPT-6 Astra/Luna/Terra and GPT-5.10 Sol; Claude 5.5
+Opus/Sonnet/Haiku; Grok 4.7 and 4.7 Fast; and MAI Code 2 Flash and its picker route.
+It does not rank those tiers by price or quality. A preview remains distinct.
+An alias beats its matching snapshot; snapshot-only ties retain the newest date.
+Unrecognized names are conservatively retained, even by default. No model name
+is manufactured. `get_model_list_info()` describes all active policy locally
+using the version-1 selector metadata (`filters_schema`, `default_filters`,
+`unfiltered`, `override`). Filters never change explicit inference selection.
 
 ## Tool Sequence Repair
 
@@ -520,7 +552,7 @@ python -m pytest tests/ -m live -v --tb=short
 | `Copilot SDK not installed` | Provider module not installed | Run `amplifier provider install github-copilot` |
 | `Not authenticated to GitHub Copilot` | Token not set | **Linux/macOS:** `export GITHUB_TOKEN=$(gh auth token)` **Windows:** `$env:GITHUB_TOKEN = (gh auth token)` |
 | `gh: command not found` | GitHub CLI missing | [Install gh CLI](https://cli.github.com/) |
-| Stale or wrong model list | Cached models | Delete `models_cache.json` from your cache directory: `%LOCALAPPDATA%\amplifier-provider-github-copilot\Cache\` (Windows), `~/Library/Caches/amplifier-provider-github-copilot/` (macOS), or `~/.cache/amplifier-provider-github-copilot/` (Linux). |
+| Missing model recommendation | Default filters or bound account | Try `list_models(filters={})` for unfiltered current inventory. Check the bound SDK account if still absent; catalog listing does not use disk cache. |
 | `Permission denied` on SDK binary | `uv` stripped execute bits | Provider auto-repairs on startup; if it fails, run `chmod +x <path-to-copilot-binary>` (Linux/macOS only) |
 
 ### Common Mistake
