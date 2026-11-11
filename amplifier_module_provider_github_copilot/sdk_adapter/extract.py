@@ -83,8 +83,8 @@ def extract_event_fields(sdk_event: Any) -> dict[str, Any]:
 
         # reasoning_opaque for extended thinking signature preservation
         # Contract: streaming-contract:ThinkingBlock:MUST:1
-        # Anthropic models send encrypted extended thinking data that must be
-        # returned verbatim in subsequent turns for multi-turn extended thinking.
+        # Preserve Copilot's opaque bytes verbatim; the accumulator tags the
+        # persisted block as Copilot state, not a native upstream signature.
         reasoning_opaque = getattr(sdk_data, "reasoning_opaque", None)
         if reasoning_opaque and "reasoning_opaque" not in event_dict:
             event_dict["reasoning_opaque"] = reasoning_opaque

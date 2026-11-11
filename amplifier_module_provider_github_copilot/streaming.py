@@ -325,14 +325,19 @@ class StreamingAccumulator:
                     content_blocks.append(TextContent(text=block_text))
             elif btype == "thinking":
                 thinking_text: str = block["text"]
-                if thinking_text:
+                signature = block.get("opaque") or self.reasoning_opaque
+                if thinking_text or signature:
                     # Contract: streaming-contract:ThinkingBlock:MUST:1
+                    # Copilot opaque state is not a native Anthropic/Gemini signature.
+                    # Keep its producer namespace through context persistence.
                     content.append(
                         ThinkingBlock(
                             thinking=thinking_text,
-                            signature=block.get("opaque") or self.reasoning_opaque,
+                            signature=signature,
+                            thinking_provenance={"version": 1, "provider": PROVIDER_ID},
                         )
                     )
+                if thinking_text:
                     content_blocks.append(ThinkingContent(text=thinking_text))
             elif btype == "tool_call":
                 tc = block["data"]

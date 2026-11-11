@@ -63,9 +63,9 @@ class ThinkingBlock(BaseModel):
     signature: str | None = None  # Opaque extended thinking signature
 ```
 
-**streaming-contract:ThinkingBlock:MUST:1**: Provider MUST preserve `reasoning_opaque` from SDK events as `ThinkingBlock.signature`.
+**streaming-contract:ThinkingBlock:MUST:1**: Provider MUST preserve `reasoning_opaque` from SDK events as `ThinkingBlock.signature`, including when visible thinking is empty. Persisted thinking blocks MUST carry the per-block extra `thinking_provenance: {"version": 1, "provider": "github-copilot"}`. Opaque state MUST NOT be rendered as text or streaming UI content.
 
-**Rationale:** Anthropic models send encrypted extended thinking data in `reasoning_opaque` which must be returned verbatim in subsequent turns for multi-turn extended thinking to work. The kernel's `ThinkingBlock.signature` field maps directly to the SDK's `reasoning_opaque`. GPT models do not use this field.
+**Rationale:** The SDK's `reasoning_opaque` is Copilot-owned state, not a native Anthropic or Gemini signature, even when Copilot hosts one of those models. The producer namespace lets native consumers distinguish foreign state after serialization or a provider switch; it does not bind state to a selected account or model. Copilot itself creates a fresh SDK session per request and renders only visible historical thinking through its text history adapter. Preserving and tagging opaque state does not change that SDK request behavior.
 
 ### ToolCallBlock (Pydantic) — for ChatResponse.content
 ```python
