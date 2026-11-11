@@ -374,6 +374,40 @@ class TestThinkingBlockSignaturePreservation:
         # signature should be None (not missing, not error)
         assert thinking_block.signature is None
 
+    @pytest.mark.parametrize("empty_first", [False, True], ids=["empty-after", "empty-before"])
+    @pytest.mark.parametrize("thinking", ["Visible reasoning", ""], ids=["visible", "opaque-only"])
+    def test_empty_unsigned_block_does_not_inherit_retention_from_separate_block(
+        self, empty_first: bool, thinking: str
+    ) -> None:
+        """Only locally captured opaque state can retain an empty thinking block."""
+        unsigned = DomainEvent(
+            type=DomainEventType.CONTENT_DELTA, data={"text": ""}, block_type="THINKING"
+        )
+        signed = DomainEvent(
+            type=DomainEventType.CONTENT_DELTA,
+            data={"text": thinking, "reasoning_opaque": "copilot-opaque-fixture"},
+            block_type="THINKING",
+        )
+        separator = DomainEvent(type=DomainEventType.CONTENT_DELTA, data={"text": "Answer"})
+        accumulator = StreamingAccumulator()
+        events = [unsigned, separator, signed] if empty_first else [signed, separator, unsigned]
+        for event in events:
+            accumulator.add(event)
+
+        response = accumulator.to_chat_response()
+        assert [block.type for block in response.content] == (
+            ["text", "thinking"] if empty_first else ["thinking", "text"]
+        )
+        blocks = [block for block in response.content if isinstance(block, ThinkingBlock)]
+        assert len(blocks) == 1
+        assert blocks[0].thinking == thinking
+        assert blocks[0].signature == "copilot-opaque-fixture"
+        assert response.content_blocks is not None
+        ui_thinking = [
+            block for block in response.content_blocks if isinstance(block, ThinkingContent)
+        ]
+        assert [block.text for block in ui_thinking] == ([thinking] if thinking else [])
+
     @pytest.mark.parametrize("object_event", [False, True], ids=["dict", "sdk-object"])
     @pytest.mark.parametrize("split", [False, True], ids=["single", "split"])
     @pytest.mark.parametrize(

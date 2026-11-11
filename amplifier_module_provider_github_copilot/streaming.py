@@ -326,7 +326,8 @@ class StreamingAccumulator:
             elif btype == "thinking":
                 thinking_text: str = block["text"]
                 signature = block.get("opaque") or self.reasoning_opaque
-                if thinking_text or signature:
+                # Only block-local opaque state can retain an empty block.
+                if thinking_text or block.get("opaque"):
                     # Contract: streaming-contract:ThinkingBlock:MUST:1
                     # Copilot opaque state is not a native Anthropic/Gemini signature.
                     # Keep its producer namespace through context persistence.
