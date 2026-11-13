@@ -50,6 +50,21 @@ This contract defines observability policy for provider instrumentation. Observa
 2. **SHOULD** include model ID in all events
 3. **SHOULD** include `sdk_pid` in `llm:response` for SDK log file correlation (`<provider_home>/logs/process-*-{pid}.log`; `provider_home` is governed by `filesystem-layout:Paths:MUST:1`, defaulting to `~/.amplifier-provider-github-copilot/`)
 
+### Image diagnostic privacy
+
+All three provider hook entry points (lifecycle, ordered stream consumer and
+legacy content emission) project a separate diagnostic copy **before**
+`hooks.emit`: Rust-backed hooks may serialize before Python subscribers run.
+Known Core image, SDK blob, image URL/data URL and inline-data transport shapes
+are omitted with `[Image not retained in diagnostics; pixels omitted]`. This is
+not a resolvable media ref or retention receipt. There is no diagnostic API among
+the six media operations: never ingest or publish merely to log.
+
+Wire payloads, canonical refs, opaque reasoning/signature text, tool IDs, usage
+and outcome facts are not rewritten by diagnostic omission. Arbitrary JSON-looking
+text is not parsed; unknown object-valued diagnostics are explicitly not retained.
+Coverage is these owned structured transports, not arbitrary third-party text.
+
 ---
 
 ## OTEL Policy
