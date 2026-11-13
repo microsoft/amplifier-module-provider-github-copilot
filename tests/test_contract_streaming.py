@@ -9,12 +9,22 @@ Tests streaming behavior compliance.
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from amplifier_core import ChatRequest, ChatResponse, ThinkingBlock, ThinkingContent
+from amplifier_core.message_models import Message
+from pydantic import BaseModel
+
+from amplifier_module_provider_github_copilot.request_adapter import convert_chat_request
+from amplifier_module_provider_github_copilot.sdk_adapter import extract_event_fields
 from amplifier_module_provider_github_copilot.streaming import (
     DomainEvent,
     DomainEventType,
     StreamingAccumulator,
+    load_event_config,
+    translate_event,
 )
 
 
@@ -363,6 +373,134 @@ class TestThinkingBlockSignaturePreservation:
         assert isinstance(thinking_block, ThinkingBlock)
         # signature should be None (not missing, not error)
         assert thinking_block.signature is None
+
+    @pytest.mark.parametrize("empty_first", [False, True], ids=["empty-after", "empty-before"])
+    @pytest.mark.parametrize("thinking", ["Visible reasoning", ""], ids=["visible", "opaque-only"])
+    def test_empty_unsigned_block_does_not_inherit_retention_from_separate_block(
+        self, empty_first: bool, thinking: str
+    ) -> None:
+        """Only locally captured opaque state can retain an empty thinking block."""
+        unsigned = DomainEvent(
+            type=DomainEventType.CONTENT_DELTA, data={"text": ""}, block_type="THINKING"
+        )
+        signed = DomainEvent(
+            type=DomainEventType.CONTENT_DELTA,
+            data={"text": thinking, "reasoning_opaque": "copilot-opaque-fixture"},
+            block_type="THINKING",
+        )
+        separator = DomainEvent(type=DomainEventType.CONTENT_DELTA, data={"text": "Answer"})
+        accumulator = StreamingAccumulator()
+        events = [unsigned, separator, signed] if empty_first else [signed, separator, unsigned]
+        for event in events:
+            accumulator.add(event)
+
+        response = accumulator.to_chat_response()
+        assert [block.type for block in response.content] == (
+            ["text", "thinking"] if empty_first else ["thinking", "text"]
+        )
+        blocks = [block for block in response.content if isinstance(block, ThinkingBlock)]
+        assert len(blocks) == 1
+        assert blocks[0].thinking == thinking
+        assert blocks[0].signature == "copilot-opaque-fixture"
+        assert response.content_blocks is not None
+        ui_thinking = [
+            block for block in response.content_blocks if isinstance(block, ThinkingContent)
+        ]
+        assert [block.text for block in ui_thinking] == ([thinking] if thinking else [])
+
+    @pytest.mark.parametrize("object_event", [False, True], ids=["dict", "sdk-object"])
+    @pytest.mark.parametrize("split", [False, True], ids=["single", "split"])
+    @pytest.mark.parametrize(
+        ("thinking", "opaque"),
+        [
+            ("Visible reasoning", "copilot-opaque-fixture"),
+            ("", "copilot-opaque-fixture"),
+            ("Visible reasoning", None),
+            ("", None),
+        ],
+        ids=["signed-visible", "opaque-only", "unsigned-visible", "empty"],
+    )
+    def test_provenance_survives_capture_and_context_round_trip(
+        self,
+        object_event: bool,
+        split: bool,
+        thinking: str,
+        opaque: str | None,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Tag producer state without rendering opaque bytes or changing SDK history."""
+        caplog.set_level(logging.DEBUG)
+        accumulator = StreamingAccumulator()
+        # A signature-only trailing delta must consolidate with visible reasoning.
+        chunks = [(thinking, None), ("", opaque)] if split else [(thinking, opaque)]
+        config = load_event_config()
+        for text, signature in chunks:
+            if object_event:
+                sdk_event = SimpleNamespace(
+                    type="assistant.reasoning_delta",
+                    data=SimpleNamespace(delta_content=text, reasoning_opaque=signature),
+                )
+                event = extract_event_fields(sdk_event)
+            else:
+                event = {
+                    "type": "assistant.reasoning_delta",
+                    "data": {"text": text, "reasoning_opaque": signature},
+                }
+            translated = translate_event(event, config)
+            assert translated is not None
+            accumulator.add(translated)
+
+        response = accumulator.to_chat_response()
+        blocks = [block for block in response.content if isinstance(block, ThinkingBlock)]
+        assert len(blocks) == int(bool(thinking or opaque))
+        if blocks:
+            assert blocks[0].thinking == thinking
+            assert blocks[0].signature == opaque
+            assert isinstance(blocks[0], BaseModel)
+            assert blocks[0].model_dump()["thinking_provenance"] == {
+                "version": 1,
+                "provider": "github-copilot",
+            }
+        assert response.text is None
+        if thinking:
+            assert response.content_blocks is not None
+            assert len(response.content_blocks) == 1
+            ui_block = response.content_blocks[0]
+            assert isinstance(ui_block, ThinkingContent)
+            assert ui_block.text == thinking
+        else:
+            assert response.content_blocks is None  # Opaque-only state is persistence-only.
+        assert "copilot-opaque-fixture" not in caplog.text
+
+        # The loop persists response content via model_dump, then rebuilds Messages
+        # and ChatRequests. Exercise both Python and JSON reloads without Core edits.
+        # Local Core stubs omit Pydantic APIs; retain real runtime validation here.
+        response_model: Any = ChatResponse
+        request_model: Any = ChatRequest
+        assert isinstance(response, BaseModel)
+        restored = response_model.model_validate(response.model_dump())
+        restored = response_model.model_validate_json(restored.model_dump_json())
+        assistant = Message(role="assistant", content=restored.content)
+        assert isinstance(assistant, BaseModel)
+        request = request_model(
+            messages=[assistant, Message(role="user", content="Continue")],
+        )
+        for _ in range(2):
+            request = request_model.model_validate(request.model_dump())
+            request = request_model.model_validate_json(request.model_dump_json())
+        assert request.messages[0].model_dump()["content"] == assistant.model_dump()["content"]
+
+        # Copilot history deliberately serializes visible thinking only. Stripping
+        # the new provenance must produce the exact same SDK prompt.
+        untagged = request.model_dump()
+        for block in untagged["messages"][0]["content"]:
+            block.pop("thinking_provenance", None)
+        prompt = convert_chat_request(request).prompt
+        assert prompt == convert_chat_request(request_model.model_validate(untagged)).prompt
+        assert "copilot-opaque-fixture" not in prompt
+        assert "thinking_provenance" not in prompt
+        if thinking:
+            assert f"[Thinking: {thinking}]" in prompt
 
 
 # ---------------------------------------------------------------------------

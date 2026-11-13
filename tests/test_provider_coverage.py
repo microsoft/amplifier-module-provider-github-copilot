@@ -22,8 +22,10 @@ Coverage Targets (provider.py):
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -96,6 +98,65 @@ def _create_mock_request(model: str = "gpt-4o") -> MagicMock:
 # =============================================================================
 # Retry Path Tests (Lines 395-465)
 # =============================================================================
+
+
+@pytest.mark.parametrize("use_streaming", [False, True], ids=["complete", "streaming"])
+@pytest.mark.parametrize("thinking", ["", "Visible reasoning"], ids=["opaque-only", "visible"])
+async def test_complete_tags_copilot_opaque_state(
+    use_streaming: bool,
+    thinking: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both complete() modes persist producer provenance without leaking opaque state."""
+    from amplifier_core import ChatRequest, ThinkingBlock
+    from amplifier_core.message_models import Message
+    from pydantic import BaseModel
+
+    from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+    @dataclass
+    class ReasoningData(SessionEventData):
+        reasoning_opaque: str | None = None
+
+    client = MockCopilotClientWrapper(
+        events=[
+            SessionEvent(
+                type=SessionEventType.ASSISTANT_REASONING_DELTA,
+                data=ReasoningData(delta_content=thinking, reasoning_opaque="opaque-fixture"),
+            ),
+            text_delta_event("Answer"),
+        ],
+    )
+    coordinator = MagicMock()
+    coordinator.hooks.emit = AsyncMock()
+    provider = GitHubCopilotProvider(
+        client=client,  # type: ignore[arg-type]
+        coordinator=coordinator,
+        config={"use_streaming": use_streaming},
+    )
+    caplog.set_level(logging.DEBUG)
+    try:
+        response = await provider.complete(
+            ChatRequest(model="gpt-4o", messages=[Message(role="user", content="Test")]),
+        )
+        block = response.content[0]
+        assert isinstance(block, ThinkingBlock)
+        assert block.thinking == thinking
+        assert block.signature == "opaque-fixture"
+        assert isinstance(block, BaseModel)
+        assert block.model_dump()["thinking_provenance"] == {
+            "version": 1,
+            "provider": "github-copilot",
+        }
+        assert response.content[1].type == "text"
+        assert "opaque-fixture" not in caplog.text
+        assert "opaque-fixture" not in str(coordinator.hooks.emit.call_args_list)
+        emitted_names = [call.args[0] for call in coordinator.hooks.emit.call_args_list]
+        assert ("llm:stream_block_delta" in emitted_names) is use_streaming
+        assert client.session_instance is not None
+        assert client.session_instance.disconnected
+    finally:
+        await provider.close()
 
 
 class TestRetryWithEventualSuccess:
