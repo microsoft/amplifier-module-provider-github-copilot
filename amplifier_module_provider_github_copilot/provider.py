@@ -25,7 +25,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
@@ -41,6 +41,7 @@ from amplifier_core import (
     ToolCall,
 )
 
+from ._compat import ConfigurationError
 from ._identity import PROVIDER_ID
 from ._model_listing import ModelFilters, selector_schema
 from .config_loader import (
@@ -72,6 +73,7 @@ from .fake_tool_detection import (
     log_success,
     should_retry_for_fake_tool_calls,
 )
+from .media import MEDIA_NAMESPACE, diagnostic_copy, has_media
 
 # Model discovery and cache (dynamic SDK fetch)
 from .model_cache import read_cache
@@ -453,7 +455,7 @@ async def _run_stream_consumer(
         if hooks_available:
             event_name, payload = item
             try:
-                await coordinator.hooks.emit(event_name, payload)
+                await coordinator.hooks.emit(event_name, diagnostic_copy(payload))
             except Exception as e:
                 from .security_redaction import redact_sensitive_text
 
@@ -676,6 +678,59 @@ class GitHubCopilotProvider:
         by_id = {model.id: model for model in models}
         return cast(list[ModelInfo], [by_id[model_id] for model_id in policy.select(list(by_id))])
 
+    def get_media_request_support(
+        self, *, model: str, request_options: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Durable media-v1 is text-only until the SDK position route is qualified."""
+        return {
+            "v": 1, "positions": [], "mime_types": ["image/png", "image/jpeg"],
+            "reason": "Copilot SDK role-bound media-v1 delivery is not qualified",
+            "evidence": "Legacy SDK current-user attachments are a separate route",
+        }
+
+    def _media_validator(self, request: Any, options: dict[str, Any]) -> Callable[[], None]:
+        """Bind the host's exact private projection; never hydrate here."""
+        # Match the host's structural MediaPreparedProvider normalization.
+        nested = options.get("request_options")
+        if nested is not None and not isinstance(nested, Mapping):
+            raise ConfigurationError("request_options must be a mapping.", provider=PROVIDER_ID)
+        options = {
+            **(nested or {}), **{key: value for key, value in options.items()
+                                if key != "request_options"}
+        }
+        get_capability = getattr(self.coordinator, "get_capability", None)
+        capability: Any = get_capability(MEDIA_NAMESPACE) if callable(get_capability) else None
+
+        def validate() -> None:
+            if capability is not None:
+                try:
+                    if getattr(capability, "version", None) != 1:
+                        raise ValueError("incompatible media capability")
+                    outcome = capability.validate(
+                        request, purpose="transport", request_options=options
+                    )
+                    if not isinstance(outcome, dict) or outcome.get("valid") is not True:
+                        raise ValueError("invalid media witness")
+                except Exception:
+                    # Never expose ref payload/opaque source through errors or
+                    # translate a local refusal into a retryable SDK failure.
+                    raise ConfigurationError(
+                        "Media projection is no longer valid; refit before transport.",
+                        provider=PROVIDER_ID,
+                    ) from None
+            else:
+                for message in getattr(request, "messages", []) or []:
+                    metadata = (
+                        message.get("metadata") if isinstance(message, dict)
+                        else getattr(message, "metadata", None)
+                    )
+                    if isinstance(metadata, dict) and MEDIA_NAMESPACE in metadata:
+                        raise ConfigurationError(
+                            "Media references require a compatible host preparation capability.",
+                            provider=PROVIDER_ID,
+                        )
+        return validate
+
     async def complete(
         self,
         request: ChatRequest,
@@ -690,10 +745,19 @@ class GitHubCopilotProvider:
         - observability module for hook emission
         - completion module for SDK execution
         """
-        # Convert request using request_adapter module (separation of concerns)
+        selected_model = getattr(request, "model", None) or self._effective_default_model
+        # Unknown is not vision-capable. Do not discover/fetch or switch models.
+        image_model_info = (
+            self._lookup_copilot_model_info(selected_model) if has_media(request) else None
+        )
+        validate_media = self._media_validator(request, dict(kwargs))
+        validate_media()
         internal_request = convert_chat_request(
             request,
             default_model=self._effective_default_model,
+            supports_vision=(
+                image_model_info.supports_vision if image_model_info is not None else None
+            ),
         )
 
         # Load configs
@@ -829,6 +893,7 @@ class GitHubCopilotProvider:
                         context_tier=validated_context_tier,
                         request_id=request_id,
                         use_streaming=_use_streaming,
+                        validate_media=validate_media,
                     )
                     break  # Success
 
@@ -946,7 +1011,14 @@ class GitHubCopilotProvider:
                 accumulator = StreamingAccumulator()
 
                 try:
-                    # Note: attachments=None for correction - the model already saw the image
+                    if internal_request.attachments:
+                        raise ConfigurationError(
+                            "Image-bearing Copilot correction requires a new fitted request; "
+                            "no automatic text-only correction was sent.",
+                            provider=PROVIDER_ID,
+                        )
+                    # This is a NEW ephemeral SDK session. Image-bearing requests
+                    # are refused above rather than claiming it saw earlier pixels.
                     # Correction responses only need to produce a structured tool call —
                     # cap at 512 tokens to bound cost/latency regardless of the caller's
                     # original cap. Respects caller ceiling if it is lower.
@@ -977,6 +1049,7 @@ class GitHubCopilotProvider:
                         context_tier=validated_context_tier,
                         request_id=request_id,
                         use_streaming=_use_streaming,
+                        validate_media=validate_media,
                     )
                 except asyncio.CancelledError:
                     # C-2: Same guard for the fake-tool correction path.
@@ -1126,6 +1199,7 @@ class GitHubCopilotProvider:
         context_tier: str | None = None,
         request_id: str | None = None,
         use_streaming: bool = True,
+        validate_media: Callable[[], None] | None = None,
     ) -> None:
         """Execute a single SDK completion, draining events to accumulator.
 
@@ -1159,6 +1233,8 @@ class GitHubCopilotProvider:
         streaming_config = load_streaming_config()
 
         async with asyncio.timeout(timeout):
+            if validate_media is not None:
+                validate_media()
             async with client.session(
                 model=model,
                 tools=tools,
@@ -1248,6 +1324,8 @@ class GitHubCopilotProvider:
                     # legacy v0.2.x send({"prompt": ...}) dict shape.
                     # Contract: sdk-boundary:ImagePassthrough:MUST:7
                     logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
+                    if validate_media is not None:
+                        validate_media()
                     await sdk_session.send(prompt, attachments=attachments)
                     logger.debug("[SDK_COMPLETION] Prompt sent, waiting for idle_event...")
                     # Await idle_event directly — deadline is enforced by the enclosing
@@ -1452,10 +1530,10 @@ class GitHubCopilotProvider:
 
             await self.coordinator.hooks.emit(
                 "llm:content_block",
-                {
+                diagnostic_copy({
                     "provider": self.name,
                     "content": content_data,
-                },
+                }),
             )
         except Exception as e:
             from .security_redaction import redact_sensitive_text

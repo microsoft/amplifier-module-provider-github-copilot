@@ -729,7 +729,11 @@ max_output_tokens = capabilities.limits.max_output_tokens
 
 **Evidence:** SDK `session.send()` signature
 
-The provider acts as a **pure transport layer** for images. No capability validation, no filtering.
+The SDK membrane acts as a **pure transport layer** for already-selected images.
+The provider prepares a copied Core request before this membrane: only a current
+final user message with explicitly known vision support is eligible. Unknown,
+non-vision, tool and historical image positions become explicit unavailable text;
+they are never moved to a synthetic current-user message.
 
 ### Core Principle
 
@@ -737,8 +741,30 @@ The provider acts as a **pure transport layer** for images. No capability valida
 ImageBlock (amplifier-core) → BlobAttachment (SDK) → upstream model
 ```
 
-The provider MUST extract images from ChatRequest and forward them unchanged to the SDK.
-The SDK and upstream model handle capability verification.
+The membrane MUST forward eligible image bytes unchanged. The SDK and upstream
+remain responsible for actual model/image acceptance; an advertised capability
+and successful forwarding are not evidence of successful visual inference.
+
+### Experimental media-v1 compatibility
+
+`get_media_request_support(*, model, request_options=None)` returns version 1,
+`positions: []`, PNG/JPEG MIME types, and an explicit unqualified-route reason.
+This is intentionally **not** arbitrary user/tool/history vision parity.
+The host's `experimental.media.v1` preparation owner freezes original-position
+unavailable text before fitting/counting; the provider never hydrates refs.
+Canonical history and request metadata remain ref-only. Providers call synchronous
+`cap.validate(exact_private_request, purpose="transport", request_options=options)`
+before each SDK session and immediately before each send, including after retry
+backoff and session-creation awaits. Failure is a non-retryable local refusal.
+Standalone refs without a compatible host witness are refused.
+
+| Route | Supported boundary | Not claimed |
+| --- | --- | --- |
+| Legacy current final-user base64, known vision model | Unchanged SDK blob attachment | Paid inference, durable media-v1 |
+| Unknown/non-vision model or historical/tool/assistant/system image | Original-position unavailable text | Relocation or visual inference |
+| Canonical media-v1 refs | Host-frozen text-only projection and per-attempt validation | Provider hydration |
+| Image-bearing fake-tool correction | Local refusal requiring a newly fitted request | Reusing pixels/vision from another ephemeral session |
+| Count/budget/stream/compact/refit optional methods | Absent, as on the underlying provider | Invented provider counts or native-route parity |
 
 ### Type Mapping
 
@@ -765,7 +791,8 @@ The SDK and upstream model handle capability verification.
 2. **MUST** convert `ImageBlock` source dict to `BlobAttachment` format
 3. **MUST** skip non-base64 images (URL references) — return None
 4. **MUST** skip empty/missing image data — return None
-5. **MUST NOT** validate model vision capability — pure passthrough
+5. The **membrane** MUST NOT validate model vision capability — the provider's
+   copied-request gate owns eligibility before this pure passthrough helper.
 6. **MUST NOT** filter or modify image content
 7. **MUST** forward valid attachments to SDK `session.send(prompt, attachments=...)`
 

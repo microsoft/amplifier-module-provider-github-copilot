@@ -6,8 +6,19 @@ class Message:
     """Message in a chat conversation (Pydantic model)."""
     role: str
     content: str | list[Any]
+    tool_call_id: str | None
+    metadata: dict[str, Any] | None
 
     def __init__(self, *, role: str, content: str | list[Any], **kwargs: Any) -> None: ...
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]: ...
+
+
+class ImageBlock:
+    type: Literal["image"]
+    source: dict[str, Any]
+
+    def __init__(self, *, source: dict[str, Any], **kwargs: Any) -> None: ...
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class TextBlock:

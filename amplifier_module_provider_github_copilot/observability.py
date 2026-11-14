@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from amplifier_core.events import PROVIDER_RETRY
 
 from ._identity import PROVIDER_ID
+from .media import diagnostic_copy
 
 if TYPE_CHECKING:
     from amplifier_core import ModuleCoordinator
@@ -121,7 +122,9 @@ async def emit_event(
     """
     if coordinator and hasattr(coordinator, "hooks"):
         try:
-            await coordinator.hooks.emit(event_name, data)
+            # Rust-backed hooks serialize at entry, before any Python hook can
+            # redact. Never hand a live request/transport mapping to that seam.
+            await coordinator.hooks.emit(event_name, diagnostic_copy(data))
         except Exception as e:
             from .security_redaction import redact_sensitive_text
 

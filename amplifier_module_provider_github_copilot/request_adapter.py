@@ -23,6 +23,7 @@ from typing import Any, assert_never, cast
 # / models.py / streaming.py: top-level only, never re-imported in function bodies.
 from ._compat import ConfigurationError
 from ._identity import PROVIDER_ID
+from .media import project_sdk_images
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import CompletionRequest, CopilotModelInfo, extract_attachments_from_chat_request
@@ -285,6 +286,7 @@ def convert_chat_request(
     request: Any,
     *,
     default_model: str | None = None,
+    supports_vision: bool | None = None,
 ) -> CompletionRequest:
     """Convert kernel ChatRequest to internal CompletionRequest.
 
@@ -302,8 +304,17 @@ def convert_chat_request(
     """
     # Passthrough if already CompletionRequest
     if isinstance(request, CompletionRequest):
+        if request.attachments:
+            raise ConfigurationError(
+                "Pre-converted image attachments lack a qualified message position; "
+                "use a canonical ChatRequest.",
+                provider=PROVIDER_ID,
+            )
         return request
 
+    # Freeze unsupported positions/models to text before attachment extraction.
+    # Never mutate the canonical request or relocate historical/tool pixels.
+    request = project_sdk_images(request, supports_vision=supports_vision)
     messages: list[Any] = getattr(request, "messages", [])
 
     # Contract: provider-protocol:complete:MUST:9 — repair malformed tool sequences
@@ -316,8 +327,10 @@ def convert_chat_request(
             repair_count,
         )
 
-    # Extract prompt using repaired messages (system/attachments use original request)
-    prompt = _extract_prompt_from_messages(repaired_messages)
+    # Remaining image blocks passed the current-user/model/source gate above.
+    prompt = _extract_prompt_from_messages(
+        repaired_messages, image_placeholder="[Image supplied via current-user SDK attachment]"
+    )
 
     # Extract model and tools
     model = getattr(request, "model", None) or default_model
@@ -777,7 +790,9 @@ def extract_prompt_from_chat_request(request: Any) -> str:
     return _extract_prompt_from_messages(messages)
 
 
-def _extract_prompt_from_messages(messages: list[Any]) -> str:
+def _extract_prompt_from_messages(
+    messages: list[Any], *, image_placeholder: str | None = None
+) -> str:
     """Format an ordered message list into a prompt string.
 
     Internal helper called by both extract_prompt_from_chat_request (public API)
@@ -816,7 +831,7 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         content_text = (
             _format_tool_result(enclosing_result_id, content)
             if role == "tool" and enclosing_result_id and isinstance(content, str)
-            else _extract_message_content(content)
+            else _extract_message_content(content, image_placeholder=image_placeholder)
         )
         content_call_ids = _content_tool_call_ids(content)
         field_calls: Any = getattr(msg, "tool_calls", None)
@@ -896,7 +911,7 @@ def _extract_field_tool_calls(tool_calls: Any, content_call_ids: set[str]) -> st
     return "\n".join(parts)
 
 
-def _extract_message_content(content: Any) -> str:
+def _extract_message_content(content: Any, *, image_placeholder: str | None = None) -> str:
     """Extract text from message content of various types.
 
     Handles string, list of content blocks, and individual blocks.
@@ -918,16 +933,16 @@ def _extract_message_content(content: Any) -> str:
     if isinstance(content, list):
         parts: list[str] = []
         for block in cast(list[Any], content):
-            block_text = _extract_content_block(block)
+            block_text = _extract_content_block(block, image_placeholder=image_placeholder)
             if block_text:
                 parts.append(block_text)
         return "\n".join(parts)
 
     # Single content block
-    return _extract_content_block(content)
+    return _extract_content_block(content, image_placeholder=image_placeholder)
 
 
-def _extract_content_block(block: Any) -> str:
+def _extract_content_block(block: Any, *, image_placeholder: str | None = None) -> str:
     """Extract text from a single content block.
 
     Handles TextContent, ThinkingContent, ToolCallContent,
@@ -1044,19 +1059,11 @@ def _extract_content_block(block: Any) -> str:
         and not hasattr(block, "text")
         and not hasattr(block, "output")
     ):
-        mime: str | None = (
-            getattr(block, "media_type", None)
-            or getattr(block, "mime_type", None)
-            or _get("media_type")
-            or _get("mime_type")
+        if image_placeholder is None:
+            logger.warning("Image replaced with explicit unavailable text (unqualified position)")
+        return (image_placeholder if block_type == "image" else None) or (
+            "[Image unavailable: Copilot SDK position is unqualified; no pixels supplied]"
         )
-        placeholder = f"[Image: {mime}]" if mime else "[Image]"
-        logger.warning(
-            "Image block in conversation history replaced with %r "
-            "(SDK cannot re-process images from prior turns)",
-            placeholder,
-        )
-        return placeholder
 
     # Fallback - try common text attributes
     for attr in ("text", "content", "value"):
