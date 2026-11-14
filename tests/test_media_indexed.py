@@ -136,4 +136,3 @@ def test_non_boolean_cached_vision_never_qualifies(untrusted: Any) -> None:
     assert provider.get_media_request_support_for_request(
         request=request, model="exact-model"
     )["positions"] == []
-
