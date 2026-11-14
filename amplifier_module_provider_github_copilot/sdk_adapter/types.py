@@ -383,8 +383,10 @@ def convert_image_block_to_blob_attachment(image_block: Any) -> dict[str, Any] |
 def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
     """Extract image attachments from ChatRequest for SDK.
 
-    SDK constraint: Only images from the LAST user message are extracted.
-    Historical images cannot be forwarded to SDK's session.send().
+    Adapter policy: extract images from the LAST user message of the already
+    projected request. The provider gate further requires that message be final.
+    SDK send attaches blobs to its current prompt without canonical indices;
+    this is not evidence the vendor cannot process images from earlier turns.
 
     The provider does NOT validate model vision capability. If a model doesn't
     support vision, the SDK or upstream will handle the error. We are pure
@@ -411,7 +413,7 @@ def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
     if not messages:
         return []
 
-    # Find LAST user message (SDK only supports current turn images)
+    # Find LAST user message in the provider's already-selected projection.
     last_user_msg: Any = None
     historical_image_count: int = 0
     msg: Any
@@ -430,7 +432,7 @@ def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
     if historical_image_count > 0:
         logger.warning(
             "[IMAGE_PASSTHROUGH] %d image(s) in historical messages silently dropped "
-            "— SDK only supports images from the last user message.",
+            "— this adapter selects only the last user message.",
             historical_image_count,
         )
 

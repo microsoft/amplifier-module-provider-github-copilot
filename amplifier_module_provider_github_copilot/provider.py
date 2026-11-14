@@ -746,6 +746,19 @@ class GitHubCopilotProvider:
         - completion module for SDK execution
         """
         selected_model = getattr(request, "model", None) or self._effective_default_model
+        # The host can select via normalized options while this SDK route uses
+        # request.model/default. Never qualify one model and send to another.
+        nested_options = kwargs.get("request_options")
+        option_model = (
+            nested_options.get("model") if isinstance(nested_options, Mapping) else None
+        )
+        for override in (kwargs.get("model"), option_model):
+            if override is not None and override != selected_model:
+                raise ConfigurationError(
+                    "Copilot model override differs from the fitted request model; "
+                    "select the model on ChatRequest before preparation.",
+                    provider=PROVIDER_ID,
+                )
         # Unknown is not vision-capable. Do not discover/fetch or switch models.
         image_model_info = (
             self._lookup_copilot_model_info(selected_model) if has_media(request) else None

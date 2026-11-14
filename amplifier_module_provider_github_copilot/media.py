@@ -1,7 +1,9 @@
 """Provider-owned media placement and diagnostic-copy policy; no storage imports.
 
-The SDK has only a last-user attachment channel, not role-bound tool/history
-images. Host media-v1 hydration remains unqualified for this provider.
+The SDK attaches blobs to its current send, without canonical message indices.
+This adapter maps only the final user message to that channel; that policy is
+not proof the vendor cannot process historical images. Host media-v1 hydration
+remains unqualified for this provider.
 """
 
 from __future__ import annotations

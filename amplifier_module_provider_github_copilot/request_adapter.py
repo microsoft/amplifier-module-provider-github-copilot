@@ -1049,7 +1049,9 @@ def _extract_content_block(block: Any, *, image_placeholder: str | None = None) 
             return f"[Tool Result: {sanitized_output}]"
         return ""
 
-    # Image block — SDK cannot re-process images from prior turns; replace with placeholder.
+    # Image block — preserve its existence in this adapter's text history.
+    # Only explicitly selected current-user blocks receive a supplied marker;
+    # other positions are unqualified here, not proven impossible for the vendor.
     # S3 Fix: image blocks fell through to the fallback and returned "" silently,
     # losing the model's context that an image existed in that turn.
     # Contract: behaviors:Security:MUST:1 (content integrity in history)

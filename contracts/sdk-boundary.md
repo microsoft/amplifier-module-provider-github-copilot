@@ -745,6 +745,16 @@ The membrane MUST forward eligible image bytes unchanged. The SDK and upstream
 remain responsible for actual model/image acceptance; an advertised capability
 and successful forwarding are not evidence of successful visual inference.
 
+`tests/test_media_sdk_wire.py` exercises the actual pinned SDK's public
+`create_session` and `send`, including its real JSON-RPC request and UTF-8
+Content-Length serializer, through provider `complete` and the membrane.
+Only the external stdio peer is synthetic; runtime startup is forbidden.
+It checks unknown/non-vision/historical/tool/assistant/system fallback at the
+original position, eligible legacy blob digest, diagnostic omission at hook
+entry and SDK detach. This is offline serialization evidence, not backend
+visual inference or durable-media support. Model-option overrides that differ
+from the fitted ChatRequest/default refuse before SDK creation.
+
 ### Experimental media-v1 compatibility
 
 `get_media_request_support(*, model, request_options=None)` returns version 1,
@@ -787,7 +797,9 @@ Standalone refs without a compatible host witness are refused.
 
 ### MUST Constraints
 
-1. **MUST** extract images from the LAST user message only (SDK limitation)
+1. **MUST** extract images from the LAST user message of the provider's selected
+   projection; the provider additionally requires that user message be final.
+   This is adapter policy, not a demonstrated vendor inability to process history.
 2. **MUST** convert `ImageBlock` source dict to `BlobAttachment` format
 3. **MUST** skip non-base64 images (URL references) — return None
 4. **MUST** skip empty/missing image data — return None
