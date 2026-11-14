@@ -8,8 +8,14 @@ the actual converter share that same selection; old role-wide hosts stay closed.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import fields, is_dataclass
+from functools import wraps
+from threading import Lock
 from typing import Any
 
 from amplifier_core.message_models import ImageBlock, TextBlock
@@ -17,6 +23,74 @@ from amplifier_core.message_models import ImageBlock, TextBlock
 MEDIA_NAMESPACE = "experimental.media.v1"
 IMAGE_NOT_RETAINED = "[Image not retained in diagnostics; pixels omitted]"
 SDK_IMAGE_MIME_TYPES = ("image/png", "image/jpeg")
+IMAGE_ERROR_NOT_RETAINED = "[Image request error details not retained in diagnostics]"
+_image_error_scope: ContextVar[bool] = ContextVar("copilot_image_error_scope", default=False)
+_sdk_log_install_lock = Lock()
+
+
+def _install_sdk_timing_error_projection() -> None:
+    """Project the two pinned SDK timing error loggers before Logger._log.
+
+    SDK 1.0.15 logs create/send rejection tracebacks before raising to the
+    membrane. A handler/filter is too late. Adapt only these named logger
+    instances' timing ``log`` entry, not global logging, SDK/RPC methods,
+    verbosity, handlers or exception objects. Outside this task-local image
+    scope the original call is forwarded verbatim.
+    """
+    with _sdk_log_install_lock:
+        callers = {
+            "copilot._jsonrpc": "JsonRpcClient.request JSON-RPC request finished",
+            "copilot.client": "CopilotClient.create_session failed",
+        }
+        for name, timing_message in callers.items():
+            sdk_logger = logging.getLogger(name)
+            original = sdk_logger.log
+            if getattr(original, "_copilot_image_error_projection", False):
+                continue
+
+            def project(original: Any, timing_message: str) -> Any:
+                @wraps(original)
+                def log(level: int, msg: object, *args: Any, **kwargs: Any) -> None:
+                    if (
+                        _image_error_scope.get()
+                        and type(msg) is str and msg == timing_message
+                        and kwargs.get("exc_info")
+                    ):
+                        # No raw exception, args, extra object or stack can
+                        # cross into Logger._log/LogRecord construction.
+                        original(level, IMAGE_ERROR_NOT_RETAINED)
+                    else:
+                        original(level, msg, *args, **kwargs)
+                log._copilot_image_error_projection = True  # type: ignore[attr-defined]
+                return log
+
+            sdk_logger.log = project(original, timing_message)
+
+
+@contextmanager
+def image_error_scope(image_bearing: bool) -> Iterator[None]:
+    """Task-local diagnostic policy, never a transport or retry-state mutation.
+
+    SDK errors can echo arbitrary slices/encodings of known private pixels.
+    Do not guess a base64 regex or keep a pixel registry for substring scanning.
+    Only error diagnostics within a known image request use a bounded message.
+    """
+    if image_bearing:
+        _install_sdk_timing_error_projection()
+    token = _image_error_scope.set(image_bearing or _image_error_scope.get())
+    try:
+        yield
+    finally:
+        _image_error_scope.reset(token)
+
+
+def diagnostic_error_message(error: object) -> str:
+    """Project an error COPY before handing it to a queue, hook or logger."""
+    if _image_error_scope.get():
+        return IMAGE_ERROR_NOT_RETAINED
+    from .security_redaction import redact_sensitive_text
+
+    return redact_sensitive_text(error)
 
 
 def _value(value: Any, key: str, default: Any = None) -> Any:
@@ -43,13 +117,19 @@ def unavailable(reason: str, *, original: Any = None) -> Any:
 
 def has_media(request: Any) -> bool:
     """Inspect only canonical structured message carriers."""
+    def contains_image(content: Any) -> bool:
+        if isinstance(content, list):
+            return any(contains_image(block) for block in content)
+        return _value(content, "type") == "image" or (
+            _value(content, "type") == "tool_result"
+            and contains_image(_value(content, "output"))
+        )
+
     for message in _value(request, "messages", []) or []:
         if MEDIA_NAMESPACE in (_value(message, "metadata", {}) or {}):
             return True
-        content = _value(message, "content")
-        for block in content if isinstance(content, list) else [content]:
-            if _value(block, "type") == "image":
-                return True
+        if contains_image(_value(message, "content")):
+            return True
     return False
 
 

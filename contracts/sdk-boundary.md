@@ -815,6 +815,50 @@ Standalone refs without a compatible host witness are refused.
 | Image-bearing fake-tool correction | Local refusal requiring a newly fitted request | Reusing pixels/vision from another ephemeral session |
 | Count/budget/stream/compact/refit optional methods | Absent, as on the underlying provider | Invented provider counts or native-route parity |
 
+### Private image error diagnostics
+
+An image-bearing `complete()` installs a task-local diagnostic scope for the
+whole call, including session creation, streaming, retry, lifecycle fallback,
+hook failures and teardown. Errors may echo complete data URLs, raw base64 or
+arbitrary short fragments: credential/opaque-token regexes are not an image
+privacy control. Diagnostic error prose is therefore a fixed bounded omission
+message **before** stream-abort queueing, hook entry or logger entry. This is
+an error-copy policy, not a scan of arbitrary opaque strings. Original SDK causes
+remain private for chaining/classification; retry-after and configured typed
+error mapping use the original message, not the diagnostic copy.
+
+Pinned SDK 1.0.15 logs timing failures with implicit `exc_info=True` before
+returning control to the membrane (`copilot._jsonrpc.request` and
+`copilot.client.create_session`). For these **two exact named logger-instance
+`log` calls and their exact timing message strings only**, an idempotent entry
+adapter omits exception/arguments/extra/stack information during the task-local
+image scope, before stdlib `Logger._log` / `LogRecord` construction. It does not
+patch global Logger methods, SDK/RPC methods, filters, handlers or logging levels.
+Outside that scope (and for other messages) the existing logger call is forwarded
+verbatim. Two concurrent image tasks, plain calls, cancellation/reset, raw
+`exc_info` and malicious `extra` are covered. SDK error notifications dispatched
+from an explicitly empty callback context are covered too: the error is copied
+later in the completion's context, not assumed to inherit the reader's context.
+This is not a universal policy for SDK stderr, arbitrary background-thread logs,
+or unsupported SDK versions; pinned-call-site changes require renewed review.
+
+For an image-bearing send, invocation starts an uncertain/possibly received
+submission. Subsequent errors (including a partial response with `429` prose)
+retain their typed class/cause/retry-after but are marked non-retryable; they
+cannot replay a send, regardless of external streaming configuration. A known
+retryable rejection of **session creation before any send** retains the existing
+retry policy and revalidates the same private request before the next attempt.
+No witness/refusal/revocation state is reset to obtain another attempt.
+
+`tests/test_media_error_privacy.py` captures logger arguments and resolved implicit
+tracebacks at entry, plus real formatted log records and hook payloads. The
+task-owned exact-Foundation pairing adds real PNG/JPEG refs through the public
+strict wrapper into actual SDK serialization: raw/data-URL errors, early text
+then error, send rejection, create rejection/retry and revoked second attempt.
+The earlier structured-request diagnostic tests alone did not qualify this path.
+These are offline synthetic transport/error fixtures, not live SDK runtime,
+backend inference or whole-program privacy acceptance.
+
 ### Type Mapping
 
 | amplifier-core | SDK | Notes |

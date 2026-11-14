@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 from amplifier_core.events import PROVIDER_RETRY
 
 from ._identity import PROVIDER_ID
-from .media import diagnostic_copy
+from .media import diagnostic_copy, diagnostic_error_message
 
 if TYPE_CHECKING:
     from amplifier_core import ModuleCoordinator
@@ -126,12 +126,10 @@ async def emit_event(
             # redact. Never hand a live request/transport mapping to that seam.
             await coordinator.hooks.emit(event_name, diagnostic_copy(data))
         except Exception as e:
-            from .security_redaction import redact_sensitive_text
-
             logger.warning(
                 "[OBSERVABILITY] Failed to emit '%s': %s",
                 event_name,
-                redact_sensitive_text(e),
+                diagnostic_error_message(e),
             )
 
 
@@ -276,10 +274,8 @@ class LlmLifecycleContext:
         Contract: observability:Events:MUST:3
         Contract: behaviors:Logging:MUST:4 - Sanitize error messages
         """
-        from .security_redaction import redact_sensitive_text
-
         elapsed_ms = int((time.time() - self.start_time) * 1000)
-        sanitized_message = redact_sensitive_text(error_message)
+        sanitized_message = diagnostic_error_message(error_message)
 
         await emit_event(
             self.coordinator,
@@ -312,9 +308,7 @@ class LlmLifecycleContext:
 
         Uses kernel constant PROVIDER_RETRY (not YAML) to ensure protocol compliance.
         """
-        from .security_redaction import redact_sensitive_text
-
-        sanitized_message = redact_sensitive_text(error_message)
+        sanitized_message = diagnostic_error_message(error_message)
 
         await emit_event(
             self.coordinator,
@@ -387,6 +381,6 @@ async def llm_lifecycle(
         if ctx.request_emitted and not ctx.response_emitted:
             await ctx.emit_response_error(
                 error_type=type(exc).__name__,
-                error_message=str(exc),
+                error_message=diagnostic_error_message(exc),
             )
         raise

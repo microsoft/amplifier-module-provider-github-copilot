@@ -381,6 +381,8 @@ def _create_kernel_error_safely(
         Instantiated kernel error.
 
     """
+    from .media import diagnostic_error_message
+
     error_class_name = error_class.__name__
 
     # First, try with retry_after (most error classes support it)
@@ -396,7 +398,7 @@ def _create_kernel_error_safely(
         logger.debug(
             "[ERROR_TRANSLATION] %s constructor failed with retry_after: %s",
             error_class_name,
-            e,
+            diagnostic_error_message(e),
         )
 
     # Fall back without retry_after (e.g., InvalidToolCallError, AbortError)
@@ -411,7 +413,7 @@ def _create_kernel_error_safely(
         logger.debug(
             "[ERROR_TRANSLATION] %s constructor failed without retry_after: %s",
             error_class_name,
-            e,
+            diagnostic_error_message(e),
         )
 
     # Final fallback: minimal constructor
@@ -426,7 +428,7 @@ def _create_kernel_error_safely(
             "[ERROR_TRANSLATION] %s constructor failed with minimal args, "
             "falling back to ProviderUnavailableError: %s",
             error_class_name,
-            e,
+            diagnostic_error_message(e),
         )
         return ProviderUnavailableError(
             message,
@@ -466,10 +468,10 @@ def translate_sdk_error(
         Kernel LLMError with original exception chained.
 
     """
-    from .security_redaction import redact_sensitive_text
+    from .media import diagnostic_error_message
 
     original_message = str(exc)
-    safe_message = redact_sensitive_text(original_message)
+    safe_message = diagnostic_error_message(original_message)
     retry_after: float | None = None
 
     # Try each mapping in order
@@ -486,7 +488,7 @@ def translate_sdk_error(
             context = _extract_context(original_message, mapping.context_extraction)
             # P0 Fix (C3): Redact extracted context values - they come from the
             # original (unredacted) message and may contain secrets like tokens.
-            context = {k: redact_sensitive_text(v) for k, v in context.items()}
+            context = {k: diagnostic_error_message(v) for k, v in context.items()}
             # Use redacted message for output, append context
             message = safe_message + _format_context_suffix(context)
 

@@ -259,5 +259,11 @@ def safe_log_message(message: str, *args: Any) -> tuple[str, ...]:
     # WRONG: safe_log_message(f"Token: {token}")  ← token embedded before redaction
     # RIGHT: safe_log_message("Token: %s", token) ← token passed as arg, redacted
     redacted_message = redact_sensitive_text(message)
-    redacted_args = tuple(redact_sensitive_text(arg) for arg in args)
+    from .media import diagnostic_error_message
+
+    redacted_args = tuple(
+        diagnostic_error_message(arg)
+        if isinstance(arg, BaseException) else redact_sensitive_text(arg)
+        for arg in args
+    )
     return (redacted_message, *redacted_args)

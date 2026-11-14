@@ -77,8 +77,10 @@ from .media import (
     MEDIA_NAMESPACE,
     SDK_IMAGE_MIME_TYPES,
     diagnostic_copy,
+    diagnostic_error_message,
     final_user_image_position,
     has_media,
+    image_error_scope,
 )
 
 # Model discovery and cache (dynamic SDK fetch)
@@ -463,12 +465,10 @@ async def _run_stream_consumer(
             try:
                 await coordinator.hooks.emit(event_name, diagnostic_copy(payload))
             except Exception as e:
-                from .security_redaction import redact_sensitive_text
-
                 logger.debug(
                     "[PROVIDER] Stream event '%s' emit failed: %s",
                     event_name,
-                    redact_sensitive_text(e),
+                    diagnostic_error_message(e),
                 )
 
 
@@ -802,6 +802,11 @@ class GitHubCopilotProvider:
         - observability module for hook emission
         - completion module for SDK execution
         """
+        with image_error_scope(has_media(request)):
+            return await self._complete(request, **kwargs)
+
+    async def _complete(self, request: ChatRequest, **kwargs: Any) -> ChatResponse:
+        """Execute with the per-call diagnostic scope installed by complete()."""
         selected_model = self._selected_media_model(request, dict(kwargs))
         # Unknown is not vision-capable. Do not discover/fetch or switch models.
         supports_vision = (
@@ -932,6 +937,7 @@ class GitHubCopilotProvider:
                 # Bug fix: Reset accumulator for each attempt to prevent corruption
                 # If first attempt partially streams then fails, retry must start fresh
                 accumulator = StreamingAccumulator()
+                submission_state = {"started": False}
                 try:
                     await self._execute_sdk_completion(
                         client=self._client,
@@ -949,6 +955,7 @@ class GitHubCopilotProvider:
                         request_id=request_id,
                         use_streaming=_use_streaming,
                         validate_media=validate_media,
+                        submission_state=submission_state,
                     )
                     break  # Success
 
@@ -956,7 +963,7 @@ class GitHubCopilotProvider:
                     if not is_retryable_error(e):
                         await ctx.emit_response_error(
                             error_type=type(e).__name__,
-                            error_message=str(e),
+                            error_message=diagnostic_error_message(e),
                         )
                         raise
 
@@ -966,7 +973,7 @@ class GitHubCopilotProvider:
                             "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
                             attempt + 1,
                             retry_config.max_attempts,
-                            e,
+                            diagnostic_error_message(e),
                             delay_ms,
                         )
                         await ctx.emit_retry(
@@ -975,13 +982,13 @@ class GitHubCopilotProvider:
                             delay=delay_ms / 1000,
                             retry_after=get_retry_after(e),
                             error_type=type(e).__name__,
-                            error_message=str(e),
+                            error_message=diagnostic_error_message(e),
                         )
                         await asyncio.sleep(delay_ms / 1000)
                     else:
                         await ctx.emit_response_error(
                             error_type=type(e).__name__,
-                            error_message=str(e),
+                            error_message=diagnostic_error_message(e),
                         )
                         raise
 
@@ -1002,11 +1009,16 @@ class GitHubCopilotProvider:
                     translated = translate_sdk_error(
                         e, error_config_for_err, provider=PROVIDER_ID, model=model
                     )
+                    # asyncio.timeout raises outside the inner attempt's
+                    # exception handler. Keep post-submission deadlines just as
+                    # non-replayable as a received session.error or lost ACK.
+                    if internal_request.attachments and submission_state["started"]:
+                        translated.retryable = False
 
                     if not is_retryable_error(translated):
                         await ctx.emit_response_error(
                             error_type=type(translated).__name__,
-                            error_message=str(translated),
+                            error_message=diagnostic_error_message(translated),
                         )
                         raise translated from e
 
@@ -1016,7 +1028,7 @@ class GitHubCopilotProvider:
                             "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
                             attempt + 1,
                             retry_config.max_attempts,
-                            translated,
+                            diagnostic_error_message(translated),
                             delay_ms,
                         )
                         await ctx.emit_retry(
@@ -1025,13 +1037,13 @@ class GitHubCopilotProvider:
                             delay=delay_ms / 1000,
                             retry_after=get_retry_after(translated),
                             error_type=type(translated).__name__,
-                            error_message=str(translated),
+                            error_message=diagnostic_error_message(translated),
                         )
                         await asyncio.sleep(delay_ms / 1000)
                     else:
                         await ctx.emit_response_error(
                             error_type=type(translated).__name__,
-                            error_message=str(translated),
+                            error_message=diagnostic_error_message(translated),
                         )
                         raise translated from e
 
@@ -1125,6 +1137,16 @@ class GitHubCopilotProvider:
                     #
                     # Contract: error-hierarchy.md — MUST translate SDK errors to kernel errors.
                     # The correction path must use the same error translation as the main path.
+                    if isinstance(e, ConfigurationError):
+                        # Our local image-correction refusal contains no remote
+                        # prose. Preserve its actionable typed primary error;
+                        # only its diagnostic COPY is subject to omission.
+                        log_exhausted(ftd_config, correction_attempt + 1)
+                        await ctx.emit_response_error(
+                            error_type=type(e).__name__,
+                            error_message=diagnostic_error_message(e),
+                        )
+                        raise
                     error_config_for_correction = load_error_config()
                     translated = translate_sdk_error(
                         e, error_config_for_correction, provider=PROVIDER_ID, model=model
@@ -1255,6 +1277,7 @@ class GitHubCopilotProvider:
         request_id: str | None = None,
         use_streaming: bool = True,
         validate_media: Callable[[], None] | None = None,
+        submission_state: dict[str, bool] | None = None,
     ) -> None:
         """Execute a single SDK completion, draining events to accumulator.
 
@@ -1371,6 +1394,7 @@ class GitHubCopilotProvider:
                                 idle_event.set()
 
                     connection_task = asyncio.create_task(watch())
+                send_started = False
                 try:
                     # Record TTFT start time before send
                     # Contract: behaviors:Streaming:MUST:1
@@ -1381,6 +1405,9 @@ class GitHubCopilotProvider:
                     logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
                     if validate_media is not None:
                         validate_media()
+                    send_started = True
+                    if submission_state is not None:
+                        submission_state["started"] = True
                     await sdk_session.send(prompt, attachments=attachments)
                     logger.debug("[SDK_COMPLETION] Prompt sent, waiting for idle_event...")
                     # Await idle_event directly — deadline is enforced by the enclosing
@@ -1408,7 +1435,7 @@ class GitHubCopilotProvider:
                                     "request_id": stream_ctx.request_id,
                                     "error": {
                                         "type": type(err).__name__,
-                                        "msg": str(err),
+                                        "msg": diagnostic_error_message(err),
                                     },
                                 },
                             )
@@ -1450,11 +1477,9 @@ class GitHubCopilotProvider:
                                 )
                             except Exception as e:
                                 # Abort failure is non-critical - log and continue
-                                from .security_redaction import redact_sensitive_text
-
                                 logger.debug(
                                     "[provider] Session abort failed (non-critical): %s",
-                                    redact_sensitive_text(e),
+                                    diagnostic_error_message(e),
                                 )
 
                     # Now drain remaining events (including TURN_COMPLETE)
@@ -1513,6 +1538,20 @@ class GitHubCopilotProvider:
                         )
                     except Exception:
                         logger.debug("[provider] Abort during cancellation failed; disconnecting")
+                    raise
+                except Exception as exc:
+                    if send_started and attachments:
+                        # A send was invoked: received text, session.error or a
+                        # lost acknowledgement cannot authorize another send.
+                        # Retain the typed error/cause and retry_after, but never
+                        # replay submission based on a message's "429" substring.
+                        translated = exc if isinstance(exc, LLMError) else translate_sdk_error(
+                            exc, load_error_config(), provider=PROVIDER_ID, model=model
+                        )
+                        translated.retryable = False
+                        if translated is exc:
+                            raise
+                        raise translated from exc
                     raise
                 finally:
                     unsubscribe()
@@ -1591,9 +1630,7 @@ class GitHubCopilotProvider:
                 }),
             )
         except Exception as e:
-            from .security_redaction import redact_sensitive_text
-
-            logger.debug("[PROVIDER] Content emit failed: %s", redact_sensitive_text(e))
+            logger.debug("[PROVIDER] Content emit failed: %s", diagnostic_error_message(e))
 
     def _handle_emit_task_exception(self, task: asyncio.Task[Any]) -> None:
         """Handle exceptions from emit tasks silently.
@@ -1604,9 +1641,7 @@ class GitHubCopilotProvider:
             return
         exc = task.exception()
         if exc:
-            from .security_redaction import redact_sensitive_text
-
-            logger.debug("[PROVIDER] Emit task failed: %s", redact_sensitive_text(exc))
+            logger.debug("[PROVIDER] Emit task failed: %s", diagnostic_error_message(exc))
 
     async def cancel_emit_tasks(self) -> None:
         """Cancel and await all pending background emit tasks.
