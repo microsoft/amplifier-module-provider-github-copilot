@@ -342,7 +342,7 @@ async def test_complete_actual_sdk_send_attachment_digest(
     )
     monkeypatch.setattr(
         provider, "_lookup_copilot_model_info",
-        lambda _: None if vision is None else SimpleNamespace(supports_vision=vision),
+        lambda model: None if vision is None else SimpleNamespace(id=model, supports_vision=vision),
     )
     request = ChatRequest(model="fixture", messages=[Message(role="user", content=[image()])])
     original = request.model_dump()
@@ -368,7 +368,8 @@ async def test_image_correction_never_claims_new_session_saw_pixels(monkeypatch:
     client, sessions = tracked_client("offline")
     provider = GitHubCopilotProvider(client=client)
     monkeypatch.setattr(
-        provider, "_lookup_copilot_model_info", lambda _: SimpleNamespace(supports_vision=True),
+        provider, "_lookup_copilot_model_info",
+        lambda model: SimpleNamespace(id=model, supports_vision=True),
     )
     monkeypatch.setattr(
         "amplifier_module_provider_github_copilot.provider.should_retry_for_fake_tool_calls",

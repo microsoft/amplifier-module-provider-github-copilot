@@ -11,6 +11,7 @@ import asyncio
 import base64
 import hashlib
 import json
+from collections.abc import Callable
 from importlib import import_module
 from types import SimpleNamespace
 from typing import Any
@@ -38,6 +39,8 @@ class WirePeer:
         self.messages: list[dict[str, Any]] = []
         self.rpc: Any = None
         self.client: Any = None
+        self.emit_idle = True
+        self.response_override: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
         self.loop = asyncio.get_running_loop()
 
     def poll(self) -> None:
@@ -61,14 +64,17 @@ class WirePeer:
             result = {"sessionId": params["sessionId"], "capabilities": {}}
         elif method == "session.send":
             result = {"messageId": "offline-message"}
-        elif method in ("session.options.update", "session.detach"):
+        elif method in ("session.options.update", "session.detach", "session.abort"):
             result = {"success": True}
         elif method == "ping":
             result = {"message": "offline", "timestamp": 0, "protocolVersion": 1}
         else:
             raise AssertionError(f"Unexpected RPC method {method}")
-        self.rpc._handle_message({"jsonrpc": "2.0", "id": message["id"], "result": result})
-        if method == "session.send":
+        response = {"result": result}
+        if self.response_override is not None:
+            response = self.response_override(message) or response
+        self.rpc._handle_message({"jsonrpc": "2.0", "id": message["id"], **response})
+        if method == "session.send" and self.emit_idle:
             self.loop.call_soon_threadsafe(self.deliver_idle, params["sessionId"])
 
     def deliver_idle(self, session_id: str) -> None:
@@ -114,7 +120,7 @@ def real_sdk_provider(
     )
     monkeypatch.setattr(
         provider, "_lookup_copilot_model_info",
-        lambda _: None if vision is None else SimpleNamespace(supports_vision=vision),
+        lambda model: None if vision is None else SimpleNamespace(id=model, supports_vision=vision),
     )
     return provider, peer, hooks
 

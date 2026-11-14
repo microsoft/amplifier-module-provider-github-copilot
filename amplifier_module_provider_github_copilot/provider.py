@@ -73,7 +73,13 @@ from .fake_tool_detection import (
     log_success,
     should_retry_for_fake_tool_calls,
 )
-from .media import MEDIA_NAMESPACE, diagnostic_copy, has_media
+from .media import (
+    MEDIA_NAMESPACE,
+    SDK_IMAGE_MIME_TYPES,
+    diagnostic_copy,
+    final_user_image_position,
+    has_media,
+)
 
 # Model discovery and cache (dynamic SDK fetch)
 from .model_cache import read_cache
@@ -681,11 +687,62 @@ class GitHubCopilotProvider:
     def get_media_request_support(
         self, *, model: str, request_options: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Durable media-v1 is text-only until the SDK position route is qualified."""
+        """Old role-wide hosts cannot express final-user-only; stay text-only."""
         return {
             "v": 1, "positions": [], "mime_types": ["image/png", "image/jpeg"],
             "reason": "Copilot SDK role-bound media-v1 delivery is not qualified",
             "evidence": "Legacy SDK current-user attachments are a separate route",
+        }
+
+    def _selected_media_model(self, request: Any, options: dict[str, Any]) -> str:
+        """Use the same effective selection for the support query and SDK send."""
+        selected = getattr(request, "model", None) or self._effective_default_model
+        nested = options.get("request_options")
+        if nested is not None and not isinstance(nested, Mapping):
+            raise ConfigurationError("request_options must be a mapping.", provider=PROVIDER_ID)
+        nested_model = nested.get("model") if nested is not None else None
+        for override in (options.get("model"), nested_model):
+            if override is not None and override != selected:
+                raise ConfigurationError(
+                    "Copilot model override differs from the fitted request model; "
+                    "select the model on ChatRequest before preparation.",
+                    provider=PROVIDER_ID,
+                )
+        return selected
+
+    def _selected_media_vision(self, model: str) -> bool | None:
+        """Only exact cached endpoint identity supplies vision facts; no guessing."""
+        info = self._lookup_copilot_model_info(model)
+        if info is None or getattr(info, "id", None) != model:
+            return None
+        return info.supports_vision if type(info.supports_vision) is bool else None
+
+    def get_media_request_support_for_request(
+        self, *, request: ChatRequest, model: str,
+        request_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Strict Foundation v2 index/role facts for detached prehydration input.
+
+        No bytes are read, no request is mutated and no capability is fabricated.
+        The getter's presence is authoritative, including an empty selection.
+        """
+        if request_options is not None and not isinstance(request_options, Mapping):
+            raise ConfigurationError("request_options must be a mapping.", provider=PROVIDER_ID)
+        selected = self._selected_media_model(
+            request, {} if request_options is None else dict(request_options)
+        )
+        if model != selected:
+            raise ConfigurationError(
+                "Copilot media support model differs from the fitted request model.",
+                provider=PROVIDER_ID,
+            )
+        index = final_user_image_position(
+            request, supports_vision=self._selected_media_vision(selected)
+        )
+        return {
+            "v": 2,
+            "positions": [] if index is None else [{"message_index": index, "role": "user"}],
+            "mime_types": list(SDK_IMAGE_MIME_TYPES),
         }
 
     def _media_validator(self, request: Any, options: dict[str, Any]) -> Callable[[], None]:
@@ -745,32 +802,17 @@ class GitHubCopilotProvider:
         - observability module for hook emission
         - completion module for SDK execution
         """
-        selected_model = getattr(request, "model", None) or self._effective_default_model
-        # The host can select via normalized options while this SDK route uses
-        # request.model/default. Never qualify one model and send to another.
-        nested_options = kwargs.get("request_options")
-        option_model = (
-            nested_options.get("model") if isinstance(nested_options, Mapping) else None
-        )
-        for override in (kwargs.get("model"), option_model):
-            if override is not None and override != selected_model:
-                raise ConfigurationError(
-                    "Copilot model override differs from the fitted request model; "
-                    "select the model on ChatRequest before preparation.",
-                    provider=PROVIDER_ID,
-                )
+        selected_model = self._selected_media_model(request, dict(kwargs))
         # Unknown is not vision-capable. Do not discover/fetch or switch models.
-        image_model_info = (
-            self._lookup_copilot_model_info(selected_model) if has_media(request) else None
+        supports_vision = (
+            self._selected_media_vision(selected_model) if has_media(request) else None
         )
         validate_media = self._media_validator(request, dict(kwargs))
         validate_media()
         internal_request = convert_chat_request(
             request,
             default_model=self._effective_default_model,
-            supports_vision=(
-                image_model_info.supports_vision if image_model_info is not None else None
-            ),
+            supports_vision=supports_vision,
         )
 
         # Load configs
