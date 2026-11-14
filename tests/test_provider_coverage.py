@@ -129,6 +129,7 @@ async def test_complete_tags_copilot_opaque_state(
     )
     coordinator = MagicMock()
     coordinator.hooks.emit = AsyncMock()
+    coordinator.get_capability.return_value = None
     provider = GitHubCopilotProvider(
         client=client,  # type: ignore[arg-type]
         coordinator=coordinator,
