@@ -735,6 +735,17 @@ final user message with explicitly known vision support is eligible. Unknown,
 non-vision, tool and historical image positions become explicit unavailable text;
 they are never moved to a synthetic current-user message.
 
+The replacement is implemented in `media.project_sdk_images`, invoked by
+`request_adapter.convert_chat_request` before prompt and attachment extraction.
+Each excluded Core ImageBlock becomes a Core TextBlock in the same content slot,
+with its visibility preserved. Surrounding text, message role, metadata and
+enclosing tool-call ID are unchanged in the private request copy. The adapter
+serializes rich tool messages inside `[Tool Result (id=...): ...]`, so an
+unavailable image remains correlated with its actual result. Structured
+tool-result blocks render the warning as text, not a Python dictionary. This
+request-only text conversion is distinct from `positions: []`, which merely
+declares that a v1 host must not hydrate canonical refs for this provider.
+
 ### Core Principle
 
 ```

@@ -161,6 +161,9 @@ async def test_public_completion_real_sdk_wire_and_pre_hook_privacy(
                 creates[0]["systemMessage"]["content"] if role == "system" else sent["prompt"]
             )
             assert text.index("before") < text.index("Image unavailable") < text.index("after")
+            if role == "tool":
+                assert "[TOOL]\n[Tool Result (id=call-1): before\n[Image unavailable:" in text
+                assert "no pixels supplied]\nafter]" in text
             assert PIXELS not in b"".join(peer.frames).decode()
         # Real SDK output passed back to diagnostics must be sanitized at entry,
         # while the byte-captured transport remains intact.

@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -120,6 +120,88 @@ def test_tool_result_structured_images_never_stringify_pixels() -> None:
     assert "call-1" in result.prompt
     assert "Image unavailable" in result.prompt
     assert PIXELS not in result.prompt
+    assert not result.attachments
+
+
+@pytest.mark.parametrize("visibility", [None, "internal", "developer", "user"])
+def test_unavailable_is_typed_text_at_original_slot(
+    visibility: Literal["internal", "developer", "user"] | None
+) -> None:
+    original_image = image()
+    original_image.visibility = visibility
+    request = ChatRequest(model="fixture", messages=[Message(
+        role="tool", tool_call_id="observed-call",
+        content=[TextBlock(text="left"), original_image, TextBlock(text="right")],
+        metadata={"reasoning_provenance": {"provider": "owner"}, "opaque": "keep"},
+    )])
+    canonical = request.model_dump()
+    projected = project_sdk_images(request, supports_vision=True)
+    projected_message = projected.messages[0]
+    assert projected_message.role == "tool"
+    assert projected_message.tool_call_id == "observed-call"
+    assert projected_message.metadata == request.messages[0].metadata
+    assert all(isinstance(block, TextBlock) for block in projected_message.content)
+    left, warning, right = projected_message.content
+    assert left.text == "left" and right.text == "right"
+    assert warning.visibility == visibility
+    assert warning.text == (
+        "[Image unavailable: Copilot adapter does not support images at the tool "
+        "message position; no pixels supplied]"
+    )
+    converted = convert_chat_request(request, supports_vision=True)
+    assert "[TOOL]\n[Tool Result (id=observed-call): left\n" in converted.prompt
+    assert converted.prompt.index("left") < converted.prompt.index(warning.text)
+    assert converted.prompt.index(warning.text) < converted.prompt.index("right")
+    assert "source" not in converted.prompt and PIXELS not in converted.prompt
+    assert request.model_dump() == canonical
+
+
+def test_rich_tool_result_warning_is_text_not_dictionary_repr() -> None:
+    request = SimpleNamespace(messages=[SimpleNamespace(role="tool", content=[{
+        "type": "tool_result", "tool_call_id": "inner-call", "output": [
+            {"type": "text", "text": "left"}, image().model_dump(),
+            {"type": "text", "text": "right"},
+        ],
+    }])])
+    result = convert_chat_request(request, supports_vision=True)
+    assert "[Tool Result (id=inner-call): left\n[Image unavailable:" in result.prompt
+    assert "no pixels supplied]\nright]" in result.prompt
+    assert "'type':" not in result.prompt and PIXELS not in result.prompt
+    assert not result.attachments
+
+
+@pytest.mark.parametrize("output", [
+    {"type": {"owner": "opaque"}, "payload": "keep-me"},
+    {"type": ["opaque"], "payload": "keep-me"},
+    {"type": "text", "payload": "keep-me"},
+    {"type": "text", "text": "keep-text", "payload": "keep-me"},
+])
+def test_opaque_tool_output_type_collision_stays_intact(output: Any) -> None:
+    request = SimpleNamespace(messages=[SimpleNamespace(role="tool", content=[{
+        "type": "tool_result", "tool_call_id": "opaque-call", "output": output,
+    }])])
+    original = deepcopy(output)
+    result = convert_chat_request(request, supports_vision=True)
+    assert f"[Tool Result (id=opaque-call): {output}]" in result.prompt
+    assert "keep-me" in result.prompt
+    assert output == original
+    assert not result.attachments
+
+
+@pytest.mark.parametrize("vision,reason", [
+    (None, "selected Copilot model vision capability is unknown"),
+    (False, "selected Copilot model does not support vision"),
+])
+def test_selected_model_unavailable_text_keeps_current_image_slot(
+    vision: bool | None, reason: str
+) -> None:
+    request = ChatRequest(model="fixture", messages=[Message(
+        role="user", content=[TextBlock(text="left"), image(), TextBlock(text="right")],
+    )])
+    result = convert_chat_request(request, supports_vision=vision)
+    assert result.prompt == (
+        f"[USER]\nleft\n[Image unavailable: {reason}; no pixels supplied]\nright"
+    )
     assert not result.attachments
 
 

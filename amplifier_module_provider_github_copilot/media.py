@@ -12,6 +12,8 @@ from copy import deepcopy
 from dataclasses import fields, is_dataclass
 from typing import Any
 
+from amplifier_core.message_models import ImageBlock, TextBlock
+
 MEDIA_NAMESPACE = "experimental.media.v1"
 IMAGE_NOT_RETAINED = "[Image not retained in diagnostics; pixels omitted]"
 
@@ -27,9 +29,15 @@ def _set(value: Any, key: str, replacement: Any) -> None:
         setattr(value, key, replacement)
 
 
-def unavailable(reason: str) -> dict[str, str]:
-    """A text block, not an image/reference that implies successful delivery."""
-    return {"type": "text", "text": f"[Image unavailable: {reason}; no pixels supplied]"}
+def unavailable(reason: str, *, original: Any = None) -> Any:
+    """Replace the exact image slot with text, preserving its owner visibility."""
+    text = f"[Image unavailable: {reason}; no pixels supplied]"
+    if isinstance(original, ImageBlock):
+        return TextBlock(text=text, visibility=getattr(original, "visibility", None))
+    replacement = {"type": "text", "text": text}
+    if isinstance(original, dict) and "visibility" in original:
+        replacement["visibility"] = original["visibility"]
+    return replacement
 
 
 def has_media(request: Any) -> bool:
@@ -73,45 +81,43 @@ def project_sdk_images(request: Any, *, supports_vision: bool | None) -> Any:
         None,
     )
 
-    def blocks(content: Any, *, allowed: bool) -> Any:
+    def blocks(content: Any, *, reason: str | None) -> Any:
         if isinstance(content, list):
-            return [blocks(block, allowed=allowed) for block in content]
+            return [blocks(block, reason=reason) for block in content]
         kind = _value(content, "type")
         if kind == "image":
             source = _value(content, "source", {}) or {}
-            if allowed and _value(source, "type") == "base64" and _value(source, "data"):
+            if reason is None and _value(source, "type") == "base64" and _value(source, "data"):
                 return content
-            if not allowed:
-                reason = (
-                    "selected Copilot model vision capability is unknown"
-                    if supports_vision is None
-                    else "selected Copilot model does not support vision"
-                    if supports_vision is not True
-                    else "Copilot SDK does not support this message position"
-                )
-            else:
-                reason = "Copilot SDK requires a nonempty base64 image source"
-            return unavailable(reason)
+            return unavailable(
+                reason or "Copilot SDK requires a nonempty base64 image source",
+                original=content,
+            )
         if kind == "tool_result":
             # Only Core structured output, never JSON-looking text.
             output = _value(content, "output")
             if isinstance(output, (list, dict)):
-                _set(content, "output", blocks(output, allowed=False))
+                _set(content, "output", blocks(
+                    output, reason="Copilot adapter does not support tool-result images"
+                ))
         return content
 
     for index, message in enumerate(messages):
         content = _value(message, "content")
-        _set(
-            message,
-            "content",
-            blocks(
-                content,
-                allowed=(
-                    index == last_user == len(messages) - 1 and supports_vision is True
-                    and isinstance(content, list)
-                ),
-            ),
-        )
+        role = _value(message, "role")
+        if role != "user":
+            reason = f"Copilot adapter does not support images at the {role} message position"
+        elif index != last_user or index != len(messages) - 1:
+            reason = "Copilot adapter does not support historical user images"
+        elif supports_vision is None:
+            reason = "selected Copilot model vision capability is unknown"
+        elif supports_vision is not True:
+            reason = "selected Copilot model does not support vision"
+        elif not isinstance(content, list):
+            reason = "Copilot adapter requires image content in a block list"
+        else:
+            reason = None
+        _set(message, "content", blocks(content, reason=reason))
     return projected
 
 

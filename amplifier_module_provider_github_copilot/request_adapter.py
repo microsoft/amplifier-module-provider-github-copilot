@@ -19,6 +19,8 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import Any, assert_never, cast
 
+from amplifier_core.message_models import TextBlock
+
 # Single canonical import for ConfigurationError. Convention from config_loader.py
 # / models.py / streaming.py: top-level only, never re-imported in function bodies.
 from ._compat import ConfigurationError
@@ -827,12 +829,12 @@ def _extract_prompt_from_messages(
         # Format role marker
         role_marker = f"[{role.upper()}]"
 
-        # Extract content based on type
-        content_text = (
-            _format_tool_result(enclosing_result_id, content)
-            if role == "tool" and enclosing_result_id and isinstance(content, str)
-            else _extract_message_content(content, image_placeholder=image_placeholder)
-        )
+        # The enclosing ID still correlates a rich text/image result with its
+        # call after unsupported pixels become text. Do not lose that ID merely
+        # because the tool's content is a list rather than a string.
+        content_text = _extract_message_content(content, image_placeholder=image_placeholder)
+        if role == "tool" and enclosing_result_id and not _content_tool_result_ids(content):
+            content_text = _format_tool_result(enclosing_result_id, content_text)
         content_call_ids = _content_tool_call_ids(content)
         field_calls: Any = getattr(msg, "tool_calls", None)
         if field_calls is None and isinstance(msg, dict):
@@ -1032,7 +1034,7 @@ def _extract_content_block(block: Any, *, image_placeholder: str | None = None) 
     # Contract: provider-protocol:complete:MUST — preserve tool call IDs
     # ToolResultBlock.type is always "tool_result" (amplifier_core 1.3.3 verified).
     if block_type == "tool_result":
-        output: str | None = getattr(block, "output", None) or _get("output")
+        output: Any = getattr(block, "output", None) or _get("output")
         if output:
             tool_result_call_id: str | None = getattr(block, "tool_call_id", None) or _get(
                 "tool_call_id"
@@ -1042,7 +1044,29 @@ def _extract_content_block(block: Any, *, image_placeholder: str | None = None) 
             # user-controlled (external service response); tool_call_id originates
             # from the LLM but defense-in-depth requires sanitizing all interpolated
             # values — repair paths (P0-4) now route assistant IDs through this code.
-            sanitized_output = _sanitize_content_for_injection(str(output))
+            # Render actual rich blocks, not their Python dict representation.
+            # Unknown output mappings/strings retain their existing text
+            # semantics; this is not arbitrary JSON parsing or recursive search.
+            output_blocks = output if isinstance(output, list) else [output]
+            def is_rich_text(item: Any) -> bool:
+                if isinstance(item, TextBlock):
+                    return True
+                # A domain output mapping may coincidentally have a "type"
+                # member. Only exact supported text-block shapes are content,
+                # never opaque application output with additional fields.
+                return (
+                    isinstance(item, dict)
+                    and set(item) <= {"type", "text", "visibility"}
+                    and item.get("type") == "text"
+                    and isinstance(item.get("text"), str)
+                )
+
+            if output_blocks and all(
+                is_rich_text(item) for item in output_blocks
+            ):
+                sanitized_output = _extract_message_content(output)
+            else:
+                sanitized_output = _sanitize_content_for_injection(str(output))
             if tool_result_call_id:
                 sanitized_id = _sanitize_content_for_injection(str(tool_result_call_id))
                 return f"[Tool Result (id={sanitized_id}): {sanitized_output}]"

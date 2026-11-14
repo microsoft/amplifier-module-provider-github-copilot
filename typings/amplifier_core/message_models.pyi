@@ -16,6 +16,7 @@ class Message:
 class ImageBlock:
     type: Literal["image"]
     source: dict[str, Any]
+    visibility: Literal["internal", "developer", "user"] | None
 
     def __init__(self, *, source: dict[str, Any], **kwargs: Any) -> None: ...
     def model_dump(self, **kwargs: Any) -> dict[str, Any]: ...
