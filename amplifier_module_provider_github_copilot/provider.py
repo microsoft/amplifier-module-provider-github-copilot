@@ -25,7 +25,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
@@ -41,6 +41,7 @@ from amplifier_core import (
     ToolCall,
 )
 
+from ._compat import ConfigurationError
 from ._identity import PROVIDER_ID
 from ._model_listing import ModelFilters, selector_schema
 from .config_loader import (
@@ -71,6 +72,15 @@ from .fake_tool_detection import (
     log_retry,
     log_success,
     should_retry_for_fake_tool_calls,
+)
+from .media import (
+    MEDIA_NAMESPACE,
+    SDK_IMAGE_MIME_TYPES,
+    diagnostic_copy,
+    diagnostic_error_message,
+    final_user_image_position,
+    has_media,
+    image_error_scope,
 )
 
 # Model discovery and cache (dynamic SDK fetch)
@@ -453,14 +463,12 @@ async def _run_stream_consumer(
         if hooks_available:
             event_name, payload = item
             try:
-                await coordinator.hooks.emit(event_name, payload)
+                await coordinator.hooks.emit(event_name, diagnostic_copy(payload))
             except Exception as e:
-                from .security_redaction import redact_sensitive_text
-
                 logger.debug(
                     "[PROVIDER] Stream event '%s' emit failed: %s",
                     event_name,
-                    redact_sensitive_text(e),
+                    diagnostic_error_message(e),
                 )
 
 
@@ -676,6 +684,110 @@ class GitHubCopilotProvider:
         by_id = {model.id: model for model in models}
         return cast(list[ModelInfo], [by_id[model_id] for model_id in policy.select(list(by_id))])
 
+    def get_media_request_support(
+        self, *, model: str, request_options: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Old role-wide hosts cannot express final-user-only; stay text-only."""
+        return {
+            "v": 1, "positions": [], "mime_types": ["image/png", "image/jpeg"],
+            "reason": "Copilot SDK role-bound media-v1 delivery is not qualified",
+            "evidence": "Legacy SDK current-user attachments are a separate route",
+        }
+
+    def _selected_media_model(self, request: Any, options: dict[str, Any]) -> str:
+        """Use the same effective selection for the support query and SDK send."""
+        selected = getattr(request, "model", None) or self._effective_default_model
+        nested = options.get("request_options")
+        if nested is not None and not isinstance(nested, Mapping):
+            raise ConfigurationError("request_options must be a mapping.", provider=PROVIDER_ID)
+        nested_model = nested.get("model") if nested is not None else None
+        for override in (options.get("model"), nested_model):
+            if override is not None and override != selected:
+                raise ConfigurationError(
+                    "Copilot model override differs from the fitted request model; "
+                    "select the model on ChatRequest before preparation.",
+                    provider=PROVIDER_ID,
+                )
+        return selected
+
+    def _selected_media_vision(self, model: str) -> bool | None:
+        """Only exact cached endpoint identity supplies vision facts; no guessing."""
+        info = self._lookup_copilot_model_info(model)
+        if info is None or getattr(info, "id", None) != model:
+            return None
+        return info.supports_vision if type(info.supports_vision) is bool else None
+
+    def get_media_request_support_for_request(
+        self, *, request: ChatRequest, model: str,
+        request_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Strict Foundation v2 index/role facts for detached prehydration input.
+
+        No bytes are read, no request is mutated and no capability is fabricated.
+        The getter's presence is authoritative, including an empty selection.
+        """
+        if request_options is not None and not isinstance(request_options, Mapping):
+            raise ConfigurationError("request_options must be a mapping.", provider=PROVIDER_ID)
+        selected = self._selected_media_model(
+            request, {} if request_options is None else dict(request_options)
+        )
+        if model != selected:
+            raise ConfigurationError(
+                "Copilot media support model differs from the fitted request model.",
+                provider=PROVIDER_ID,
+            )
+        index = final_user_image_position(
+            request, supports_vision=self._selected_media_vision(selected)
+        )
+        return {
+            "v": 2,
+            "positions": [] if index is None else [{"message_index": index, "role": "user"}],
+            "mime_types": list(SDK_IMAGE_MIME_TYPES),
+        }
+
+    def _media_validator(self, request: Any, options: dict[str, Any]) -> Callable[[], None]:
+        """Bind the host's exact private projection; never hydrate here."""
+        # Match the host's structural MediaPreparedProvider normalization.
+        nested = options.get("request_options")
+        if nested is not None and not isinstance(nested, Mapping):
+            raise ConfigurationError("request_options must be a mapping.", provider=PROVIDER_ID)
+        options = {
+            **(nested or {}), **{key: value for key, value in options.items()
+                                if key != "request_options"}
+        }
+        get_capability = getattr(self.coordinator, "get_capability", None)
+        capability: Any = get_capability(MEDIA_NAMESPACE) if callable(get_capability) else None
+
+        def validate() -> None:
+            if capability is not None:
+                try:
+                    if getattr(capability, "version", None) != 1:
+                        raise ValueError("incompatible media capability")
+                    outcome = capability.validate(
+                        request, purpose="transport", request_options=options
+                    )
+                    if not isinstance(outcome, dict) or outcome.get("valid") is not True:
+                        raise ValueError("invalid media witness")
+                except Exception:
+                    # Never expose ref payload/opaque source through errors or
+                    # translate a local refusal into a retryable SDK failure.
+                    raise ConfigurationError(
+                        "Media projection is no longer valid; refit before transport.",
+                        provider=PROVIDER_ID,
+                    ) from None
+            else:
+                for message in getattr(request, "messages", []) or []:
+                    metadata = (
+                        message.get("metadata") if isinstance(message, dict)
+                        else getattr(message, "metadata", None)
+                    )
+                    if isinstance(metadata, dict) and MEDIA_NAMESPACE in metadata:
+                        raise ConfigurationError(
+                            "Media references require a compatible host preparation capability.",
+                            provider=PROVIDER_ID,
+                        )
+        return validate
+
     async def complete(
         self,
         request: ChatRequest,
@@ -690,10 +802,22 @@ class GitHubCopilotProvider:
         - observability module for hook emission
         - completion module for SDK execution
         """
-        # Convert request using request_adapter module (separation of concerns)
+        with image_error_scope(has_media(request)):
+            return await self._complete(request, **kwargs)
+
+    async def _complete(self, request: ChatRequest, **kwargs: Any) -> ChatResponse:
+        """Execute with the per-call diagnostic scope installed by complete()."""
+        selected_model = self._selected_media_model(request, dict(kwargs))
+        # Unknown is not vision-capable. Do not discover/fetch or switch models.
+        supports_vision = (
+            self._selected_media_vision(selected_model) if has_media(request) else None
+        )
+        validate_media = self._media_validator(request, dict(kwargs))
+        validate_media()
         internal_request = convert_chat_request(
             request,
             default_model=self._effective_default_model,
+            supports_vision=supports_vision,
         )
 
         # Load configs
@@ -813,6 +937,7 @@ class GitHubCopilotProvider:
                 # Bug fix: Reset accumulator for each attempt to prevent corruption
                 # If first attempt partially streams then fails, retry must start fresh
                 accumulator = StreamingAccumulator()
+                submission_state = {"started": False}
                 try:
                     await self._execute_sdk_completion(
                         client=self._client,
@@ -829,6 +954,8 @@ class GitHubCopilotProvider:
                         context_tier=validated_context_tier,
                         request_id=request_id,
                         use_streaming=_use_streaming,
+                        validate_media=validate_media,
+                        submission_state=submission_state,
                     )
                     break  # Success
 
@@ -836,7 +963,7 @@ class GitHubCopilotProvider:
                     if not is_retryable_error(e):
                         await ctx.emit_response_error(
                             error_type=type(e).__name__,
-                            error_message=str(e),
+                            error_message=diagnostic_error_message(e),
                         )
                         raise
 
@@ -846,7 +973,7 @@ class GitHubCopilotProvider:
                             "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
                             attempt + 1,
                             retry_config.max_attempts,
-                            e,
+                            diagnostic_error_message(e),
                             delay_ms,
                         )
                         await ctx.emit_retry(
@@ -855,13 +982,13 @@ class GitHubCopilotProvider:
                             delay=delay_ms / 1000,
                             retry_after=get_retry_after(e),
                             error_type=type(e).__name__,
-                            error_message=str(e),
+                            error_message=diagnostic_error_message(e),
                         )
                         await asyncio.sleep(delay_ms / 1000)
                     else:
                         await ctx.emit_response_error(
                             error_type=type(e).__name__,
-                            error_message=str(e),
+                            error_message=diagnostic_error_message(e),
                         )
                         raise
 
@@ -882,11 +1009,16 @@ class GitHubCopilotProvider:
                     translated = translate_sdk_error(
                         e, error_config_for_err, provider=PROVIDER_ID, model=model
                     )
+                    # asyncio.timeout raises outside the inner attempt's
+                    # exception handler. Keep post-submission deadlines just as
+                    # non-replayable as a received session.error or lost ACK.
+                    if internal_request.attachments and submission_state["started"]:
+                        translated.retryable = False
 
                     if not is_retryable_error(translated):
                         await ctx.emit_response_error(
                             error_type=type(translated).__name__,
-                            error_message=str(translated),
+                            error_message=diagnostic_error_message(translated),
                         )
                         raise translated from e
 
@@ -896,7 +1028,7 @@ class GitHubCopilotProvider:
                             "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
                             attempt + 1,
                             retry_config.max_attempts,
-                            translated,
+                            diagnostic_error_message(translated),
                             delay_ms,
                         )
                         await ctx.emit_retry(
@@ -905,13 +1037,13 @@ class GitHubCopilotProvider:
                             delay=delay_ms / 1000,
                             retry_after=get_retry_after(translated),
                             error_type=type(translated).__name__,
-                            error_message=str(translated),
+                            error_message=diagnostic_error_message(translated),
                         )
                         await asyncio.sleep(delay_ms / 1000)
                     else:
                         await ctx.emit_response_error(
                             error_type=type(translated).__name__,
-                            error_message=str(translated),
+                            error_message=diagnostic_error_message(translated),
                         )
                         raise translated from e
 
@@ -946,7 +1078,14 @@ class GitHubCopilotProvider:
                 accumulator = StreamingAccumulator()
 
                 try:
-                    # Note: attachments=None for correction - the model already saw the image
+                    if internal_request.attachments:
+                        raise ConfigurationError(
+                            "Image-bearing Copilot correction requires a new fitted request; "
+                            "no automatic text-only correction was sent.",
+                            provider=PROVIDER_ID,
+                        )
+                    # This is a NEW ephemeral SDK session. Image-bearing requests
+                    # are refused above rather than claiming it saw earlier pixels.
                     # Correction responses only need to produce a structured tool call —
                     # cap at 512 tokens to bound cost/latency regardless of the caller's
                     # original cap. Respects caller ceiling if it is lower.
@@ -977,6 +1116,7 @@ class GitHubCopilotProvider:
                         context_tier=validated_context_tier,
                         request_id=request_id,
                         use_streaming=_use_streaming,
+                        validate_media=validate_media,
                     )
                 except asyncio.CancelledError:
                     # C-2: Same guard for the fake-tool correction path.
@@ -997,6 +1137,16 @@ class GitHubCopilotProvider:
                     #
                     # Contract: error-hierarchy.md — MUST translate SDK errors to kernel errors.
                     # The correction path must use the same error translation as the main path.
+                    if isinstance(e, ConfigurationError):
+                        # Our local image-correction refusal contains no remote
+                        # prose. Preserve its actionable typed primary error;
+                        # only its diagnostic COPY is subject to omission.
+                        log_exhausted(ftd_config, correction_attempt + 1)
+                        await ctx.emit_response_error(
+                            error_type=type(e).__name__,
+                            error_message=diagnostic_error_message(e),
+                        )
+                        raise
                     error_config_for_correction = load_error_config()
                     translated = translate_sdk_error(
                         e, error_config_for_correction, provider=PROVIDER_ID, model=model
@@ -1126,6 +1276,8 @@ class GitHubCopilotProvider:
         context_tier: str | None = None,
         request_id: str | None = None,
         use_streaming: bool = True,
+        validate_media: Callable[[], None] | None = None,
+        submission_state: dict[str, bool] | None = None,
     ) -> None:
         """Execute a single SDK completion, draining events to accumulator.
 
@@ -1159,6 +1311,8 @@ class GitHubCopilotProvider:
         streaming_config = load_streaming_config()
 
         async with asyncio.timeout(timeout):
+            if validate_media is not None:
+                validate_media()
             async with client.session(
                 model=model,
                 tools=tools,
@@ -1240,6 +1394,7 @@ class GitHubCopilotProvider:
                                 idle_event.set()
 
                     connection_task = asyncio.create_task(watch())
+                send_started = False
                 try:
                     # Record TTFT start time before send
                     # Contract: behaviors:Streaming:MUST:1
@@ -1248,6 +1403,11 @@ class GitHubCopilotProvider:
                     # legacy v0.2.x send({"prompt": ...}) dict shape.
                     # Contract: sdk-boundary:ImagePassthrough:MUST:7
                     logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
+                    if validate_media is not None:
+                        validate_media()
+                    send_started = True
+                    if submission_state is not None:
+                        submission_state["started"] = True
                     await sdk_session.send(prompt, attachments=attachments)
                     logger.debug("[SDK_COMPLETION] Prompt sent, waiting for idle_event...")
                     # Await idle_event directly — deadline is enforced by the enclosing
@@ -1275,7 +1435,7 @@ class GitHubCopilotProvider:
                                     "request_id": stream_ctx.request_id,
                                     "error": {
                                         "type": type(err).__name__,
-                                        "msg": str(err),
+                                        "msg": diagnostic_error_message(err),
                                     },
                                 },
                             )
@@ -1317,11 +1477,9 @@ class GitHubCopilotProvider:
                                 )
                             except Exception as e:
                                 # Abort failure is non-critical - log and continue
-                                from .security_redaction import redact_sensitive_text
-
                                 logger.debug(
                                     "[provider] Session abort failed (non-critical): %s",
-                                    redact_sensitive_text(e),
+                                    diagnostic_error_message(e),
                                 )
 
                     # Now drain remaining events (including TURN_COMPLETE)
@@ -1380,6 +1538,20 @@ class GitHubCopilotProvider:
                         )
                     except Exception:
                         logger.debug("[provider] Abort during cancellation failed; disconnecting")
+                    raise
+                except Exception as exc:
+                    if send_started and attachments:
+                        # A send was invoked: received text, session.error or a
+                        # lost acknowledgement cannot authorize another send.
+                        # Retain the typed error/cause and retry_after, but never
+                        # replay submission based on a message's "429" substring.
+                        translated = exc if isinstance(exc, LLMError) else translate_sdk_error(
+                            exc, load_error_config(), provider=PROVIDER_ID, model=model
+                        )
+                        translated.retryable = False
+                        if translated is exc:
+                            raise
+                        raise translated from exc
                     raise
                 finally:
                     unsubscribe()
@@ -1452,15 +1624,13 @@ class GitHubCopilotProvider:
 
             await self.coordinator.hooks.emit(
                 "llm:content_block",
-                {
+                diagnostic_copy({
                     "provider": self.name,
                     "content": content_data,
-                },
+                }),
             )
         except Exception as e:
-            from .security_redaction import redact_sensitive_text
-
-            logger.debug("[PROVIDER] Content emit failed: %s", redact_sensitive_text(e))
+            logger.debug("[PROVIDER] Content emit failed: %s", diagnostic_error_message(e))
 
     def _handle_emit_task_exception(self, task: asyncio.Task[Any]) -> None:
         """Handle exceptions from emit tasks silently.
@@ -1471,9 +1641,7 @@ class GitHubCopilotProvider:
             return
         exc = task.exception()
         if exc:
-            from .security_redaction import redact_sensitive_text
-
-            logger.debug("[PROVIDER] Emit task failed: %s", redact_sensitive_text(exc))
+            logger.debug("[PROVIDER] Emit task failed: %s", diagnostic_error_message(exc))
 
     async def cancel_emit_tasks(self) -> None:
         """Cancel and await all pending background emit tasks.

@@ -206,6 +206,7 @@ def mock_coordinator() -> MagicMock:
     coord = MagicMock()
     coord.hooks = MagicMock()
     coord.hooks.emit = AsyncMock()
+    coord.get_capability.return_value = None
     return coord
 
 

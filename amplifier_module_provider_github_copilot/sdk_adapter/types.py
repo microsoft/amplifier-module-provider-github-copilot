@@ -328,6 +328,10 @@ def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:
 # ============================================================================
 
 
+def _image_value(value: Any, key: str, default: Any = None) -> Any:
+    return value.get(key, default) if isinstance(value, dict) else getattr(value, key, default)
+
+
 def convert_image_block_to_blob_attachment(image_block: Any) -> dict[str, Any] | None:
     """Convert amplifier-core ImageBlock to SDK BlobAttachment.
 
@@ -353,7 +357,7 @@ def convert_image_block_to_blob_attachment(image_block: Any) -> dict[str, Any] |
 
     """
     # Get source dict from ImageBlock
-    source: dict[str, Any] | None = getattr(image_block, "source", None)
+    source: dict[str, Any] | None = _image_value(image_block, "source")
     if not isinstance(source, dict):
         return None
 
@@ -379,8 +383,10 @@ def convert_image_block_to_blob_attachment(image_block: Any) -> dict[str, Any] |
 def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
     """Extract image attachments from ChatRequest for SDK.
 
-    SDK constraint: Only images from the LAST user message are extracted.
-    Historical images cannot be forwarded to SDK's session.send().
+    Adapter policy: extract images from the LAST user message of the already
+    projected request. The provider gate further requires that message be final.
+    SDK send attaches blobs to its current prompt without canonical indices;
+    this is not evidence the vendor cannot process images from earlier turns.
 
     The provider does NOT validate model vision capability. If a model doesn't
     support vision, the SDK or upstream will handle the error. We are pure
@@ -403,30 +409,30 @@ def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
     attachments: list[dict[str, Any]] = []
 
     # Get messages from request
-    messages: Any = getattr(request, "messages", None)
+    messages: Any = _image_value(request, "messages")
     if not messages:
         return []
 
-    # Find LAST user message (SDK only supports current turn images)
+    # Find LAST user message in the provider's already-selected projection.
     last_user_msg: Any = None
     historical_image_count: int = 0
     msg: Any
     for msg in reversed(list(messages)):
-        if getattr(msg, "role", "") == "user":
+        if _image_value(msg, "role", "") == "user":
             if last_user_msg is None:
                 last_user_msg = msg
             else:
                 # L-5: Count images in historical user messages (they will be dropped)
-                hist_content = getattr(msg, "content", None)
+                hist_content = _image_value(msg, "content")
                 if isinstance(hist_content, list):
                     for blk in cast(list[Any], hist_content):
-                        if getattr(blk, "type", None) == "image":
+                        if _image_value(blk, "type") == "image":
                             historical_image_count += 1
 
     if historical_image_count > 0:
         logger.warning(
             "[IMAGE_PASSTHROUGH] %d image(s) in historical messages silently dropped "
-            "— SDK only supports images from the last user message.",
+            "— this adapter selects only the last user message.",
             historical_image_count,
         )
 
@@ -434,7 +440,7 @@ def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
         return []
 
     # Get content - must be a list for multimodal content
-    content = getattr(last_user_msg, "content", None)
+    content = _image_value(last_user_msg, "content")
     if not isinstance(content, list):
         return []  # Plain text content, no images
 
@@ -446,7 +452,7 @@ def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
     # Note: content is list of various block types (text, image, tool_result, etc.)
     for block in content_blocks:
         # Check if this is an image block
-        if getattr(block, "type", None) == "image":
+        if _image_value(block, "type") == "image":
             attachment = convert_image_block_to_blob_attachment(block)
             if attachment:
                 attachments.append(attachment)

@@ -729,7 +729,22 @@ max_output_tokens = capabilities.limits.max_output_tokens
 
 **Evidence:** SDK `session.send()` signature
 
-The provider acts as a **pure transport layer** for images. No capability validation, no filtering.
+The SDK membrane acts as a **pure transport layer** for already-selected images.
+The provider prepares a copied Core request before this membrane: only a current
+final user message with explicitly known vision support is eligible. Unknown,
+non-vision, tool and historical image positions become explicit unavailable text;
+they are never moved to a synthetic current-user message.
+
+The replacement is implemented in `media.project_sdk_images`, invoked by
+`request_adapter.convert_chat_request` before prompt and attachment extraction.
+Each excluded Core ImageBlock becomes a Core TextBlock in the same content slot,
+with its visibility preserved. Surrounding text, message role, metadata and
+enclosing tool-call ID are unchanged in the private request copy. The adapter
+serializes rich tool messages inside `[Tool Result (id=...): ...]`, so an
+unavailable image remains correlated with its actual result. Structured
+tool-result blocks render the warning as text, not a Python dictionary. This
+request-only text conversion is distinct from `positions: []`, which merely
+declares that a v1 host must not hydrate canonical refs for this provider.
 
 ### Core Principle
 
@@ -737,8 +752,112 @@ The provider acts as a **pure transport layer** for images. No capability valida
 ImageBlock (amplifier-core) → BlobAttachment (SDK) → upstream model
 ```
 
-The provider MUST extract images from ChatRequest and forward them unchanged to the SDK.
-The SDK and upstream model handle capability verification.
+The membrane MUST forward eligible image bytes unchanged. The SDK and upstream
+remain responsible for actual model/image acceptance; an advertised capability
+and successful forwarding are not evidence of successful visual inference.
+
+`tests/test_media_sdk_wire.py` exercises the actual pinned SDK's public
+`create_session` and `send`, including its real JSON-RPC request and UTF-8
+Content-Length serializer, through provider `complete` and the membrane.
+Only the external stdio peer is synthetic; runtime startup is forbidden.
+It checks unknown/non-vision/historical/tool/assistant/system fallback at the
+original position, eligible legacy blob digest, diagnostic omission at hook
+entry and SDK detach. This is offline serialization evidence, not backend
+visual inference. Model-option overrides that differ
+from the fitted ChatRequest/default refuse before SDK creation.
+
+### Experimental media-v1 compatibility
+
+`get_media_request_support(*, model, request_options=None)` returns version 1,
+`positions: []`, PNG/JPEG MIME types, and an explicit unqualified-route reason.
+This is intentionally closed for older hosts whose role-wide support cannot
+represent final-user-only eligibility.
+
+An updated host may query the actual provider's synchronous
+`get_media_request_support_for_request(*, request, model, request_options=None)`.
+Its input is the exact detached post-overlay, prehydration Core ChatRequest.
+The result is strict plain JSON with **only** `v: 2`, `positions` and `mime_types`:
+
+```json
+{"v": 2, "positions": [{"message_index": 3, "role": "user"}],
+ "mime_types": ["image/png", "image/jpeg"]}
+```
+
+The index is the last message, only when it is a user message with block-list
+content and the **exact selected model ID** has cached literal-True vision
+support. Unknown/nonvision models and other final roles yield an empty list.
+No model-prefix heuristic, SDK discovery/inference call, backward image search,
+tool/history role expansion, ignored v1 constraint or alternate provider is used.
+`media.final_user_image_position` is shared with actual conversion. The SDK
+attachment converter also restricts the route to PNG/JPEG. An eligible final
+text-only list cannot cause a preceding image to be hydrated or relocated.
+
+The host's real strict indexed parser owns schema/index/role/MIME checks;
+presence is authoritative, including empty/malformed/raising getters. Invalid
+facts refuse, never fall back to v1 support. Foundation
+`ea51d5e6da30840c560308d39b74c30c65632865` supplies this contract and freezes
+support facts against the same prehydration source during later validation.
+The host's `experimental.media.v1` preparation owner hydrates only qualified,
+admitted final-user refs and freezes all unavailable text before fitting/counting;
+the provider never reads assets or hydrates refs.
+Canonical history and request metadata remain ref-only. Providers call synchronous
+`cap.validate(exact_private_request, purpose="transport", request_options=options)`
+before each SDK session and immediately before each send, including after retry
+backoff and session-creation awaits. Failure is a non-retryable local refusal.
+Standalone refs without a compatible host witness are refused.
+
+| Route | Supported boundary | Not claimed |
+| --- | --- | --- |
+| Legacy current final-user base64, known vision model | Unchanged SDK blob attachment | Paid inference, durable media-v1 |
+| Unknown/non-vision model or historical/tool/assistant/system image | Original-position unavailable text | Relocation or visual inference |
+| Canonical media-v1 refs with indexed host | Private final-user PNG/JPEG projection, exact cached model, per-attempt validation | History/tool hydration, vendor inference parity |
+| Canonical media-v1 refs with older role-wide host | Host-frozen text-only projection | Role-wide vision support |
+| Image-bearing fake-tool correction | Local refusal requiring a newly fitted request | Reusing pixels/vision from another ephemeral session |
+| Count/budget/stream/compact/refit optional methods | Absent, as on the underlying provider | Invented provider counts or native-route parity |
+
+### Private image error diagnostics
+
+An image-bearing `complete()` installs a task-local diagnostic scope for the
+whole call, including session creation, streaming, retry, lifecycle fallback,
+hook failures and teardown. Errors may echo complete data URLs, raw base64 or
+arbitrary short fragments: credential/opaque-token regexes are not an image
+privacy control. Diagnostic error prose is therefore a fixed bounded omission
+message **before** stream-abort queueing, hook entry or logger entry. This is
+an error-copy policy, not a scan of arbitrary opaque strings. Original SDK causes
+remain private for chaining/classification; retry-after and configured typed
+error mapping use the original message, not the diagnostic copy.
+
+Pinned SDK 1.0.15 logs timing failures with implicit `exc_info=True` before
+returning control to the membrane (`copilot._jsonrpc.request` and
+`copilot.client.create_session`). For these **two exact named logger-instance
+`log` calls and their exact timing message strings only**, an idempotent entry
+adapter omits exception/arguments/extra/stack information during the task-local
+image scope, before stdlib `Logger._log` / `LogRecord` construction. It does not
+patch global Logger methods, SDK/RPC methods, filters, handlers or logging levels.
+Outside that scope (and for other messages) the existing logger call is forwarded
+verbatim. Two concurrent image tasks, plain calls, cancellation/reset, raw
+`exc_info` and malicious `extra` are covered. SDK error notifications dispatched
+from an explicitly empty callback context are covered too: the error is copied
+later in the completion's context, not assumed to inherit the reader's context.
+This is not a universal policy for SDK stderr, arbitrary background-thread logs,
+or unsupported SDK versions; pinned-call-site changes require renewed review.
+
+For an image-bearing send, invocation starts an uncertain/possibly received
+submission. Subsequent errors (including a partial response with `429` prose)
+retain their typed class/cause/retry-after but are marked non-retryable; they
+cannot replay a send, regardless of external streaming configuration. A known
+retryable rejection of **session creation before any send** retains the existing
+retry policy and revalidates the same private request before the next attempt.
+No witness/refusal/revocation state is reset to obtain another attempt.
+
+`tests/test_media_error_privacy.py` captures logger arguments and resolved implicit
+tracebacks at entry, plus real formatted log records and hook payloads. The
+task-owned exact-Foundation pairing adds real PNG/JPEG refs through the public
+strict wrapper into actual SDK serialization: raw/data-URL errors, early text
+then error, send rejection, create rejection/retry and revoked second attempt.
+The earlier structured-request diagnostic tests alone did not qualify this path.
+These are offline synthetic transport/error fixtures, not live SDK runtime,
+backend inference or whole-program privacy acceptance.
 
 ### Type Mapping
 
@@ -761,11 +880,14 @@ The SDK and upstream model handle capability verification.
 
 ### MUST Constraints
 
-1. **MUST** extract images from the LAST user message only (SDK limitation)
+1. **MUST** extract images from the LAST user message of the provider's selected
+   projection; the provider additionally requires that user message be final.
+   This is adapter policy, not a demonstrated vendor inability to process history.
 2. **MUST** convert `ImageBlock` source dict to `BlobAttachment` format
 3. **MUST** skip non-base64 images (URL references) — return None
 4. **MUST** skip empty/missing image data — return None
-5. **MUST NOT** validate model vision capability — pure passthrough
+5. The **membrane** MUST NOT validate model vision capability — the provider's
+   copied-request gate owns eligibility before this pure passthrough helper.
 6. **MUST NOT** filter or modify image content
 7. **MUST** forward valid attachments to SDK `session.send(prompt, attachments=...)`
 

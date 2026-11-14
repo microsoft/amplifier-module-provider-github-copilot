@@ -24,6 +24,8 @@ from .llm_errors import ProviderUnavailableError as ProviderUnavailableError
 from .llm_errors import QuotaExceededError as QuotaExceededError
 from .llm_errors import RateLimitError as RateLimitError
 from .llm_errors import StreamError as StreamError
+from .message_models import ImageBlock as ImageBlock
+from .message_models import Message as Message
 
 @dataclass
 class ModelInfo:
@@ -80,6 +82,7 @@ class ChatRequest:
     temperature: float | None = None
     routing_model: str | None = None
     attachments: list[Any] | None = None
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 @dataclass

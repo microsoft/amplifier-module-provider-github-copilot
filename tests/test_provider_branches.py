@@ -42,6 +42,7 @@ def _make_coordinator() -> MagicMock:
     coordinator = MagicMock()
     coordinator.hooks = MagicMock()
     coordinator.hooks.emit = AsyncMock()
+    coordinator.get_capability.return_value = None
     return coordinator
 
 

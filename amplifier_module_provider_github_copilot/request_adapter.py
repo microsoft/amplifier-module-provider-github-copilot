@@ -19,10 +19,13 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import Any, assert_never, cast
 
+from amplifier_core.message_models import TextBlock
+
 # Single canonical import for ConfigurationError. Convention from config_loader.py
 # / models.py / streaming.py: top-level only, never re-imported in function bodies.
 from ._compat import ConfigurationError
 from ._identity import PROVIDER_ID
+from .media import project_sdk_images
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import CompletionRequest, CopilotModelInfo, extract_attachments_from_chat_request
@@ -285,6 +288,7 @@ def convert_chat_request(
     request: Any,
     *,
     default_model: str | None = None,
+    supports_vision: bool | None = None,
 ) -> CompletionRequest:
     """Convert kernel ChatRequest to internal CompletionRequest.
 
@@ -302,8 +306,17 @@ def convert_chat_request(
     """
     # Passthrough if already CompletionRequest
     if isinstance(request, CompletionRequest):
+        if request.attachments:
+            raise ConfigurationError(
+                "Pre-converted image attachments lack a qualified message position; "
+                "use a canonical ChatRequest.",
+                provider=PROVIDER_ID,
+            )
         return request
 
+    # Freeze unsupported positions/models to text before attachment extraction.
+    # Never mutate the canonical request or relocate historical/tool pixels.
+    request = project_sdk_images(request, supports_vision=supports_vision)
     messages: list[Any] = getattr(request, "messages", [])
 
     # Contract: provider-protocol:complete:MUST:9 — repair malformed tool sequences
@@ -316,8 +329,10 @@ def convert_chat_request(
             repair_count,
         )
 
-    # Extract prompt using repaired messages (system/attachments use original request)
-    prompt = _extract_prompt_from_messages(repaired_messages)
+    # Remaining image blocks passed the current-user/model/source gate above.
+    prompt = _extract_prompt_from_messages(
+        repaired_messages, image_placeholder="[Image supplied via current-user SDK attachment]"
+    )
 
     # Extract model and tools
     model = getattr(request, "model", None) or default_model
@@ -777,7 +792,9 @@ def extract_prompt_from_chat_request(request: Any) -> str:
     return _extract_prompt_from_messages(messages)
 
 
-def _extract_prompt_from_messages(messages: list[Any]) -> str:
+def _extract_prompt_from_messages(
+    messages: list[Any], *, image_placeholder: str | None = None
+) -> str:
     """Format an ordered message list into a prompt string.
 
     Internal helper called by both extract_prompt_from_chat_request (public API)
@@ -812,12 +829,12 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
         # Format role marker
         role_marker = f"[{role.upper()}]"
 
-        # Extract content based on type
-        content_text = (
-            _format_tool_result(enclosing_result_id, content)
-            if role == "tool" and enclosing_result_id and isinstance(content, str)
-            else _extract_message_content(content)
-        )
+        # The enclosing ID still correlates a rich text/image result with its
+        # call after unsupported pixels become text. Do not lose that ID merely
+        # because the tool's content is a list rather than a string.
+        content_text = _extract_message_content(content, image_placeholder=image_placeholder)
+        if role == "tool" and enclosing_result_id and not _content_tool_result_ids(content):
+            content_text = _format_tool_result(enclosing_result_id, content_text)
         content_call_ids = _content_tool_call_ids(content)
         field_calls: Any = getattr(msg, "tool_calls", None)
         if field_calls is None and isinstance(msg, dict):
@@ -896,7 +913,7 @@ def _extract_field_tool_calls(tool_calls: Any, content_call_ids: set[str]) -> st
     return "\n".join(parts)
 
 
-def _extract_message_content(content: Any) -> str:
+def _extract_message_content(content: Any, *, image_placeholder: str | None = None) -> str:
     """Extract text from message content of various types.
 
     Handles string, list of content blocks, and individual blocks.
@@ -918,16 +935,16 @@ def _extract_message_content(content: Any) -> str:
     if isinstance(content, list):
         parts: list[str] = []
         for block in cast(list[Any], content):
-            block_text = _extract_content_block(block)
+            block_text = _extract_content_block(block, image_placeholder=image_placeholder)
             if block_text:
                 parts.append(block_text)
         return "\n".join(parts)
 
     # Single content block
-    return _extract_content_block(content)
+    return _extract_content_block(content, image_placeholder=image_placeholder)
 
 
-def _extract_content_block(block: Any) -> str:
+def _extract_content_block(block: Any, *, image_placeholder: str | None = None) -> str:
     """Extract text from a single content block.
 
     Handles TextContent, ThinkingContent, ToolCallContent,
@@ -1017,7 +1034,7 @@ def _extract_content_block(block: Any) -> str:
     # Contract: provider-protocol:complete:MUST — preserve tool call IDs
     # ToolResultBlock.type is always "tool_result" (amplifier_core 1.3.3 verified).
     if block_type == "tool_result":
-        output: str | None = getattr(block, "output", None) or _get("output")
+        output: Any = getattr(block, "output", None) or _get("output")
         if output:
             tool_result_call_id: str | None = getattr(block, "tool_call_id", None) or _get(
                 "tool_call_id"
@@ -1027,14 +1044,38 @@ def _extract_content_block(block: Any) -> str:
             # user-controlled (external service response); tool_call_id originates
             # from the LLM but defense-in-depth requires sanitizing all interpolated
             # values — repair paths (P0-4) now route assistant IDs through this code.
-            sanitized_output = _sanitize_content_for_injection(str(output))
+            # Render actual rich blocks, not their Python dict representation.
+            # Unknown output mappings/strings retain their existing text
+            # semantics; this is not arbitrary JSON parsing or recursive search.
+            output_blocks = output if isinstance(output, list) else [output]
+            def is_rich_text(item: Any) -> bool:
+                if isinstance(item, TextBlock):
+                    return True
+                # A domain output mapping may coincidentally have a "type"
+                # member. Only exact supported text-block shapes are content,
+                # never opaque application output with additional fields.
+                return (
+                    isinstance(item, dict)
+                    and set(item) <= {"type", "text", "visibility"}
+                    and item.get("type") == "text"
+                    and isinstance(item.get("text"), str)
+                )
+
+            if output_blocks and all(
+                is_rich_text(item) for item in output_blocks
+            ):
+                sanitized_output = _extract_message_content(output)
+            else:
+                sanitized_output = _sanitize_content_for_injection(str(output))
             if tool_result_call_id:
                 sanitized_id = _sanitize_content_for_injection(str(tool_result_call_id))
                 return f"[Tool Result (id={sanitized_id}): {sanitized_output}]"
             return f"[Tool Result: {sanitized_output}]"
         return ""
 
-    # Image block — SDK cannot re-process images from prior turns; replace with placeholder.
+    # Image block — preserve its existence in this adapter's text history.
+    # Only explicitly selected current-user blocks receive a supplied marker;
+    # other positions are unqualified here, not proven impossible for the vendor.
     # S3 Fix: image blocks fell through to the fallback and returned "" silently,
     # losing the model's context that an image existed in that turn.
     # Contract: behaviors:Security:MUST:1 (content integrity in history)
@@ -1044,19 +1085,11 @@ def _extract_content_block(block: Any) -> str:
         and not hasattr(block, "text")
         and not hasattr(block, "output")
     ):
-        mime: str | None = (
-            getattr(block, "media_type", None)
-            or getattr(block, "mime_type", None)
-            or _get("media_type")
-            or _get("mime_type")
+        if image_placeholder is None:
+            logger.warning("Image replaced with explicit unavailable text (unqualified position)")
+        return (image_placeholder if block_type == "image" else None) or (
+            "[Image unavailable: Copilot SDK position is unqualified; no pixels supplied]"
         )
-        placeholder = f"[Image: {mime}]" if mime else "[Image]"
-        logger.warning(
-            "Image block in conversation history replaced with %r "
-            "(SDK cannot re-process images from prior turns)",
-            placeholder,
-        )
-        return placeholder
 
     # Fallback - try common text attributes
     for attr in ("text", "content", "value"):

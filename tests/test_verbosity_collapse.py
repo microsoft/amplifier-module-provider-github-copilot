@@ -135,6 +135,7 @@ def mock_coordinator() -> MagicMock:
     coordinator = MagicMock()
     coordinator.hooks = MagicMock()
     coordinator.hooks.emit = AsyncMock()
+    coordinator.get_capability.return_value = None
     return coordinator
 
 
@@ -303,6 +304,7 @@ class TestRawPayloadKeysInEvents:
         coord1: MagicMock = MagicMock()
         coord1.hooks = MagicMock()
         coord1.hooks.emit = AsyncMock()
+        coord1.get_capability.return_value = None
         p1 = GitHubCopilotProvider(config={"raw": True, "use_streaming": False}, coordinator=coord1)
         p1._execute_sdk_completion = _mock_execute  # type: ignore[method-assign]
         await p1.complete(sample_chat_request, model="gpt-4o")  # type: ignore[arg-type]
@@ -311,6 +313,7 @@ class TestRawPayloadKeysInEvents:
         coord2: MagicMock = MagicMock()
         coord2.hooks = MagicMock()
         coord2.hooks.emit = AsyncMock()
+        coord2.get_capability.return_value = None
         p2 = GitHubCopilotProvider(config={"use_streaming": False}, coordinator=coord2)
         p2._execute_sdk_completion = _mock_execute  # type: ignore[method-assign]
         await p2.complete(sample_chat_request, model="gpt-4o")  # type: ignore[arg-type]

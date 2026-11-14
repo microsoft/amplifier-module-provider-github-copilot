@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from amplifier_core import ChatRequest, Message
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -27,6 +28,7 @@ def mock_coordinator() -> MagicMock:
     coordinator = MagicMock()
     coordinator.hooks = MagicMock()
     coordinator.hooks.emit = AsyncMock()
+    coordinator.get_capability.return_value = None
     return coordinator
 
 
@@ -56,11 +58,11 @@ def provider_config() -> dict[str, Any]:
 
 
 @pytest.fixture
-def sample_request() -> dict[str, Any]:
-    """Sample ChatRequest-like dict for complete() calls."""
-    return {
-        "messages": [{"role": "user", "content": "Hello"}],
-    }
+def sample_request() -> ChatRequest:
+    """Use the actual fitted request/model, not an ignored dict plus override."""
+    return ChatRequest(
+        model="claude-opus-4.5", messages=[Message(role="user", content="Hello")]
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -143,7 +145,7 @@ class TestLlmRequestEvent:
     async def test_llm_request_contains_required_fields(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """llm:request event should contain required metadata fields.
 
@@ -203,7 +205,7 @@ class TestLlmResponseEvent:
     async def test_llm_response_contains_duration_ms(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """llm:response should include duration_ms timing metric.
 
@@ -246,7 +248,7 @@ class TestLlmResponseEvent:
     async def test_llm_response_status_ok_on_success(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """llm:response should have status "ok" on successful completion.
 
@@ -589,7 +591,7 @@ class TestEventOrdering:
     async def test_llm_request_precedes_llm_response(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """llm:request must be emitted BEFORE llm:response.
 
@@ -647,7 +649,7 @@ class TestProviderRetryEvent:
     async def test_provider_retry_contains_required_fields(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """provider:retry event should contain attempt, max_retries, delay.
 
@@ -707,7 +709,7 @@ class TestProviderRetryEvent:
     async def test_retry_after_is_none_when_not_present(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """retry_after field is None when error carries no Retry-After value.
 
@@ -764,7 +766,7 @@ class TestProviderRetryEvent:
     async def test_retry_after_is_float_when_rate_limit_carries_header(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """retry_after field is a float when RateLimitError carries a Retry-After value.
 
@@ -824,7 +826,7 @@ class TestProviderRetryEvent:
     async def test_retry_after_propagated_from_translated_exception(
         self,
         mock_coordinator: MagicMock,
-        sample_request: dict[str, Any],
+        sample_request: ChatRequest,
     ) -> None:
         """retry_after is extracted and propagated when a raw exception is translated.
 
