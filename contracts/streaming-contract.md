@@ -82,7 +82,12 @@ context reconstruction — the assistant's tool call requests must be visible in
 for downstream consumers that rebuild conversation history from content blocks.
 
 Before constructing a tool execution signal, both captured and ordinary response
-paths MUST validate arguments with the same parser. A dict or JSON object is
+paths MUST require the original nonempty string call ID and exact nonempty string
+tool name. Capture preserves malformed identity values for validation; it MUST
+NOT stringify them or synthesize a replacement ID. Invalid identities raise
+`InvalidToolCallError` before an executable response is returned.
+
+Both paths MUST also validate arguments with the same parser. A dict or JSON object is
 preserved; missing/`None` arguments mean an empty object. Malformed JSON and
 non-object values MUST raise `InvalidToolCallError`, never silently become `{}`.
 This leaves well-formed unknown names for the orchestrator to resolve normally.

@@ -3,7 +3,6 @@
 import fnmatch
 import functools
 import logging
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -27,6 +26,7 @@ from ._identity import PROVIDER_ID
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import extract_event_fields
 from .tool_parsing import parse_tool_arguments as _parse_tool_arguments
+from .tool_parsing import parse_tool_identity
 
 logger = logging.getLogger(__name__)
 
@@ -303,8 +303,7 @@ class StreamingAccumulator:
                     content_blocks.append(ThinkingContent(text=thinking_text))
             elif btype == "tool_call":
                 tc = block["data"]
-                tool_call_id = tc.get("id", "") or str(uuid.uuid4())
-                tc_name = tc.get("name", "")
+                tool_call_id, tc_name = parse_tool_identity(tc.get("id"), tc.get("name"))
                 tc_args: dict[str, Any] = _parse_tool_arguments(tc.get("arguments"))
                 # ToolCallBlock in content (ContentBlockUnion member); field is `input`
                 # Contract: streaming-contract:ToolCallBlock:MUST:1

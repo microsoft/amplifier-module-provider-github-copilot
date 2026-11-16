@@ -9,7 +9,6 @@ Logs a WARNING for empty tool arguments (LLM may have hallucinated).
 
 import json
 import logging
-import uuid
 from typing import Any, Protocol, cast
 
 from amplifier_core import ToolCall
@@ -20,6 +19,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "HasToolCalls",
     "parse_tool_arguments",
+    "parse_tool_identity",
     "parse_tool_calls",
 ]
 
@@ -31,6 +31,15 @@ class HasToolCalls(Protocol):
     def tool_calls(self) -> list[Any] | None:
         """Return tool calls if present."""
         ...
+
+
+def parse_tool_identity(tool_id: Any, tool_name: Any) -> tuple[str, str]:
+    """Require the model's original correlation ID and exact tool name."""
+    if not isinstance(tool_id, str) or not tool_id:
+        raise InvalidToolCallError("Tool call ID must be a nonempty string")
+    if not isinstance(tool_name, str) or not tool_name:
+        raise InvalidToolCallError("Tool call name must be a nonempty string")
+    return tool_id, tool_name
 
 
 def parse_tool_arguments(arguments: Any) -> dict[str, Any]:
@@ -70,7 +79,7 @@ def parse_tool_calls(response: Any) -> list[ToolCall]:
         List of ToolCall objects (may be empty)
 
     Raises:
-        InvalidToolCallError: If tool call has invalid JSON arguments or non-dict arguments
+        InvalidToolCallError: If the call identity or object arguments are malformed
 
     """
     tool_calls = getattr(response, "tool_calls", None)
@@ -85,8 +94,9 @@ def parse_tool_calls(response: Any) -> list[ToolCall]:
         args_was_none = args is None
         args = parse_tool_arguments(args)
 
-        tool_id = getattr(tc, "id", "") or str(uuid.uuid4())
-        tool_name = getattr(tc, "name", "")
+        tool_id, tool_name = parse_tool_identity(
+            getattr(tc, "id", None), getattr(tc, "name", None)
+        )
 
         # Warn on empty arguments (LLM may have hallucinated)
         # Note: Only warn for explicit empty dict {}, not for None
