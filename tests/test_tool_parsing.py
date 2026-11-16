@@ -29,8 +29,11 @@ from amplifier_module_provider_github_copilot.tool_parsing import ToolCall, pars
 _fake_tool_config = load_fake_tool_detection_config()
 
 
-@pytest.mark.parametrize("field", ["id", "name"])
-@pytest.mark.parametrize("value", [None, "", False, 42, [], {}])
+@pytest.mark.parametrize(
+    "field,value",
+    [("id", value) for value in (False, 42, [], {})]
+    + [("name", value) for value in (None, "", False, 42, [], {})],
+)
 def test_direct_parser_rejects_malformed_identity(field: str, value: Any) -> None:
     from types import SimpleNamespace
 

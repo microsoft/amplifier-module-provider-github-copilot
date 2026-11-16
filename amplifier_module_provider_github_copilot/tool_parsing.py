@@ -9,6 +9,7 @@ Logs a WARNING for empty tool arguments (LLM may have hallucinated).
 
 import json
 import logging
+import uuid
 from typing import Any, Protocol, cast
 
 from amplifier_core import ToolCall
@@ -94,9 +95,13 @@ def parse_tool_calls(response: Any) -> list[ToolCall]:
         args_was_none = args is None
         args = parse_tool_arguments(args)
 
-        tool_id, tool_name = parse_tool_identity(
-            getattr(tc, "id", None), getattr(tc, "name", None)
-        )
+        # Preserve this public helper's missing-ID compatibility contract.
+        # Actual SDK capture is validated before returning a ChatResponse and
+        # cannot reach this fallback with a malformed model call.
+        tool_id = getattr(tc, "id", None)
+        if tool_id is None or tool_id == "":
+            tool_id = str(uuid.uuid4())
+        tool_id, tool_name = parse_tool_identity(tool_id, getattr(tc, "name", None))
 
         # Warn on empty arguments (LLM may have hallucinated)
         # Note: Only warn for explicit empty dict {}, not for None

@@ -81,11 +81,14 @@ class ToolCallBlock(BaseModel):
 context reconstruction — the assistant's tool call requests must be visible in `content`
 for downstream consumers that rebuild conversation history from content blocks.
 
-Before constructing a tool execution signal, both captured and ordinary response
-paths MUST require the original nonempty string call ID and exact nonempty string
-tool name. Capture preserves malformed identity values for validation; it MUST
+Before constructing a tool execution signal, captured SDK responses MUST require
+the original nonempty string call ID and exact nonempty string tool name.
+Capture preserves malformed identity values for validation; it MUST
 NOT stringify them or synthesize a replacement ID. Invalid identities raise
 `InvalidToolCallError` before an executable response is returned.
+The public `parse_tool_calls` helper retains its existing compatibility for
+missing/empty IDs on supplied domain responses; other invalid ID types and
+invalid names are rejected. This fallback does not admit malformed SDK capture.
 
 Both paths MUST also validate arguments with the same parser. A dict or JSON object is
 preserved; missing/`None` arguments mean an empty object. Malformed JSON and
