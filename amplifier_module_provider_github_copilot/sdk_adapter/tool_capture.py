@@ -43,19 +43,19 @@ def normalize_tool_request(req: Any) -> dict[str, Any]:
     """
     tool_id: str
     name: str
-    arguments: dict[str, Any]
+    arguments: Any
 
     if isinstance(req, dict):
         # Dict format - handle both snake_case and camelCase
         req_dict = cast(dict[str, Any], req)
         tool_id = str(req_dict.get("tool_call_id") or req_dict.get("toolCallId", ""))
         name = str(req_dict.get("name", ""))
-        arguments = req_dict.get("arguments", {}) or {}
+        arguments = req_dict.get("arguments", {})
     else:
         # Object format - use getattr
         tool_id = str(getattr(req, "tool_call_id", ""))
         name = str(getattr(req, "name", ""))
-        arguments = getattr(req, "arguments", {}) or {}
+        arguments = getattr(req, "arguments", {})
 
     return {
         "id": tool_id,

@@ -81,6 +81,12 @@ class ToolCallBlock(BaseModel):
 context reconstruction — the assistant's tool call requests must be visible in `content`
 for downstream consumers that rebuild conversation history from content blocks.
 
+Before constructing a tool execution signal, both captured and ordinary response
+paths MUST validate arguments with the same parser. A dict or JSON object is
+preserved; missing/`None` arguments mean an empty object. Malformed JSON and
+non-object values MUST raise `InvalidToolCallError`, never silently become `{}`.
+This leaves well-formed unknown names for the orchestrator to resolve normally.
+
 ### ToolCall (Pydantic) — for ChatResponse.tool_calls
 ```python
 class ToolCall(BaseModel):

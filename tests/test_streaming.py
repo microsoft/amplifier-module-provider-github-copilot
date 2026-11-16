@@ -1212,12 +1212,14 @@ class TestParseToolArguments:
         result = _parse_tool_arguments('{"file": "main.py", "line": 10}')
         assert result == {"file": "main.py", "line": 10}
 
-    def test_malformed_json_returns_empty_dict(self) -> None:
-        """Malformed JSON string returns {} without raising."""
+    def test_malformed_json_is_rejected(self) -> None:
+        """Malformed JSON cannot become a valid empty-argument tool call."""
+        from amplifier_core.llm_errors import InvalidToolCallError
+
         from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
 
-        result = _parse_tool_arguments("not json at all {{")
-        assert result == {}
+        with pytest.raises(InvalidToolCallError, match="Invalid JSON"):
+            _parse_tool_arguments("not json at all {{")
 
     def test_none_returns_empty_dict(self) -> None:
         """None (missing arguments) returns {}."""
@@ -1226,12 +1228,14 @@ class TestParseToolArguments:
         result = _parse_tool_arguments(None)
         assert result == {}
 
-    def test_json_array_returns_empty_dict(self) -> None:
-        """JSON array (not a dict) returns {} — non-dict parsed values are malformed."""
+    def test_json_array_is_rejected(self) -> None:
+        """Only object-shaped JSON can become tool arguments."""
+        from amplifier_core.llm_errors import InvalidToolCallError
+
         from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
 
-        result = _parse_tool_arguments("[1, 2, 3]")
-        assert result == {}
+        with pytest.raises(InvalidToolCallError, match="object"):
+            _parse_tool_arguments("[1, 2, 3]")
 
     # -----------------------------------------------------------------------
     # Integration tests: JSON-string arguments through the full accumulator →
@@ -1295,15 +1299,8 @@ class TestParseToolArguments:
         assert tcb.input == expected_args
 
     def test_json_string_args_malformed_end_to_end(self) -> None:
-        """Malformed JSON-string arguments produce {} through the full pipeline.
-
-        When the SDK sends a malformed JSON string, the accumulator must NOT raise.
-        It must fall back to {} and log a warning, preserving the tool call with
-        empty arguments rather than crashing the entire request.
-
-        Contract: streaming-contract:ToolCallBlock:MUST:1
-        """
-        from amplifier_core import ToolCall
+        """Malformed JSON must not yield a dispatchable tool execution signal."""
+        from amplifier_core.llm_errors import InvalidToolCallError
 
         from amplifier_module_provider_github_copilot.streaming import (
             DomainEvent,
@@ -1326,11 +1323,5 @@ class TestParseToolArguments:
             DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "tool_use"})
         )
 
-        # Must not raise, even with malformed JSON
-        response = accumulator.to_chat_response()
-
-        assert isinstance(response.tool_calls, list)
-        assert len(response.tool_calls) == 1
-        tc = response.tool_calls[0]
-        assert isinstance(tc, ToolCall)
-        assert tc.arguments == {}
+        with pytest.raises(InvalidToolCallError, match="Invalid JSON"):
+            accumulator.to_chat_response()
