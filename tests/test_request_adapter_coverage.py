@@ -167,11 +167,8 @@ class TestExtractContentBlockToolResult:
         assert result == "[Tool Result: {'result': 42}]"
         assert "id=" not in result  # no ID in the output
 
-    def test_tool_result_with_no_output_returns_empty(self) -> None:
-        """ToolResult with output=None returns ''.
-
-        Line ~222 in request_adapter.py — return ""
-        """
+    def test_tool_result_with_no_output_keeps_correlated_null(self) -> None:
+        """Null output must not erase the completed result's call identity."""
         from amplifier_module_provider_github_copilot.request_adapter import (
             _extract_content_block,  # pyright: ignore[reportPrivateUsage]
         )
@@ -183,7 +180,7 @@ class TestExtractContentBlockToolResult:
             tool_call_id: str = "call_abc"
 
         result = _extract_content_block(ToolResultNoOutput())
-        assert result == ""
+        assert result == "[Tool Result (id=call_abc): None]"
 
     def test_tool_result_with_output_and_id_returns_id_format(self) -> None:
         """ToolResult with output + tool_call_id returns '[Tool Result (id=...): ...]'.
