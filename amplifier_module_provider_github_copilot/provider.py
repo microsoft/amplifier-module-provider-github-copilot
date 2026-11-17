@@ -25,8 +25,8 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Mapping
-from contextlib import suppress
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager, suppress
 from copy import copy
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
@@ -171,6 +171,26 @@ _is_retryable_error = is_retryable_error
 _get_retry_after = get_retry_after
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _image_submission_guard(
+    attachments: list[dict[str, Any]] | None, model: str,
+) -> AsyncIterator[dict[str, bool]]:
+    """Keep submission state outside timeout's cancellation-to-error boundary."""
+    submitted = {"started": False}
+    try:
+        yield submitted
+    except Exception as exc:
+        if attachments and submitted["started"]:
+            # Includes TimeoutError raised by asyncio.timeout.__aexit__ AFTER
+            # its inner CancelledError handler and bounded abort/cleanup.
+            translated = copy(exc) if isinstance(exc, LLMError) else translate_sdk_error(
+                exc, load_error_config(), provider=PROVIDER_ID, model=model,
+            )
+            translated.retryable = False
+            raise translated from None
+        raise
 
 
 def _parse_raw_flag(value: Any) -> bool:
@@ -1188,7 +1208,10 @@ class GitHubCopilotProvider:
         # Contract: behaviors:Streaming:MUST:1, MUST:4
         streaming_config = load_streaming_config()
 
-        async with asyncio.timeout(timeout):
+        async with (
+            _image_submission_guard(attachments, model) as submitted,
+            asyncio.timeout(timeout),
+        ):
             async with client.session(
                 model=model,
                 tools=tools,
@@ -1272,7 +1295,6 @@ class GitHubCopilotProvider:
                                 idle_event.set()
 
                     connection_task = asyncio.create_task(watch())
-                send_started = False
                 try:
                     # Record TTFT start time before send
                     # Contract: behaviors:Streaming:MUST:1
@@ -1281,7 +1303,7 @@ class GitHubCopilotProvider:
                     # legacy v0.2.x send({"prompt": ...}) dict shape.
                     # Contract: sdk-boundary:ImagePassthrough:MUST:7
                     logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
-                    send_started = True
+                    submitted["started"] = True
                     await sdk_session.send(prompt, attachments=attachments)
                     logger.debug("[SDK_COMPLETION] Prompt sent, waiting for idle_event...")
                     # Await idle_event directly — deadline is enforced by the enclosing
@@ -1414,17 +1436,6 @@ class GitHubCopilotProvider:
                         )
                     except Exception:
                         logger.debug("[provider] Abort during cancellation failed; disconnecting")
-                    raise
-                except Exception as exc:
-                    if send_started and attachments:
-                        # Invoking send crossed the submission boundary. Lost
-                        # acknowledgement or a later event is not permission to
-                        # replay paid image work. Pre-create retry is unchanged.
-                        translated = exc if isinstance(exc, LLMError) else translate_sdk_error(
-                            exc, load_error_config(), provider=PROVIDER_ID, model=model,
-                        )
-                        translated.retryable = False
-                        raise translated from None
                     raise
                 finally:
                     unsubscribe()

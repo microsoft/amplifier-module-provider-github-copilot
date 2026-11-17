@@ -766,6 +766,42 @@ async def test_image_unknown_send_is_not_replayed(tmp_path: Path) -> None:
     assert len([row for row in peer.messages if row["method"] == "session.send"]) == 1
 
 
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_acknowledged_image_send_deadline_is_not_replayed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stream: bool,
+) -> None:
+    import traceback
+
+    from amplifier_module_provider_github_copilot.error_translation import LLMError
+
+    provider, peer = _real_sdk_provider(tmp_path, [])
+    original = peer.request
+    sends = 0
+
+    async def request(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        nonlocal sends
+        if method == "session.send":
+            sends += 1
+            return {"messageId": "acknowledged-but-no-idle"}
+        return await original(method, params, **kwargs)
+
+    monkeypatch.setattr(peer, "request", request)
+    monkeypatch.setattr(provider, "_calculate_retry_delay", lambda *args: 0)
+    with pytest.raises(LLMError) as raised:
+        await provider.complete(
+            _core_request([{"role": "user", "content": [_image()]}], stream=stream),
+            _timeout_seconds=0.02,
+        )
+    assert sends == 1
+    assert type(raised.value).__name__ == "LLMTimeoutError"
+    assert not raised.value.retryable
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    assert PNG not in "".join(traceback.format_exception(raised.value))
+    assert len([row for row in peer.messages if row["method"] == "session.detach"]) == 1
+    assert len([row for row in peer.messages if row["method"] == "session.abort"]) == 1
+
+
 @pytest.mark.asyncio
 async def test_sdk_typed_error_keeps_fields_but_not_raw_args_or_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
