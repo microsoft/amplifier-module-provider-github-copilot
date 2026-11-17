@@ -674,6 +674,8 @@ class _WirePeer:
 def _real_sdk_provider(
     path: Path, texts: list[str], *, error: str | None = None,
 ) -> tuple[Any, _WirePeer]:
+    import sys
+
     from tests._sdk_version_gate import require_sdk
 
     sdk_module = require_sdk()
@@ -681,12 +683,49 @@ def _real_sdk_provider(
     from amplifier_module_provider_github_copilot.sdk_adapter import CopilotClientWrapper
 
     sdk = sdk_module.CopilotClient(
+        # This fixture exercises SDK serialization, not a runtime process.
+        # An explicit, NEVER STARTED executable avoids default runtime download
+        # during construction on fresh pip-only installs without a CLI cache.
+        connection=sdk_module.RuntimeConnection.for_stdio(path=sys.executable),
+        env={},
         mode="empty", base_directory=str(path), github_token="fixture", use_logged_in_user=False,
     )
     peer = _WirePeer(sdk, texts, error)
     sdk._client = peer
     wrapper = CopilotClientWrapper(sdk_client=sdk)
     return GitHubCopilotProvider(client=wrapper, config={"raw": True}), peer
+
+
+def test_wire_fixture_constructor_needs_no_runtime_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh-home SDK construction must not download or start a CLI first."""
+    import asyncio
+    import socket
+    import subprocess
+    import sys
+    from importlib import import_module
+
+    attempts: list[str] = []
+
+    def deny(*args: Any, **kwargs: Any) -> Any:
+        attempts.append("runtime download, network or process")
+        raise AssertionError("Wire fixture attempted runtime bootstrap/network/process")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "empty-cache"))
+    monkeypatch.delenv("COPILOT_CLI_PATH", raising=False)
+    monkeypatch.setattr(import_module("copilot._cli_download"), "ensure_runtime_wrapper", deny)
+    monkeypatch.setattr(socket.socket, "connect", deny)
+    monkeypatch.setattr(socket, "getaddrinfo", deny)
+    monkeypatch.setattr(subprocess, "Popen", deny)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", deny)
+
+    _, peer = _real_sdk_provider(tmp_path / "state", [])
+    assert peer.client._cli_path_source == "explicit"
+    assert peer.client._connection.path == sys.executable
+    assert peer.client._process is None and peer.client._cli_process is None
+    assert attempts == []
 
 
 @pytest.mark.asyncio
