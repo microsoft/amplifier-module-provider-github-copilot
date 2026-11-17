@@ -25,7 +25,12 @@ from ._compat import ConfigurationError
 from ._identity import PROVIDER_ID
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
-from .sdk_adapter import CompletionRequest, CopilotModelInfo, extract_attachments_from_chat_request
+from .sdk_adapter import (
+    CompletionRequest,
+    CopilotModelInfo,
+    convert_image_block_to_blob_attachment,
+    extract_attachments_from_chat_request,
+)
 from .security_redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -795,7 +800,7 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
     formatted_parts: list[str] = []
     has_history = False
 
-    for msg in messages:
+    for msg_index, msg in enumerate(messages):
         role = _message_role(msg)
 
         # C-4: Skip system messages — they are forwarded via SDK session_config
@@ -814,9 +819,12 @@ def _extract_prompt_from_messages(messages: list[Any]) -> str:
 
         # Extract content based on type
         content_text = (
-            _format_tool_result(enclosing_result_id, content)
-            if role == "tool" and enclosing_result_id and isinstance(content, str)
-            else _extract_message_content(content)
+            _format_tool_result(enclosing_result_id, _extract_message_content(content))
+            if role == "tool" and enclosing_result_id
+            and not _content_tool_result_ids(content)
+            else _extract_message_content(
+                content, current_user=role == "user" and msg_index == len(messages) - 1
+            )
         )
         content_call_ids = _content_tool_call_ids(content)
         field_calls: Any = getattr(msg, "tool_calls", None)
@@ -896,7 +904,7 @@ def _extract_field_tool_calls(tool_calls: Any, content_call_ids: set[str]) -> st
     return "\n".join(parts)
 
 
-def _extract_message_content(content: Any) -> str:
+def _extract_message_content(content: Any, *, current_user: bool = False) -> str:
     """Extract text from message content of various types.
 
     Handles string, list of content blocks, and individual blocks.
@@ -918,16 +926,16 @@ def _extract_message_content(content: Any) -> str:
     if isinstance(content, list):
         parts: list[str] = []
         for block in cast(list[Any], content):
-            block_text = _extract_content_block(block)
+            block_text = _extract_content_block(block, current_user=current_user)
             if block_text:
                 parts.append(block_text)
         return "\n".join(parts)
 
     # Single content block
-    return _extract_content_block(content)
+    return _extract_content_block(content, current_user=current_user)
 
 
-def _extract_content_block(block: Any) -> str:
+def _extract_content_block(block: Any, *, current_user: bool = False) -> str:
     """Extract text from a single content block.
 
     Handles TextContent, ThinkingContent, ToolCallContent,
@@ -1017,46 +1025,34 @@ def _extract_content_block(block: Any) -> str:
     # Contract: provider-protocol:complete:MUST — preserve tool call IDs
     # ToolResultBlock.type is always "tool_result" (amplifier_core 1.3.3 verified).
     if block_type == "tool_result":
-        output: str | None = getattr(block, "output", None) or _get("output")
-        if output:
-            tool_result_call_id: str | None = getattr(block, "tool_call_id", None) or _get(
-                "tool_call_id"
-            )
-            # Contract: behaviors:Security:MUST:1 — sanitize tool result output AND
-            # tool_call_id. Both are interpolated into the prompt. output is
-            # user-controlled (external service response); tool_call_id originates
-            # from the LLM but defense-in-depth requires sanitizing all interpolated
-            # values — repair paths (P0-4) now route assistant IDs through this code.
-            sanitized_output = _sanitize_content_for_injection(str(output))
-            if tool_result_call_id:
-                sanitized_id = _sanitize_content_for_injection(str(tool_result_call_id))
-                return f"[Tool Result (id={sanitized_id}): {sanitized_output}]"
-            return f"[Tool Result: {sanitized_output}]"
-        return ""
+        output = _message_value(block, "output")
+        tool_result_call_id = _message_value(block, "tool_call_id")
+        # Null/falsey results are still results: retain their ID and error status.
+        sanitized_output = _format_tool_output(output)
+        status = _message_value(block, "is_error")
+        if status is not None:
+            sanitized_output = f"is_error={bool(status)}; {sanitized_output}"
+        if tool_result_call_id:
+            sanitized_id = _sanitize_content_for_injection(str(tool_result_call_id))
+            return f"[Tool Result (id={sanitized_id}): {sanitized_output}]"
+        return f"[Tool Result: {sanitized_output}]"
 
-    # Image block — SDK cannot re-process images from prior turns; replace with placeholder.
-    # S3 Fix: image blocks fell through to the fallback and returned "" silently,
-    # losing the model's context that an image existed in that turn.
-    # Contract: behaviors:Security:MUST:1 (content integrity in history)
+    # SDK blobs are detached from the prompt, not interleaved content parts.
+    # Never claim an unavailable historical/tool image was delivered as pixels.
     if block_type == "image" or (
         block_type is None
         and (hasattr(block, "url") or hasattr(block, "source"))
         and not hasattr(block, "text")
         and not hasattr(block, "output")
     ):
-        mime: str | None = (
-            getattr(block, "media_type", None)
-            or getattr(block, "mime_type", None)
-            or _get("media_type")
-            or _get("mime_type")
+        if current_user and convert_image_block_to_blob_attachment(block) is not None:
+            return "[Image attached separately to this send; text/image interleaving unavailable]"
+        reason = (
+            "source cannot be sent as an SDK blob"
+            if current_user else "this historical or tool position has no qualified pixel transport"
         )
-        placeholder = f"[Image: {mime}]" if mime else "[Image]"
-        logger.warning(
-            "Image block in conversation history replaced with %r "
-            "(SDK cannot re-process images from prior turns)",
-            placeholder,
-        )
-        return placeholder
+        logger.warning("Image unavailable at original prompt position; no pixels supplied")
+        return f"[Image unavailable: {reason}; no pixels supplied]"
 
     # Fallback - try common text attributes
     for attr in ("text", "content", "value"):
@@ -1069,6 +1065,80 @@ def _extract_content_block(block: Any) -> str:
             return _sanitize_content_for_injection(str(val))
 
     return ""
+
+
+def _is_tool_content_block(value: Any) -> bool:
+    """Discriminate known block shapes in ToolResult.output (an Any field).
+
+    A business record's type tag alone is not a Core block discriminator.
+    Typed canonical objects were already validated at the request boundary.
+    """
+    kind = _message_value(value, "type")
+    if not isinstance(value, dict):
+        return kind in ("text", "image", "tool_result")
+    keys = set(value)
+    if kind == "text":
+        return isinstance(value.get("text"), str) and keys <= {"type", "text", "visibility"}
+    if kind == "image":
+        # A source object establishes image intent even when Core's allowed
+        # extras carry a name/detail/etc. Business type=image alone does not.
+        return isinstance(value.get("source"), dict)
+    if kind == "tool_result":
+        return "output" in value and keys <= {
+            "type", "output", "tool_call_id", "is_error", "visibility",
+        }
+    return False
+
+
+def _format_tool_output(output: Any) -> str:
+    """Keep known structured tool results textual without stringifying pixels."""
+    if isinstance(output, str):
+        return _sanitize_content_for_injection(output)
+    if isinstance(output, list) and any(
+        _is_tool_content_block(item)
+        for item in cast(list[Any], output)
+    ):
+        return "\n".join(_format_tool_output(item) for item in cast(list[Any], output))
+    if _is_tool_content_block(output):
+        return _extract_content_block(output)
+    if isinstance(output, dict):
+        # Only known ToolResult carriers, not arbitrary business mappings.
+        # Keep status/other fields and falsey values; never mutate saved history.
+        carriers = {
+            key: _format_tool_output(val)
+            for key, val in output.items()
+            if key in ("content", "output") and _contains_image(val)
+        }
+        if carriers:
+            return _sanitize_content_for_injection(str({**output, **carriers}))
+    dump = getattr(output, "model_dump", None)
+    if callable(dump):
+        return _format_tool_output(dump())
+    return _sanitize_content_for_injection(str(output))
+
+
+def _contains_image(value: Any) -> bool:
+    """Recognize canonical blocks and known tool-result carriers only."""
+    if isinstance(value, list):
+        return any(_contains_image(item) for item in cast(list[Any], value))
+    kind = _message_value(value, "type")
+    if kind == "image" and _is_tool_content_block(value):
+        return True
+    if kind == "tool_result":
+        return _contains_image(_message_value(value, "output"))
+    if isinstance(value, dict) and kind is None:
+        return any(_contains_image(value.get(key)) for key in ("content", "output"))
+    return False
+
+
+def request_has_images(request: Any) -> bool:
+    """Diagnostic scope only, not admission, a registry or saved-history change."""
+    if isinstance(request, CompletionRequest):
+        return bool(request.attachments)
+    return any(
+        _contains_image(_message_value(message, "content"))
+        for message in _message_value(request, "messages", []) or []
+    )
 
 
 def extract_system_message(request: Any) -> str | None:

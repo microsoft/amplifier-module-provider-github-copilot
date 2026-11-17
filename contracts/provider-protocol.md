@@ -250,7 +250,7 @@ complete() called
     │
     ├─→ Create ephemeral session (with deny hook + tool definitions)
     │
-    ├─→ Extract images from last user message (as BlobAttachments)
+    ├─→ Extract images only from a final user message (as BlobAttachments)
     │
     ├─→ Send prompt with attachments, capture response
     │

@@ -353,7 +353,10 @@ def convert_image_block_to_blob_attachment(image_block: Any) -> dict[str, Any] |
 
     """
     # Get source dict from ImageBlock
-    source: dict[str, Any] | None = getattr(image_block, "source", None)
+    source: Any = (
+        image_block.get("source") if isinstance(image_block, dict)
+        else getattr(image_block, "source", None)
+    )
     if not isinstance(source, dict):
         return None
 
@@ -363,7 +366,7 @@ def convert_image_block_to_blob_attachment(image_block: Any) -> dict[str, Any] |
 
     # Get data - must be non-empty
     data: Any = source.get("data")
-    if not data:
+    if not isinstance(data, str) or not data:
         return None
 
     # Build BlobAttachment (SDK format)
@@ -377,78 +380,25 @@ def convert_image_block_to_blob_attachment(image_block: Any) -> dict[str, Any] |
 
 
 def extract_attachments_from_chat_request(request: Any) -> list[dict[str, Any]]:
-    """Extract image attachments from ChatRequest for SDK.
+    """Attach only direct images in the FINAL message, when its role is user.
 
-    SDK constraint: Only images from the LAST user message are extracted.
-    Historical images cannot be forwarded to SDK's session.send().
-
-    The provider does NOT validate model vision capability. If a model doesn't
-    support vision, the SDK or upstream will handle the error. We are pure
-    transport layer.
-
-    Args:
-        request: A ChatRequest object with messages attribute.
-
-    Returns:
-        List of BlobAttachment dicts ready for SDK session.send(attachments=...).
-        Empty list if no images found.
-
-    Contract Anchors:
-        - sdk-boundary:ImagePassthrough:MUST:1 — Extract from LAST user message only
-        - sdk-boundary:ImagePassthrough:MUST:5 — No model capability validation
-        - sdk-boundary:ImagePassthrough:MUST:7 — Forward attachments via send()
-        - provider-protocol:complete:MUST:7 — Extracts images from last user message
-
+    Detached SDK attachments carry no original role/message index. This is a
+    provider placement policy, not a claim that the vendor cannot see history.
+    Unsupported positions receive unavailable text in request_adapter instead.
     """
-    attachments: list[dict[str, Any]] = []
+    def value(obj: Any, key: str, default: Any = None) -> Any:
+        return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
 
-    # Get messages from request
-    messages: Any = getattr(request, "messages", None)
-    if not messages:
+    messages = value(request, "messages", [])
+    if not messages or value(messages[-1], "role") != "user":
         return []
-
-    # Find LAST user message (SDK only supports current turn images)
-    last_user_msg: Any = None
-    historical_image_count: int = 0
-    msg: Any
-    for msg in reversed(list(messages)):
-        if getattr(msg, "role", "") == "user":
-            if last_user_msg is None:
-                last_user_msg = msg
-            else:
-                # L-5: Count images in historical user messages (they will be dropped)
-                hist_content = getattr(msg, "content", None)
-                if isinstance(hist_content, list):
-                    for blk in cast(list[Any], hist_content):
-                        if getattr(blk, "type", None) == "image":
-                            historical_image_count += 1
-
-    if historical_image_count > 0:
-        logger.warning(
-            "[IMAGE_PASSTHROUGH] %d image(s) in historical messages silently dropped "
-            "— SDK only supports images from the last user message.",
-            historical_image_count,
-        )
-
-    if not last_user_msg:
-        return []
-
-    # Get content - must be a list for multimodal content
-    content = getattr(last_user_msg, "content", None)
+    content = value(messages[-1], "content")
     if not isinstance(content, list):
-        return []  # Plain text content, no images
-
-    # Cast content to list[Any] for safe iteration over heterogeneous content blocks
-    # isinstance(content, list) guard above proves content is a list; cast makes it explicit
-    content_blocks: list[Any] = cast(list[Any], content)
-
-    # Extract images from content blocks
-    # Note: content is list of various block types (text, image, tool_result, etc.)
-    for block in content_blocks:
-        # Check if this is an image block
-        if getattr(block, "type", None) == "image":
+        return []
+    attachments: list[dict[str, Any]] = []
+    for block in cast(list[Any], content):
+        if value(block, "type") == "image":
             attachment = convert_image_block_to_blob_attachment(block)
-            if attachment:
+            if attachment is not None:
                 attachments.append(attachment)
-
     return attachments

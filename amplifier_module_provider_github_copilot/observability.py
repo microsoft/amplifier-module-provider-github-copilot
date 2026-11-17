@@ -273,10 +273,10 @@ class LlmLifecycleContext:
         Contract: observability:Events:MUST:3
         Contract: behaviors:Logging:MUST:4 - Sanitize error messages
         """
-        from .security_redaction import redact_sensitive_text
+        from .security_redaction import diagnostic_error_message
 
         elapsed_ms = int((time.time() - self.start_time) * 1000)
-        sanitized_message = redact_sensitive_text(error_message)
+        sanitized_message = diagnostic_error_message(error_message)
 
         await emit_event(
             self.coordinator,
@@ -309,9 +309,9 @@ class LlmLifecycleContext:
 
         Uses kernel constant PROVIDER_RETRY (not YAML) to ensure protocol compliance.
         """
-        from .security_redaction import redact_sensitive_text
+        from .security_redaction import diagnostic_error_message
 
-        sanitized_message = redact_sensitive_text(error_message)
+        sanitized_message = diagnostic_error_message(error_message)
 
         await emit_event(
             self.coordinator,
