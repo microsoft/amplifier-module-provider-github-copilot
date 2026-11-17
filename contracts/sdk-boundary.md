@@ -729,7 +729,8 @@ max_output_tokens = capabilities.limits.max_output_tokens
 
 **Evidence:** SDK `session.send()` signature
 
-The provider acts as a **pure transport layer** for images. No capability validation, no filtering.
+The provider forwards eligible images as detached send attachments. This does
+not qualify every model/account or preserve native text/image interleaving.
 
 ### Core Principle
 
@@ -737,8 +738,33 @@ The provider acts as a **pure transport layer** for images. No capability valida
 ImageBlock (amplifier-core) → BlobAttachment (SDK) → upstream model
 ```
 
-The provider MUST extract images from ChatRequest and forward them unchanged to the SDK.
-The SDK and upstream model handle capability verification.
+The provider MUST extract direct base64 images from the **final message only,
+when its role is user**, and forward the bytes unchanged to the SDK. It must
+not search backward for the last user anywhere: that would promote an old image
+to the current send when history ends in an assistant or tool message.
+
+Current SDK catalog `capabilities.supports.vision` maps to our advertised
+`vision` capability. The existing transport policy delegates final capability,
+MIME and size admission to the SDK/upstream, not model-name heuristics or a
+possibly stale disk cache. Missing metadata is not proof of vision support.
+
+SDK 1.0.15 source: [send/attachment types](https://github.com/github/copilot-sdk/blob/9b300dce4d348a0ff6077a0413ee4988802de994/python/copilot/session.py),
+[catalog metadata](https://github.com/github/copilot-sdk/blob/9b300dce4d348a0ff6077a0413ee4988802de994/python/copilot/generated/rpc.py).
+The attachment union has no URL image variant and no original role, message
+index or tool-call ID. This provider's flattened history cannot faithfully
+transport pixels in earlier user/assistant/system/developer/tool slots:
+replace each unsupported image with explicit payload-free **Image unavailable**
+text in that same prompt role/slot (system content remains in the existing
+session system-message channel). Never relocate it into a new user turn.
+This limitation is not a claim that the SDK globally lacks tool-image support:
+its separate [native tool-handler binary results](https://github.com/github/copilot-sdk/blob/9b300dce4d348a0ff6077a0413ee4988802de994/python/copilot/tools.py)
+are not this provider's history replay boundary.
+
+Canonical role=tool text/image lists retain the enclosing call ID and order.
+Known ToolResult output/content envelopes preserve status and text, replacing
+only their image slots. Ordinary business mappings/falsey outputs are not
+reinterpreted or dropped. Projection is transient; saved history is not mutated,
+so unsupported history cannot permanently block a plain-text follow-up.
 
 ### Type Mapping
 
@@ -761,13 +787,25 @@ The SDK and upstream model handle capability verification.
 
 ### MUST Constraints
 
-1. **MUST** extract images from the LAST user message only (SDK limitation)
+1. **MUST** extract images only when the FINAL message is user (provider placement policy)
 2. **MUST** convert `ImageBlock` source dict to `BlobAttachment` format
-3. **MUST** skip non-base64 images (URL references) — return None
-4. **MUST** skip empty/missing image data — return None
+3. **MUST** return None for non-base64 images; render explicit unavailable text, never fetch URLs
+4. **MUST** return None for empty/missing image data; render explicit unavailable text
 5. **MUST NOT** validate model vision capability — pure passthrough
 6. **MUST NOT** filter or modify image content
 7. **MUST** forward valid attachments to SDK `session.send(prompt, attachments=...)`
+8. **MUST** forward those same eligible original attachments on fresh-session
+   fake-tool corrections; the new session has not seen the first send's pixels
+9. **MUST** omit arbitrary image error echoes before provider hooks/loggers.
+   The task-local diagnostic scope retains no pixel/URL registry and does not
+   change original transport or account/model choice. Original error
+   classification/retry fields are preserved, but private cause/context chains
+   are omitted from outward image exceptions as well as their string messages.
+   Once image send is invoked, lost acknowledgement or subsequent failure is
+   not automatically replayed; pre-submission retry policy is unchanged.
+   Raw diagnostics retain counts but omit free-form strings in this scope.
+   Pinned SDK create/request timing errors are projected before LogRecord
+   construction; this does not assert sanitization of arbitrary CLI/background logs.
 
 ### Error Handling
 
@@ -782,13 +820,15 @@ This MUST be translated to `InvalidRequestError` (non-retryable) per `error-hier
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:ImagePassthrough:MUST:1` | Extract images from LAST user message only |
+| `sdk-boundary:ImagePassthrough:MUST:1` | Extract images only from a FINAL user message |
 | `sdk-boundary:ImagePassthrough:MUST:2` | Convert ImageBlock to BlobAttachment |
 | `sdk-boundary:ImagePassthrough:MUST:3` | Skip non-base64 images |
 | `sdk-boundary:ImagePassthrough:MUST:4` | Skip empty image data |
 | `sdk-boundary:ImagePassthrough:MUST:5` | No model capability validation |
 | `sdk-boundary:ImagePassthrough:MUST:6` | No image content modification |
 | `sdk-boundary:ImagePassthrough:MUST:7` | Forward attachments via send() |
+| `sdk-boundary:ImagePassthrough:MUST:8` | Identical eligible blobs on distinct correction sessions |
+| `sdk-boundary:ImagePassthrough:MUST:9` | Payload-free diagnostics before first hook/logger |
 
 ---
 

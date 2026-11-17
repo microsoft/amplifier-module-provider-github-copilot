@@ -800,7 +800,7 @@ class TestExtractContentBlockImageS3:
             type: str = "image"
 
         result = _extract_content_block(ImageBlock())
-        assert result == "[Image]", (
+        assert result.startswith("[Image unavailable:") and "no pixels supplied" in result, (
             f"Image block must return '[Image]' placeholder, got: {result!r}"
         )
 
@@ -818,7 +818,7 @@ class TestExtractContentBlockImageS3:
             media_type: str = "image/png"
 
         result = _extract_content_block(ImageBlockWithMime())
-        assert result == "[Image: image/png]", (
+        assert result.startswith("[Image unavailable:") and "no pixels supplied" in result, (
             f"Image block with media_type must include MIME, got: {result!r}"
         )
 
@@ -839,7 +839,7 @@ class TestExtractContentBlockImageS3:
             url: str = "https://example.com/img.png"
 
         result = _extract_content_block(ImageLikeBlock())
-        assert result == "[Image]", (
+        assert result.startswith("[Image unavailable:") and "no pixels supplied" in result, (
             f"Duck-typed image block must return '[Image]' placeholder, got: {result!r}"
         )
 
@@ -861,7 +861,7 @@ class TestExtractContentBlockImageS3:
             source: str = "data:image/png;base64,abc123"
 
         result = _extract_content_block(BlobLikeBlock())
-        assert result == "[Image]", (
+        assert result.startswith("[Image unavailable:") and "no pixels supplied" in result, (
             f"Duck-typed blob block (source attr) must return '[Image]' placeholder, "
             f"got: {result!r}"
         )

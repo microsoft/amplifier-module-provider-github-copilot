@@ -101,6 +101,8 @@ class EventRouter:
         event_config: EventConfig,
         emit_streaming_content: Callable[[Any], None] | None = None,
         stream_ctx: _StreamingContext | None = None,
+        image_request: bool = False,
+        model: str | None = None,
     ) -> None:
         """Initialize event router with all required dependencies.
 
@@ -128,6 +130,8 @@ class EventRouter:
         self._config = event_config
         self._emit_streaming = emit_streaming_content
         self._stream_ctx = stream_ctx
+        self._image_request = image_request
+        self._model = model
 
     def __call__(self, sdk_event: Any) -> None:
         """Handle incoming SDK event.
@@ -257,9 +261,19 @@ class EventRouter:
 
         # H-1 Fix: Redact sensitive data before storing in error_holder
         # Contract: behaviors:Logging:MUST:4,7,8,9,10
-        safe_error_msg = redact_sensitive_text(error_msg)
+        if self._image_request:
+            # SDK callbacks may run in the long-lived RPC reader's context,
+            # not the caller task's ContextVar scope. Classify before omission.
+            from .error_translation import load_error_config, translate_sdk_error
+            from .security_redaction import image_error_scope
 
-        err = Exception(f"Session error: {safe_error_msg}")
+            with image_error_scope(True):
+                err = translate_sdk_error(
+                    Exception(error_msg), load_error_config(), model=self._model,
+                )
+        else:
+            safe_error_msg = redact_sensitive_text(error_msg)
+            err = Exception(f"Session error: {safe_error_msg}")
         self._errors.append(err)
         self._idle.set()
 

@@ -466,10 +466,10 @@ def translate_sdk_error(
         Kernel LLMError with original exception chained.
 
     """
-    from .security_redaction import redact_sensitive_text
+    from .security_redaction import diagnostic_error_message
 
     original_message = str(exc)
-    safe_message = redact_sensitive_text(original_message)
+    safe_message = diagnostic_error_message(original_message)
     retry_after: float | None = None
 
     # Try each mapping in order
@@ -486,7 +486,7 @@ def translate_sdk_error(
             context = _extract_context(original_message, mapping.context_extraction)
             # P0 Fix (C3): Redact extracted context values - they come from the
             # original (unredacted) message and may contain secrets like tokens.
-            context = {k: redact_sensitive_text(v) for k, v in context.items()}
+            context = {k: diagnostic_error_message(v) for k, v in context.items()}
             # Use redacted message for output, append context
             message = safe_message + _format_context_suffix(context)
 

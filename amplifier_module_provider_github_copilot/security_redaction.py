@@ -14,7 +14,13 @@ This module handles redaction of:
 
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
+from threading import Lock
 from typing import Any, cast
 
 __all__ = [
@@ -27,6 +33,57 @@ __all__ = [
 
 # Redaction placeholder
 REDACTED = "[REDACTED]"
+IMAGE_ERROR_OMITTED = "[Image request error details omitted from diagnostics]"
+_image_errors: ContextVar[bool] = ContextVar("copilot_image_errors", default=False)
+_sdk_logger_lock = Lock()
+
+
+@contextmanager
+def image_error_scope(enabled: bool) -> Iterator[None]:
+    """Omit arbitrary image error echoes, not guessed base64 substrings.
+
+    Narrowly adapted from the separately owned draft PR93 diagnostic policy.
+    No pixels/URLs are stored in context; transport, classification and retry
+    operate on originals. The two pinned SDK timing sites log tracebacks before
+    raising, so project those named sites before LogRecord/subscriber creation.
+    """
+    if enabled:
+        with _sdk_logger_lock:
+            for name, message in (
+                ("copilot._jsonrpc", "JsonRpcClient.request JSON-RPC request finished"),
+                ("copilot.client", "CopilotClient.create_session failed"),
+            ):
+                sdk_logger = logging.getLogger(name)
+                original = sdk_logger.log
+                if getattr(original, "_copilot_image_safe", False):
+                    continue
+
+                def project(original: Any, message: str) -> Any:
+                    @wraps(original)
+                    def log(level: int, msg: object, *args: Any, **kwargs: Any) -> None:
+                        if _image_errors.get() and msg == message and kwargs.get("exc_info"):
+                            original(level, IMAGE_ERROR_OMITTED)
+                        else:
+                            original(level, msg, *args, **kwargs)
+                    log._copilot_image_safe = True  # type: ignore[attr-defined]
+                    return log
+
+                sdk_logger.log = project(original, message)
+    token = _image_errors.set(enabled or _image_errors.get())
+    try:
+        yield
+    finally:
+        _image_errors.reset(token)
+
+
+def diagnostic_error_message(error: object) -> str:
+    """Diagnostic COPY only: error type/retry/status remain on the original."""
+    return IMAGE_ERROR_OMITTED if _image_errors.get() else redact_sensitive_text(error)
+
+
+def image_errors_enabled() -> bool:
+    """Capture the boolean for callbacks dispatched outside this task context."""
+    return _image_errors.get()
 
 # Patterns for key-value pairs that should have values redacted
 # These match: key=value, key:value, "key":"value", 'key':'value'
@@ -123,6 +180,8 @@ def redact_sensitive_text(value: object) -> str:
     Contract: behaviors:Logging:MUST:4
 
     """
+    if isinstance(value, BaseException) and _image_errors.get():
+        return IMAGE_ERROR_OMITTED
     text = str(value)
 
     # Already redacted - return as-is (idempotent)
@@ -197,6 +256,19 @@ def redact_dict(value: dict[str, Any]) -> dict[str, Any]:
     Contract: behaviors:Logging:MUST:4
 
     """
+    # Raw hook payloads are diagnostic copies; image scope retains structure and
+    # scalar metrics, never free-form strings even in nested schema enum lists.
+    if _image_errors.get():
+        def omit(item: Any) -> Any:
+            if isinstance(item, str):
+                return IMAGE_ERROR_OMITTED
+            if isinstance(item, dict):
+                return {key: omit(val) for key, val in item.items()}
+            if isinstance(item, (list, tuple)):
+                return [omit(val) for val in item]
+            return item
+        return omit(value)
+
     result: dict[str, Any] = {}
     for key, val in value.items():
         if isinstance(val, str):

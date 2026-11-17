@@ -41,6 +41,7 @@ from .types import (
     SDKSession,
     SessionConfig,
     SessionHandle,
+    convert_image_block_to_blob_attachment,
     extract_attachments_from_chat_request,
 )
 
@@ -69,6 +70,7 @@ __all__ = [
     "normalize_tool_request",  # Tool request normalization
     "get_copilot_spec_origin",  # SDK utility: find SDK package path
     "extract_attachments_from_chat_request",  # Request attachment extraction
+    "convert_image_block_to_blob_attachment",
     "CopilotModelInfo",  # Domain type: SDK model → domain model
     "sdk_model_to_copilot_model",  # Translation: SDK ModelInfo → CopilotModelInfo
     "resolve_effective_window",  # Tier-aware prompt-budget selector

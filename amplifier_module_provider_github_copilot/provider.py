@@ -25,8 +25,9 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Mapping
-from contextlib import suppress
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager, suppress
+from copy import copy
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
 from typing import Any, cast
@@ -112,6 +113,7 @@ from .sdk_adapter import (
     extract_event_fields,
     resolve_effective_window,
 )
+from .security_redaction import diagnostic_error_message, image_error_scope, image_errors_enabled
 from .streaming import (
     MAX_EXTRACTION_DEPTH,
     AccumulatedResponse,
@@ -169,6 +171,26 @@ _is_retryable_error = is_retryable_error
 _get_retry_after = get_retry_after
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _image_submission_guard(
+    attachments: list[dict[str, Any]] | None, model: str,
+) -> AsyncIterator[dict[str, bool]]:
+    """Keep submission state outside timeout's cancellation-to-error boundary."""
+    submitted = {"started": False}
+    try:
+        yield submitted
+    except Exception as exc:
+        if attachments and submitted["started"]:
+            # Includes TimeoutError raised by asyncio.timeout.__aexit__ AFTER
+            # its inner CancelledError handler and bounded abort/cleanup.
+            translated = copy(exc) if isinstance(exc, LLMError) else translate_sdk_error(
+                exc, load_error_config(), provider=PROVIDER_ID, model=model,
+            )
+            translated.retryable = False
+            raise translated from None
+        raise
 
 
 def _parse_raw_flag(value: Any) -> bool:
@@ -681,6 +703,33 @@ class GitHubCopilotProvider:
         request: ChatRequest,
         **kwargs: Any,
     ) -> ChatResponse:
+        """Complete with task-local, payload-free image error diagnostics."""
+        from .request_adapter import request_has_images
+
+        image_request = request_has_images(request)
+        failure: LLMError | None = None
+        with image_error_scope(image_request):
+            try:
+                return await self._complete(request, **kwargs)
+            except LLMError as exc:
+                if not image_request:
+                    raise
+                # Keep classification/retry fields, not the private remote cause.
+                # Raise outside the handler so Python cannot reattach its raw
+                # context to the outward exception's formatted traceback.
+                failure = copy(exc)
+                failure.args = (diagnostic_error_message(exc),)
+                failure.__cause__ = None
+                failure.__context__ = None
+                failure.__suppress_context__ = True
+        assert failure is not None
+        raise failure from None
+
+    async def _complete(
+        self,
+        request: ChatRequest,
+        **kwargs: Any,
+    ) -> ChatResponse:
         """Execute completion lifecycle, returning ChatResponse.
 
         Contract: provider-protocol:complete:MUST:1
@@ -846,7 +895,7 @@ class GitHubCopilotProvider:
                             "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
                             attempt + 1,
                             retry_config.max_attempts,
-                            e,
+                            diagnostic_error_message(e),
                             delay_ms,
                         )
                         await ctx.emit_retry(
@@ -896,7 +945,7 @@ class GitHubCopilotProvider:
                             "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
                             attempt + 1,
                             retry_config.max_attempts,
-                            translated,
+                            diagnostic_error_message(translated),
                             delay_ms,
                         )
                         await ctx.emit_retry(
@@ -946,7 +995,8 @@ class GitHubCopilotProvider:
                 accumulator = StreamingAccumulator()
 
                 try:
-                    # Note: attachments=None for correction - the model already saw the image
+                    # Each correction opens a fresh SDK session. It has not seen
+                    # the original image, so preserve the original detached blobs.
                     # Correction responses only need to produce a structured tool call —
                     # cap at 512 tokens to bound cost/latency regardless of the caller's
                     # original cap. Respects caller ceiling if it is lower.
@@ -963,7 +1013,7 @@ class GitHubCopilotProvider:
                         event_config=event_config,
                         accumulator=accumulator,
                         tools=internal_request.tools or None,
-                        attachments=None,
+                        attachments=internal_request.attachments or None,
                         system_message=internal_request.system_message,
                         max_tokens=_correction_cap,
                         # Contract: provider-protocol:complete:MUST:11.
@@ -998,7 +1048,7 @@ class GitHubCopilotProvider:
                     # Contract: error-hierarchy.md — MUST translate SDK errors to kernel errors.
                     # The correction path must use the same error translation as the main path.
                     error_config_for_correction = load_error_config()
-                    translated = translate_sdk_error(
+                    translated = e if isinstance(e, LLMError) else translate_sdk_error(
                         e, error_config_for_correction, provider=PROVIDER_ID, model=model
                     )
                     log_exhausted(ftd_config, correction_attempt + 1)
@@ -1158,7 +1208,10 @@ class GitHubCopilotProvider:
         # Contract: behaviors:Streaming:MUST:1, MUST:4
         streaming_config = load_streaming_config()
 
-        async with asyncio.timeout(timeout):
+        async with (
+            _image_submission_guard(attachments, model) as submitted,
+            asyncio.timeout(timeout),
+        ):
             async with client.session(
                 model=model,
                 tools=tools,
@@ -1222,6 +1275,8 @@ class GitHubCopilotProvider:
                     ttft_threshold_ms=streaming_config.ttft_warning_ms,
                     event_config=event_config,
                     stream_ctx=stream_ctx,
+                    image_request=image_errors_enabled() or bool(attachments),
+                    model=model,
                 )
 
                 unsubscribe = sdk_session.on(event_handler)
@@ -1248,6 +1303,7 @@ class GitHubCopilotProvider:
                     # legacy v0.2.x send({"prompt": ...}) dict shape.
                     # Contract: sdk-boundary:ImagePassthrough:MUST:7
                     logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
+                    submitted["started"] = True
                     await sdk_session.send(prompt, attachments=attachments)
                     logger.debug("[SDK_COMPLETION] Prompt sent, waiting for idle_event...")
                     # Await idle_event directly — deadline is enforced by the enclosing
@@ -1275,7 +1331,7 @@ class GitHubCopilotProvider:
                                     "request_id": stream_ctx.request_id,
                                     "error": {
                                         "type": type(err).__name__,
-                                        "msg": str(err),
+                                        "msg": diagnostic_error_message(err),
                                     },
                                 },
                             )
