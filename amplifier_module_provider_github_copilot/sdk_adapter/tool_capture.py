@@ -41,21 +41,21 @@ def normalize_tool_request(req: Any) -> dict[str, Any]:
         Normalized dict with id, name, arguments keys
 
     """
-    tool_id: str
-    name: str
-    arguments: dict[str, Any]
+    tool_id: Any
+    name: Any
+    arguments: Any
 
     if isinstance(req, dict):
         # Dict format - handle both snake_case and camelCase
         req_dict = cast(dict[str, Any], req)
-        tool_id = str(req_dict.get("tool_call_id") or req_dict.get("toolCallId", ""))
-        name = str(req_dict.get("name", ""))
-        arguments = req_dict.get("arguments", {}) or {}
+        tool_id = req_dict.get("tool_call_id", req_dict.get("toolCallId", ""))
+        name = req_dict.get("name", "")
+        arguments = req_dict.get("arguments", {})
     else:
         # Object format - use getattr
-        tool_id = str(getattr(req, "tool_call_id", ""))
-        name = str(getattr(req, "name", ""))
-        arguments = getattr(req, "arguments", {}) or {}
+        tool_id = getattr(req, "tool_call_id", "")
+        name = getattr(req, "name", "")
+        arguments = getattr(req, "arguments", {})
 
     return {
         "id": tool_id,
@@ -171,7 +171,8 @@ class ToolCaptureHandler:
 
             # Deduplication: skip if we've seen this tool_call_id before
             # Contract: sdk-protection:ToolCapture:MUST:2
-            if self._deduplicate and tool_id in self._seen_ids:
+            valid_id = isinstance(tool_id, str) and bool(tool_id)
+            if self._deduplicate and valid_id and tool_id in self._seen_ids:
                 duplicates_skipped += 1
                 self._duplicates_skipped += 1  # Track for property
                 if self._log_capture_events:
@@ -183,7 +184,11 @@ class ToolCaptureHandler:
                 continue
 
             # Track seen IDs for deduplication
-            self._seen_ids.add(tool_id)
+            # Retain malformed identities for the shared response validator.
+            # Do not stringify them or let an unhashable ID break the callback
+            # before it signals completion to the provider.
+            if valid_id:
+                self._seen_ids.add(tool_id)
             self._captured_tools.append(normalized)
             captured_count += 1
 

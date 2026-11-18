@@ -5,7 +5,91 @@ Contract: streaming-contract:ToolCapture:MUST:1
 Contract: sdk-protection:ToolCapture:MUST:1,2
 """
 
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
+
+
+@pytest.mark.parametrize("as_object", [False, True])
+@pytest.mark.parametrize("field", ["tool_call_id", "name"])
+@pytest.mark.parametrize("value", [None, "", False, 42, [], {}])
+def test_malformed_identity_completes_capture_but_cannot_dispatch(
+    as_object: bool, field: str, value: Any
+) -> None:
+    from amplifier_core.llm_errors import InvalidToolCallError
+
+    from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
+        ToolCaptureHandler,
+    )
+    from amplifier_module_provider_github_copilot.streaming import (
+        DomainEvent,
+        DomainEventType,
+        StreamingAccumulator,
+    )
+
+    request = {"tool_call_id": "original-id", "name": "read", "arguments": {}}
+    request[field] = value
+    completed: list[bool] = []
+    handler = ToolCaptureHandler(on_capture_complete=lambda: completed.append(True))
+    handler.on_event({"type": "assistant.message", "data": {
+        "tool_requests": [SimpleNamespace(**request) if as_object else request]
+    }})
+    assert completed == [True]
+    captured = handler.captured_tools[0]
+    assert captured["id" if field == "tool_call_id" else "name"] is value
+    accumulator = StreamingAccumulator()
+    accumulator.add(DomainEvent(type=DomainEventType.TOOL_CALL, data=captured))
+    with pytest.raises(InvalidToolCallError, match="nonempty string"):
+        accumulator.to_chat_response()
+
+
+@pytest.mark.parametrize("as_object", [False, True])
+@pytest.mark.parametrize("arguments", [False, 0, [], "", "{broken", "[1, 2]"])
+def test_malformed_captured_arguments_do_not_become_empty_calls(
+    as_object: bool, arguments: Any
+) -> None:
+    from amplifier_core.llm_errors import InvalidToolCallError
+
+    from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
+        normalize_tool_request,
+    )
+    from amplifier_module_provider_github_copilot.streaming import (
+        DomainEvent,
+        DomainEventType,
+        StreamingAccumulator,
+    )
+
+    request = {"tool_call_id": "bad-args", "name": "read", "arguments": arguments}
+    raw = SimpleNamespace(**request) if as_object else request
+    captured = normalize_tool_request(raw)
+    assert captured["id"] == "bad-args" and captured["name"] == "read"
+    accumulator = StreamingAccumulator()
+    accumulator.add(DomainEvent(type=DomainEventType.TOOL_CALL, data=captured))
+    with pytest.raises(InvalidToolCallError):
+        accumulator.to_chat_response()
+
+
+@pytest.mark.parametrize("arguments", [None, {}, "{}"])
+def test_captured_empty_object_arguments_remain_valid(arguments: Any) -> None:
+    from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
+        normalize_tool_request,
+    )
+    from amplifier_module_provider_github_copilot.streaming import (
+        DomainEvent,
+        DomainEventType,
+        StreamingAccumulator,
+    )
+
+    captured = normalize_tool_request(
+        {"tool_call_id": "valid-empty", "name": "read", "arguments": arguments}
+    )
+    accumulator = StreamingAccumulator()
+    accumulator.add(DomainEvent(type=DomainEventType.TOOL_CALL, data=captured))
+    response = accumulator.to_chat_response()
+    assert response.tool_calls is not None
+    assert response.tool_calls[0].arguments == {}
+    assert response.tool_calls[0].id == "valid-empty"
 
 
 class TestToolCaptureHandler:

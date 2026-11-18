@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "HasToolCalls",
+    "parse_tool_arguments",
+    "parse_tool_identity",
     "parse_tool_calls",
 ]
 
@@ -30,6 +32,36 @@ class HasToolCalls(Protocol):
     def tool_calls(self) -> list[Any] | None:
         """Return tool calls if present."""
         ...
+
+
+def parse_tool_identity(tool_id: Any, tool_name: Any) -> tuple[str, str]:
+    """Require the model's original correlation ID and exact tool name."""
+    if not isinstance(tool_id, str) or not tool_id:
+        raise InvalidToolCallError("Tool call ID must be a nonempty string")
+    if not isinstance(tool_name, str) or not tool_name:
+        raise InvalidToolCallError("Tool call name must be a nonempty string")
+    return tool_id, tool_name
+
+
+def parse_tool_arguments(arguments: Any) -> dict[str, Any]:
+    """Preserve object arguments; reject malformed input before tool dispatch."""
+    if arguments is None:
+        return {}
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError as e:
+            raise InvalidToolCallError(f"Invalid JSON in tool call arguments: {e}") from e
+        if not isinstance(arguments, dict):
+            raise InvalidToolCallError(
+                "Tool call arguments JSON must be an object (dict),"
+                f" got {type(arguments).__name__!r}"
+            )
+    elif not isinstance(arguments, dict):
+        raise InvalidToolCallError(
+            f"Tool call arguments must be dict, got {type(arguments).__name__!r}"
+        )
+    return cast(dict[str, Any], arguments)
 
 
 def parse_tool_calls(response: Any) -> list[ToolCall]:
@@ -48,7 +80,7 @@ def parse_tool_calls(response: Any) -> list[ToolCall]:
         List of ToolCall objects (may be empty)
 
     Raises:
-        InvalidToolCallError: If tool call has invalid JSON arguments or non-dict arguments
+        InvalidToolCallError: If the call identity or object arguments are malformed
 
     """
     tool_calls = getattr(response, "tool_calls", None)
@@ -61,26 +93,15 @@ def parse_tool_calls(response: Any) -> list[ToolCall]:
         # Get arguments - handle both dict and string
         args = getattr(tc, "arguments", {})
         args_was_none = args is None
-        if args_was_none:
-            args = {}  # Convert None to empty dict for kernel ToolCall compatibility
-        elif isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError as e:
-                raise InvalidToolCallError(f"Invalid JSON in tool call arguments: {e}") from e
-            # json.loads succeeds but may return list, int, etc. — must be object (dict)
-            if not isinstance(args, dict):
-                raise InvalidToolCallError(
-                    "Tool call arguments JSON must be an object (dict),"
-                    f" got {type(args).__name__!r}"
-                )
-        elif not isinstance(args, dict):
-            raise InvalidToolCallError(
-                f"Tool call arguments must be dict, got {type(args).__name__!r}"
-            )
+        args = parse_tool_arguments(args)
 
-        tool_id = getattr(tc, "id", "") or str(uuid.uuid4())
-        tool_name = getattr(tc, "name", "")
+        # Preserve this public helper's missing-ID compatibility contract.
+        # Actual SDK capture is validated before returning a ChatResponse and
+        # cannot reach this fallback with a malformed model call.
+        tool_id = getattr(tc, "id", None)
+        if tool_id is None or tool_id == "":
+            tool_id = str(uuid.uuid4())
+        tool_id, tool_name = parse_tool_identity(tool_id, getattr(tc, "name", None))
 
         # Warn on empty arguments (LLM may have hallucinated)
         # Note: Only warn for explicit empty dict {}, not for None
@@ -91,15 +112,11 @@ def parse_tool_calls(response: Any) -> list[ToolCall]:
                 tool_id,
             )
 
-        # Pattern: isinstance guards above guarantee dict; cast narrows Any to dict[str, Any].
-        # json.loads returns Any — following established codebase pattern (event_helpers.py:L30).
-        args_dict = cast(dict[str, Any], args)
-
         result.append(
             ToolCall(
                 id=tool_id,
                 name=tool_name,
-                arguments=args_dict,
+                arguments=args,
             )
         )
 

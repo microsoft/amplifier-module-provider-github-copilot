@@ -2,9 +2,7 @@
 
 import fnmatch
 import functools
-import json
 import logging
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -27,6 +25,8 @@ from ._identity import PROVIDER_ID
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import extract_event_fields
+from .tool_parsing import parse_tool_arguments as _parse_tool_arguments
+from .tool_parsing import parse_tool_identity
 
 logger = logging.getLogger(__name__)
 
@@ -44,45 +44,6 @@ __all__ = [
     "extract_response_content",
     "translate_event",
 ]
-
-
-def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
-    """Parse tool call arguments from str | dict SDK responses.
-
-    The Copilot SDK may deliver ``arguments`` as a JSON string or a dict.
-    S4 Fix: The original guard ``isinstance(args, dict) else {}`` silently
-    discarded ALL tool arguments when the SDK sent them as a JSON string.
-
-    Contract: streaming-contract:ToolCallBlock:MUST:1
-
-    Args:
-        arguments: Raw arguments value from the SDK tool_call block.
-            May be ``None`` (no args), ``dict`` (already parsed), or
-            ``str`` (JSON-encoded dict).
-
-    Returns:
-        Parsed argument dict. Returns ``{}`` for None/unparseable inputs.
-    """
-    if isinstance(arguments, dict):
-        return arguments
-    if isinstance(arguments, str):
-        try:
-            parsed = json.loads(arguments)
-        except json.JSONDecodeError:
-            logger.warning(
-                "Tool call arguments are not valid JSON; falling back to {}: %r",
-                arguments[:200],
-            )
-            return {}
-        if not isinstance(parsed, dict):
-            logger.warning(
-                "Tool call arguments parsed to %s (expected dict); falling back to {}",
-                type(parsed).__name__,
-            )
-            return {}
-        return parsed
-    # None or unexpected type — treat as empty
-    return {}
 
 
 class StreamingChatResponse(ChatResponse):
@@ -342,8 +303,7 @@ class StreamingAccumulator:
                     content_blocks.append(ThinkingContent(text=thinking_text))
             elif btype == "tool_call":
                 tc = block["data"]
-                tool_call_id = tc.get("id", "") or str(uuid.uuid4())
-                tc_name = tc.get("name", "")
+                tool_call_id, tc_name = parse_tool_identity(tc.get("id"), tc.get("name"))
                 tc_args: dict[str, Any] = _parse_tool_arguments(tc.get("arguments"))
                 # ToolCallBlock in content (ContentBlockUnion member); field is `input`
                 # Contract: streaming-contract:ToolCallBlock:MUST:1
